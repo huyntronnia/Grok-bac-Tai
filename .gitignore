@@ -1,0 +1,21 @@
+node_modules/
+.DS_Store
+Thumbs.db
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.env
+.env.local
+
+# Electron/runtime output
+out/
+dist/
+build/
+release/
+*.tmp
+
+# Local test output
+TestOutput/
+test/
+test2/

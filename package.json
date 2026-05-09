@@ -1,0 +1,24 @@
+{
+  "name": "ai-video-prompt-planner",
+  "version": "1.0.0",
+  "description": "Electron desktop app that splits long AI video ideas into timed one-minute scene prompts.",
+  "main": "electron/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron ."
+  },
+  "keywords": [
+    "electron",
+    "ai-video",
+    "prompt-planner"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^30.5.1"
+  },
+  "dependencies": {
+    "chrome-remote-interface": "^0.34.0",
+    "ffmpeg-static": "^5.3.0"
+  }
+}

@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="Dashboard Electron tạo batch image prompt và motion prompt cho workflow sản xuất video AI theo từng scene, có review, pause, resume và export."
+    />
+    <title>AI Scene Batch Director</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <div class="orb orb-a"></div>
+    <div class="orb orb-b"></div>
+    <div class="orb orb-c"></div>
+
+    <main class="app-shell">
+      <section class="hero" aria-labelledby="page-title">
+        <div>
+          <span class="eyebrow">MVP Workflow • Batch 10 Scene • Human Review</span>
+          <h1 id="page-title">AI Scene Batch Director</h1>
+          <p>
+            Nhập cốt truyện và kịch bản nhiều scene. Tool tách scene, chạy từng batch tối đa 10 scene,
+            tạo prompt ảnh keyframe + prompt chuyển động chuẩn theo 2 file prompt mẫu, rồi dừng ở màn review.
+          </p>
+        </div>
+        <div class="hero-metrics" aria-label="Tổng quan workflow">
+          <article><strong id="metric-scenes">0</strong><span>Scenes</span></article>
+          <article><strong id="metric-approved">0</strong><span>Approved</span></article>
+          <article><strong id="metric-batch">—</strong><span>Batch hiện tại</span></article>
+        </div>
+      </section>
+
+      <section class="grid top-grid">
+        <form id="project-form" class="panel project-panel">
+          <div class="panel-head">
+            <span class="pulse-dot"></span>
+            <div>
+              <h2>1. Tạo project</h2>
+              <p>Input chính theo file quy trình: cốt truyện tổng + kịch bản/scene.</p>
+            </div>
+          </div>
+
+          <label for="project-name">Tên project</label>
+          <input id="project-name" value="Video live action viral" />
+
+          <label for="story-input">Cốt truyện tổng / global story context</label>
+          <textarea id="story-input" rows="8" placeholder="Dán toàn bộ cốt truyện, character bible, visual style, continuity rules..."></textarea>
+
+          <label for="script-input">Kịch bản nhiều scene</label>
+          <textarea id="script-input" rows="12" placeholder="Dán scene theo format SCENE 1..., Scene 2..., hoặc mỗi đoạn là một scene..."></textarea>
+
+          <div class="form-row">
+            <div>
+              <label for="batch-size">Batch size</label>
+              <input id="batch-size" type="number" min="1" max="10" value="10" />
+            </div>
+            <div>
+              <label for="duration-sec">Thời lượng/scene</label>
+              <input id="duration-sec" type="number" min="1" value="10" />
+            </div>
+          </div>
+
+          <button id="create-project-btn" type="submit">Parse scene & tạo project</button>
+        </form>
+
+        <section class="panel router-panel" aria-labelledby="router-title">
+          <div class="panel-head split">
+            <div>
+              <h2 id="router-title">2. Provider Router</h2>
+              <p>Đổi account GPT/Grok, lỗi quota thì pause và resume từ scene lỗi.</p>
+            </div>
+            <span id="run-state" class="state-pill idle">Idle</span>
+          </div>
+
+          <div class="form-row">
+            <div>
+              <label for="provider-select">Provider</label>
+              <select id="provider-select">
+                <option value="ninerouter">9Router local proxy</option>
+                <option value="openai">GPT / OpenAI compatible</option>
+                <option value="gemini">Google Gemini</option>
+                <option value="anthropic">Claude</option>
+                <option value="openrouter">OpenRouter</option>
+                <option value="grok">Grok account</option>
+              </select>
+            </div>
+            <div>
+              <label for="account-select">Account</label>
+              <select id="account-select">
+                <option>Account 1</option>
+                <option>Account 2</option>
+                <option>Account 3</option>
+                <option>Fallback Account</option>
+              </select>
+            </div>
+          </div>
+
+          <label for="model-input">Model</label>
+          <input id="model-input" value="cx/gpt-5.5" />
+
+          <label for="api-key-input">API key / token</label>
+          <input id="api-key-input" type="password" placeholder="Dùng local trên máy; 9Router có thể để token proxy nếu cần" />
+
+          <div class="router-actions">
+            <button id="run-batch-btn" class="ghost primary" type="button" disabled>Run batch kế tiếp</button>
+            <button id="pause-btn" class="ghost" type="button" disabled>Pause</button>
+            <button id="resume-btn" class="ghost" type="button" disabled>Resume</button>
+            <button id="export-btn" class="ghost success" type="button" disabled>Export JSON/CSV</button>
+          </div>
+
+          <div class="browser-login-card">
+            <div>
+              <span class="preview-label">Web automation mode</span>
+              <strong>Đăng nhập ChatGPT/Grok, gửi prompt và lưu kết quả</strong>
+              <p id="web-session-status">Chưa check session. Chọn folder output, check login rồi chạy web automation.</p>
+            </div>
+            <div class="browser-login-actions stacked-actions">
+              <button id="open-chatgpt-btn" class="ghost" type="button">Mở ChatGPT</button>
+              <button id="open-grok-btn" class="ghost" type="button">Mở Grok</button>
+              <button id="check-login-btn" class="ghost" type="button">Check login</button>
+              <button id="choose-output-folder-btn" class="ghost" type="button">Chọn folder lưu</button>
+              <button id="send-web-batch-btn" class="ghost primary" type="button" disabled>Gửi batch qua web</button>
+            </div>
+          </div>
+
+          <div class="workflow-card">
+            <h3>Luồng batch đúng quy trình</h3>
+            <ol>
+              <li>Lấy story context + scene hiện tại + scene trước/sau.</li>
+              <li>Tạo image prompt keyframe đầu scene.</li>
+              <li>Tạo motion prompt 7 dòng dựa theo prompt mẫu.</li>
+              <li>Dừng ở review sau tối đa 10 scene.</li>
+              <li>User sửa / regenerate / approve rồi mới chạy batch tiếp.</li>
+            </ol>
+          </div>
+        </section>
+      </section>
+
+      <section class="panel review-panel" aria-labelledby="review-title">
+        <div class="panel-head split">
+          <div>
+            <h2 id="review-title">3. Batch review</h2>
+            <p id="status-text">Chưa có project. Hãy nhập cốt truyện và kịch bản để bắt đầu.</p>
+          </div>
+          <div class="batch-actions">
+            <button id="approve-batch-btn" class="ghost success" type="button" disabled>Approve batch</button>
+            <button id="regenerate-batch-btn" class="ghost" type="button" disabled>Regenerate batch</button>
+          </div>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Scene ID</th>
+                <th>Scene gốc</th>
+                <th>Image prompt</th>
+                <th>Motion prompt</th>
+                <th>Status</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody id="scene-table-body">
+              <tr class="empty-row"><td colspan="6">Màn review sẽ hiện batch scene tại đây.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+
+    <dialog id="editor-dialog">
+      <form method="dialog" class="dialog-card">
+        <div class="panel-head split">
+          <div>
+            <h2 id="dialog-title">Edit prompt</h2>
+            <p>Sửa trực tiếp output trước khi approve.</p>
+          </div>
+          <button class="icon-btn" value="cancel" type="submit">×</button>
+        </div>
+        <label for="editor-textarea">Nội dung</label>
+        <textarea id="editor-textarea" rows="18"></textarea>
+        <div class="dialog-actions">
+          <button id="save-edit-btn" class="ghost primary" value="default" type="button">Lưu sửa</button>
+          <button class="ghost" value="cancel" type="submit">Đóng</button>
+        </div>
+      </form>
+    </dialog>
+
+    <script src="renderer.js"></script>
+  </body>
+</html>
