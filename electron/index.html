@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta
       name="description"
-      content="Dashboard Electron tạo batch image prompt và motion prompt cho workflow sản xuất video AI theo từng scene, có review, pause, resume và export."
+      content="Dashboard Electron tạo batch image prompt và motion prompt cho workflow sản xuất video AI theo từng scene, có review, pause, resume, lưu session và export."
     />
     <title>AI Scene Batch Director</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -52,9 +52,19 @@
           <input id="project-name" value="Video live action viral" />
 
           <label for="story-input">Cốt truyện tổng / global story context</label>
+          <div class="file-import-row">
+            <label class="file-import-btn" for="story-file-input">Add story .txt</label>
+            <input id="story-file-input" type="file" accept=".txt,text/plain" />
+            <span id="story-file-name">Chưa chọn file story.</span>
+          </div>
           <textarea id="story-input" rows="8" placeholder="Dán toàn bộ cốt truyện, character bible, visual style, continuity rules..."></textarea>
 
           <label for="script-input">Kịch bản nhiều scene</label>
+          <div class="file-import-row">
+            <label class="file-import-btn" for="script-file-input">Add scene .txt</label>
+            <input id="script-file-input" type="file" accept=".txt,text/plain" />
+            <span id="script-file-name">Chưa chọn file scene.</span>
+          </div>
           <textarea id="script-input" rows="12" placeholder="Dán scene theo format SCENE 1..., Scene 2..., hoặc mỗi đoạn là một scene..."></textarea>
 
           <div class="form-row">
@@ -68,7 +78,7 @@
             </div>
           </div>
 
-          <button id="create-project-btn" type="submit">Parse scene & tạo project</button>
+          <button id="create-project-btn" class="manual-only" type="submit" hidden>Parse scene & tạo project</button>
         </form>
 
         <section class="panel router-panel" aria-labelledby="router-title">
@@ -110,7 +120,7 @@
           <input id="api-key-input" type="password" placeholder="Dùng local trên máy; 9Router có thể để token proxy nếu cần" />
 
           <div class="router-actions">
-            <button id="run-batch-btn" class="ghost primary" type="button" disabled>Run batch kế tiếp</button>
+            <button id="run-batch-btn" class="ghost primary manual-only" type="button" hidden>Run batch kế tiếp</button>
             <button id="pause-btn" class="ghost" type="button" disabled>Pause</button>
             <button id="resume-btn" class="ghost" type="button" disabled>Resume</button>
             <button id="export-btn" class="ghost success" type="button" disabled>Export JSON/CSV</button>
@@ -119,15 +129,77 @@
           <div class="browser-login-card">
             <div>
               <span class="preview-label">Web automation mode</span>
-              <strong>Đăng nhập ChatGPT/Grok, gửi prompt và lưu kết quả</strong>
+              <strong>Đăng nhập ChatGPT + nền tảng video, gửi prompt và lưu kết quả</strong>
+              <div class="inline-control">
+                <label for="video-platform-select">Video platform</label>
+                <select id="video-platform-select">
+                  <option value="grok">Grok</option>
+                  <option value="pixverse">PixVerse</option>
+                </select>
+              </div>
+              <div id="pixverse-config" class="pixverse-config" hidden>
+                <div class="config-head">
+                  <span class="preview-label">PixVerse config</span>
+                  <span id="pixverse-energy-status" class="energy-pill">Energy: chưa check</span>
+                </div>
+                <div class="config-grid wide-config-grid">
+                  <label>Resolution
+                    <select id="pixverse-resolution-select">
+                      <option value="360P">360P</option>
+                      <option value="540P">540P</option>
+                      <option value="720P" data-pro="true">720P · Pro</option>
+                      <option value="1080P" data-pro="true">1080P · Pro</option>
+                    </select>
+                  </label>
+                  <label>Ratio
+                    <select id="pixverse-ratio-select">
+                      <option value="16:9">16:9</option>
+                      <option value="4:3">4:3</option>
+                      <option value="1:1">1:1</option>
+                      <option value="3:4">3:4</option>
+                      <option value="9:16">9:16</option>
+                      <option value="21:9">21:9</option>
+                      <option value="3:2">3:2</option>
+                      <option value="2:3">2:3</option>
+                    </select>
+                  </label>
+                  <label>Duration
+                    <select id="pixverse-duration-select">
+                      <option value="1">1s</option><option value="2">2s</option><option value="3">3s</option><option value="4">4s</option>
+                      <option value="5" selected>5s</option><option value="6">6s</option><option value="7">7s</option><option value="8">8s</option>
+                      <option value="9">9s</option><option value="10">10s</option><option value="11">11s</option><option value="12">12s</option>
+                      <option value="13">13s</option><option value="14">14s</option><option value="15">15s</option>
+                    </select>
+                  </label>
+                  <label>Model
+                    <select id="pixverse-model-select">
+                      <option value="PixVerse V6">PixVerse V6</option>
+                      <option value="PixVerse C1">PixVerse C1</option>
+                      <option value="Seedance 2.0" data-pro="true">Seedance 2.0 · Pro</option>
+                      <option value="Happy Horse 1.0" data-pro="true">Happy Horse 1.0 · Pro</option>
+                      <option value="Kling O3" data-pro="true">Kling O3 · Pro</option>
+                      <option value="Kling 3.0" data-pro="true">Kling 3.0 · Pro</option>
+                      <option value="Grok Imagine" data-pro="true">Grok Imagine · Pro</option>
+                      <option value="Veo 3.1" data-pro="true">Veo 3.1 · Pro</option>
+                      <option value="Sora 2" data-pro="true">Sora 2 · Pro</option>
+                      <option value="PixVerse V5.6">PixVerse V5.6</option>
+                      <option value="PixVerse V5.5">PixVerse V5.5</option>
+                      <option value="PixVerse V5">PixVerse V5</option>
+                      <option value="PixVerse V5 Fast">PixVerse V5 Fast</option>
+                    </select>
+                  </label>
+                  <label class="toggle-row"><input id="pixverse-preview-toggle" type="checkbox" /> Preview mode</label>
+                  <label class="toggle-row"><input id="pixverse-audio-toggle" type="checkbox" checked /> Audio</label>
+                </div>
+                <p id="pixverse-config-advice" class="config-advice">Chọn PixVerse rồi bấm chạy, tool sẽ đọc energy/tính năng Pro và đề xuất config nếu thiếu.</p>
+              </div>
               <p id="web-session-status">Chưa check session. Chọn folder output, check login rồi chạy web automation.</p>
             </div>
             <div class="browser-login-actions stacked-actions">
-              <button id="open-chatgpt-btn" class="ghost" type="button">Mở ChatGPT</button>
-              <button id="open-grok-btn" class="ghost" type="button">Mở Grok</button>
-              <button id="check-login-btn" class="ghost" type="button">Check login</button>
-              <button id="choose-output-folder-btn" class="ghost" type="button">Chọn folder lưu</button>
-              <button id="send-web-batch-btn" class="ghost primary" type="button" disabled>Gửi batch qua web</button>
+              <label class="auto-review-toggle"><input id="skip-review-toggle" type="checkbox" /> Tự động hoàn toàn, không dừng review</label>
+              <button id="choose-output-folder-btn" class="ghost" type="button">Chọn/đổi folder lưu</button>
+              <button id="save-session-btn" class="ghost" type="button">Lưu session</button>
+              <button id="auto-run-btn" class="ghost primary" type="button" onclick="window.startPipelineFromClick?.(event)">Start pipeline</button>
             </div>
           </div>
 
@@ -135,7 +207,7 @@
             <h3>Luồng batch đúng quy trình</h3>
             <ol>
               <li>Lấy story context + scene hiện tại + scene trước/sau.</li>
-              <li>Tạo image prompt keyframe đầu scene.</li>
+              <li>Tạo image prompt keyframe đầu scene qua ChatGPT Create image.</li>
               <li>Tạo motion prompt 7 dòng dựa theo prompt mẫu.</li>
               <li>Dừng ở review sau tối đa 10 scene.</li>
               <li>User sửa / regenerate / approve rồi mới chạy batch tiếp.</li>
@@ -144,37 +216,117 @@
         </section>
       </section>
 
-      <section class="panel review-panel" aria-labelledby="review-title">
-        <div class="panel-head split">
-          <div>
-            <h2 id="review-title">3. Batch review</h2>
-            <p id="status-text">Chưa có project. Hãy nhập cốt truyện và kịch bản để bắt đầu.</p>
-          </div>
-          <div class="batch-actions">
-            <button id="approve-batch-btn" class="ghost success" type="button" disabled>Approve batch</button>
-            <button id="regenerate-batch-btn" class="ghost" type="button" disabled>Regenerate batch</button>
-          </div>
-        </div>
+      <section class="review-launch-row" aria-label="Asset review launcher">
+        <button id="open-review-btn" class="ghost success" type="button" disabled>Mở popup review ảnh/video</button>
+        <button id="start-pipeline-inline-btn" class="ghost primary" type="button" onclick="window.startPipelineFromClick?.(event)">Start pipeline ngay</button>
+        <p id="review-inline-status">Chưa có asset cần review.</p>
+      </section>
 
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Scene ID</th>
-                <th>Scene gốc</th>
-                <th>Image prompt</th>
-                <th>Motion prompt</th>
-                <th>Status</th>
-                <th>Action</th>
-              </tr>
-            </thead>
-            <tbody id="scene-table-body">
-              <tr class="empty-row"><td colspan="6">Màn review sẽ hiện batch scene tại đây.</td></tr>
-            </tbody>
-          </table>
+      <section class="workflow-progress-card" aria-labelledby="workflow-progress-title">
+        <div class="workflow-progress-head">
+          <div>
+            <span class="preview-label">Pipeline progress</span>
+            <h3 id="workflow-progress-title">Thanh quy trình batch</h3>
+          </div>
+          <strong id="workflow-progress-percent">0%</strong>
         </div>
+        <div class="workflow-progress-track" aria-hidden="true"><span id="workflow-progress-fill"></span></div>
+        <div id="workflow-step-list" class="workflow-step-list" aria-live="polite"></div>
+      </section>
+
+      <section id="final-preview-card" class="final-preview-card" aria-labelledby="final-preview-title" hidden>
+        <div class="final-preview-head">
+          <div>
+            <span class="preview-label">Final merged video</span>
+            <h2 id="final-preview-title">Bản final đã merge</h2>
+            <p id="final-preview-meta">Chưa có video tổng.</p>
+          </div>
+          <button id="refresh-final-preview-btn" class="ghost mini" type="button">Refresh preview</button>
+        </div>
+        <video id="final-preview-video" class="final-preview-video" controls playsinline></video>
+        <div class="scene-timeline-head">
+          <strong>Timeline scene</strong>
+          <span>Scene 1 → Scene 2 → ...</span>
+        </div>
+        <div id="final-scene-timeline" class="final-scene-timeline" aria-label="Timeline scene của video final"></div>
+      </section>
+
+      <section class="pipeline-log-card" aria-labelledby="pipeline-log-title">
+        <div class="pipeline-log-head">
+          <div>
+            <span class="preview-label">Live pipeline log</span>
+            <h3 id="pipeline-log-title">Nhật ký chạy workflow</h3>
+          </div>
+          <button id="clear-log-btn" class="ghost mini" type="button">Xóa log</button>
+        </div>
+        <ol id="pipeline-log-list" class="pipeline-log-list" aria-live="polite"></ol>
       </section>
     </main>
+
+    <dialog id="login-wait-dialog" class="dialog-card login-wait-dialog">
+      <form method="dialog" class="dialog-card" style="min-width: 400px;">
+        <div class="panel-head split">
+          <div>
+            <h2 id="login-wait-title">Đang chờ đăng nhập...</h2>
+            <p id="login-wait-desc">Vui lòng đăng nhập hoặc vượt qua Cloudflare trong cửa sổ web.</p>
+          </div>
+        </div>
+        <div class="dialog-actions" style="margin-top: 1rem;">
+          <button class="ghost" value="cancel" type="submit">Hủy Auto Pipeline</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="asset-review-dialog" class="asset-review-dialog">
+      <form method="dialog" class="asset-review-card">
+        <div class="asset-review-header">
+          <div>
+            <span id="review-scene-kicker" class="preview-label">Scene review</span>
+            <h2 id="review-scene-title">Chưa có scene</h2>
+            <p id="review-scene-status">Chạy pipeline để tạo ảnh/video rồi review tại đây.</p>
+          </div>
+          <button class="icon-btn" value="cancel" type="submit">×</button>
+        </div>
+
+        <div class="asset-review-grid prompt-review-grid">
+          <aside class="asset-review-info">
+            <h3>Scene gốc</h3>
+            <div id="review-original" class="review-text-box">—</div>
+            <h3>Trạng thái</h3>
+            <div id="review-status-badge"></div>
+          </aside>
+
+          <section id="review-media-panel" class="asset-review-stage" hidden>
+            <div class="zoom-toolbar">
+              <button id="zoom-out-btn" class="mini" type="button">−</button>
+              <input id="zoom-range" type="range" min="60" max="200" value="100" />
+              <button id="zoom-in-btn" class="mini" type="button">+</button>
+            </div>
+            <div id="review-media-stage" class="review-media-stage">
+              <div class="empty-review-media">Chưa có ảnh/video để review.</div>
+            </div>
+          </section>
+
+          <section class="asset-review-prompts prompt-review-panel prompt-review-main">
+            <h3>Image prompt</h3>
+            <div id="review-image-prompt" class="review-text-box prompt-box-large">—</div>
+            <h3>Motion prompt</h3>
+            <div id="review-motion-prompt" class="review-text-box prompt-box-large">—</div>
+          </section>
+
+          <aside class="asset-review-actions">
+            <h3>Thao tác</h3>
+            <p class="review-hint">Review prompt tại đây. Ảnh/video chỉ hiện sau khi tạo asset xong.</p>
+            <div class="dialog-actions stacked-actions">
+              <button id="review-edit-image-btn" class="ghost" type="button">Sửa image prompt</button>
+              <button id="review-edit-motion-btn" class="ghost" type="button">Sửa motion prompt</button>
+              <button id="review-regenerate-btn" class="ghost" type="button">Tạo lại scene này</button>
+              <button id="review-approve-btn" class="ghost success" type="button">Ổn / Next scene</button>
+            </div>
+          </aside>
+        </div>
+      </form>
+    </dialog>
 
     <dialog id="editor-dialog">
       <form method="dialog" class="dialog-card">

@@ -19,3 +19,6 @@ release/
 TestOutput/
 test/
 test2/
+
+# Persistent local Chrome CDP profile (contains cookies/session)
+.chrome-cdp-profile/

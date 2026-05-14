@@ -1,0 +1,20 @@
+%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj
+4 0 obj << /Length 985 >> stream
+BT /F1 14 Tf 50 750 Td (GROK ACCOUNT ROUTER SANDBOX RULES) Tj 0 -28 Td /F1 10 Tf (Boundary: edit ONLY inside dev_sandbox_grok_account_router.) Tj 0 -18 Td (Do NOT modify production files or other folders.) Tj 0 -24 Td (Task: design/prototype multi-account Grok routing.) Tj 0 -18 Td (If account-wide limit occurs, switch to another available account.) Tj 0 -18 Td (Canvas-local limit is different and should be handled by new canvas recovery.) Tj 0 -24 Td (Security requirements:) Tj 0 -18 Td (Encrypt all account secrets at rest.) Tj 0 -18 Td (Never store passwords/cookies/tokens in plaintext.) Tj 0 -18 Td (Never write secrets to logs or project files.) Tj 0 -18 Td (Mask account identifiers in UI and logs.) Tj 0 -18 Td (Prefer OS keychain, DPAPI, safeStorage, or approved credential vault.) Tj 0 -24 Td (Deliverables: design, schema, security model, implementation plan, optional prototype/tests.) Tj ET
+endstream endobj
+5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj
+xref
+0 6
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000115 00000 n 
+0000000257 00000 n 
+0000001293 00000 n 
+trailer << /Root 1 0 R /Size 6 >>
+startxref
+1363
+%%EOF

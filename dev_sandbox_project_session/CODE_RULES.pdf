@@ -1,0 +1,20 @@
+%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj
+4 0 obj << /Length 812 >> stream
+BT /F1 14 Tf 50 750 Td (GROK DEV SANDBOX RULES) Tj 0 -28 Td /F1 10 Tf (Boundary: edit ONLY inside dev_sandbox_project_session folder.) Tj 0 -18 Td (Do NOT modify electron, package.json, root config, or existing source files.) Tj 0 -18 Td (Task: prototype Open Project, New Project, Save Project as .grokproj.) Tj 0 -18 Td (Saved file should restore prompts, config, batch progress, assets, statuses,) Tj 0 -18 Td (output folder, provider settings, final merged video path, and timeline.) Tj 0 -24 Td (Required deliverables in this folder:) Tj 0 -18 Td (1. README.md overview.) Tj 0 -18 Td (2. project_session_schema.md JSON schema proposal.) Tj 0 -18 Td (3. implementation_plan.md integration plan.) Tj 0 -18 Td (4. Optional prototype and tests folders.) Tj 0 -24 Td (Rules: no production changes, no API keys in plaintext, validate loaded files,) Tj 0 -18 Td (include schemaVersion, and treat local file paths as possibly missing.) Tj ET
+endstream endobj
+5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj
+xref
+0 6
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000115 00000 n 
+0000000257 00000 n 
+0000001120 00000 n 
+trailer << /Root 1 0 R /Size 6 >>
+startxref
+1190
+%%EOF

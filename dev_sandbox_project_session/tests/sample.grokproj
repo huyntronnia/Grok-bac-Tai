@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "app": "AI Scene Batch Director",
+  "savedAt": "2026-05-14T00:00:00.000Z",
+  "project": {
+    "name": "Sample project",
+    "story": "Sample story context",
+    "batchSize": 10,
+    "durationSec": 10,
+    "scenes": []
+  },
+  "runtime": {
+    "activeBatchIds": [],
+    "paused": false,
+    "outputFolder": "",
+    "selectedProvider": "ninerouter",
+    "selectedAccount": "Account 1",
+    "selectedModel": "cx/gpt-5.5",
+    "videoPlatform": "grok",
+    "skipReview": false
+  },
+  "videoConfig": {
+    "pixverse": {},
+    "grok": {}
+  },
+  "finalPreview": {
+    "finalVideoPath": "",
+    "timeline": []
+  }
+}
