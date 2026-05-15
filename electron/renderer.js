@@ -18,6 +18,10 @@ const resumeBtn = document.querySelector('#resume-btn');
 const exportBtn = document.querySelector('#export-btn');
 const chooseOutputFolderBtn = document.querySelector('#choose-output-folder-btn');
 const saveSessionBtn = document.querySelector('#save-session-btn');
+const grokAccountSelect = document.querySelector('#grok-account-select');
+const grokRoutingPolicySelect = document.querySelector('#grok-routing-policy-select');
+const openGrokRouterFolderBtn = document.querySelector('#open-grok-router-folder-btn');
+const grokRouterState = document.querySelector('#grok-router-state');
 const videoPlatformSelect = document.querySelector('#video-platform-select');
 const skipReviewToggle = document.querySelector('#skip-review-toggle');
 const autoRunBtn = document.querySelector('#auto-run-btn');
@@ -488,6 +492,8 @@ async function runFullPipeline() {
         imagePath: scene.imagePath || '',
         forceRegenerateImage: Boolean(scene.forceRegenerateImage),
         videoProvider: videoPlatform.value,
+        videoAccount: getSelectedVideoAccount(videoPlatform.value),
+        routingPolicy: grokRoutingPolicySelect?.value || 'manual',
         videoConfig: getVideoProviderConfig(),
       });
       scene.forceRegenerateImage = false;
@@ -578,6 +584,11 @@ function getSelectedVideoPlatform() {
     value,
     label: value === 'pixverse' ? 'PixVerse' : 'Grok',
   };
+}
+
+function getSelectedVideoAccount(videoProvider = getSelectedVideoPlatform().value) {
+  if (videoProvider === 'grok') return grokAccountSelect?.value || 'grok-account-1';
+  return accountSelect.value;
 }
 
 function getVideoProviderConfig() {
@@ -1228,8 +1239,16 @@ function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
 }
 
+function getGrokRouterSettings() {
+  return {
+    account: grokAccountSelect?.value || 'grok-account-1',
+    routingPolicy: grokRoutingPolicySelect?.value || 'manual',
+    sandboxFolder: 'dev_sandbox_grok_account_router',
+  };
+}
+
 function persist() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify({ project, activeBatchIds, paused, outputFolder }));
+  localStorage.setItem(STORAGE_KEY, JSON.stringify({ project, activeBatchIds, paused, outputFolder, grokRouter: getGrokRouterSettings() }));
 }
 
 async function reconcileSavedAssets() {
@@ -1274,6 +1293,8 @@ function restore() {
       scriptInput.value = project.scenes?.map((scene) => scene.original).join('\n\n') || '';
       batchSizeInput.value = project.batchSize || batchSizeInput.value;
       durationInput.value = project.durationSec || durationInput.value;
+      if (saved.grokRouter?.account && grokAccountSelect) grokAccountSelect.value = saved.grokRouter.account;
+      if (saved.grokRouter?.routingPolicy && grokRoutingPolicySelect) grokRoutingPolicySelect.value = saved.grokRouter.routingPolicy;
       if (outputFolder) webSessionStatus.textContent = `Folder lưu: ${outputFolder}`;
       setStatus('Đã khôi phục session đã lưu. Có thể bấm Start pipeline để chạy tiếp.', 'ok');
     } else {
@@ -1299,6 +1320,19 @@ resumeBtn.addEventListener('click', resumeRun);
 exportBtn.addEventListener('click', exportProject);
 chooseOutputFolderBtn.addEventListener('click', chooseOutputFolder);
 saveSessionBtn?.addEventListener('click', saveSessionForNextLaunch);
+grokAccountSelect?.addEventListener('change', () => {
+  if (grokRouterState) grokRouterState.textContent = `${grokAccountSelect.value} linked`;
+  persist();
+});
+grokRoutingPolicySelect?.addEventListener('change', persist);
+openGrokRouterFolderBtn?.addEventListener('click', async () => {
+  const result = await window.videoPlannerAPI?.openGrokRouterFolder?.();
+  if (result?.ok) {
+    setStatus(`Đã mở folder account router: ${result.path}`, 'ok');
+  } else {
+    setStatus('Không mở được folder dev_sandbox_grok_account_router.', 'error');
+  }
+});
 autoRunBtn?.addEventListener('click', startPipelineFromClick);
 autoRunBtn?.addEventListener('pointerdown', startPipelineFromClick, { capture: true });
 startPipelineInlineBtn?.addEventListener('click', startPipelineFromClick);
@@ -1352,6 +1386,7 @@ window.addEventListener('unhandledrejection', (event) => {
 });
 
 syncVideoPlatformConfig();
+if (grokRouterState) grokRouterState.textContent = `${grokAccountSelect?.value || 'grok-account-1'} linked`;
 renderPipelineLog();
 window.videoPlannerAPI?.getPipelineLogVisible?.().then(setPipelineLogVisible).catch(() => setPipelineLogVisible(false));
 window.videoPlannerAPI?.onPipelineLogVisible?.(setPipelineLogVisible);

@@ -1,4 +1,4 @@
-﻿# Grok Account Router Design
+# Grok Account Router Design
 
 ## Goal
 Allow users to add multiple Grok accounts and let the pipeline automatically switch accounts when one account hits an account-wide generation limit.
@@ -46,3 +46,13 @@ Future policies:
 - least recently used
 - quota-aware
 - user-selected fallback group
+
+## Testing and done proof
+
+Before handoff, use `TESTING.md` to prove:
+- `account_limit` switches accounts.
+- `canvas_limit` keeps the same account.
+- `login_required` pauses and requests login.
+- no available accounts causes a safe pause.
+
+Record results in `DONE_CHECKLIST.md`.

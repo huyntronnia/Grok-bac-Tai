@@ -1,5 +1,5 @@
 const { execFileSync, spawn } = require('child_process');
-const { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, Menu } = require('electron');
+const { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, Menu, shell } = require('electron');
 const CDP = require('chrome-remote-interface');
 const ffmpegPath = require('ffmpeg-static');
 const fs = require('fs/promises');
@@ -45,6 +45,13 @@ async function notifyRenderer(type, message, details = null) {
 async function getAppLogPath() {
   await appendAppLog(null, { source: 'main', kind: 'info', text: 'Log path requested' });
   return APP_LOG_FILE;
+}
+
+async function openGrokRouterFolder() {
+  const routerPath = path.join(__dirname, '..', 'dev_sandbox_grok_account_router');
+  await fs.mkdir(routerPath, { recursive: true });
+  await shell.openPath(routerPath);
+  return { ok: true, path: routerPath };
 }
 
 function createWindow() {
@@ -737,7 +744,15 @@ async function runScenePipeline(_event, options) {
   await fs.writeFile(path.join(sceneDir, 'image_prompt.txt'), imagePrompt, 'utf8');
 
   const videoProvider = normalizeVideoProvider(options.videoProvider);
+  const videoAccount = options.videoAccount || '';
+  const routingPolicy = options.routingPolicy || 'manual';
   const videoConfig = options.videoConfig || {};
+  await appendAppLog(null, {
+    source: 'main',
+    kind: 'info',
+    text: `Scene ${sceneId}: video router ${videoProvider}/${videoAccount || 'default'} (${routingPolicy})`,
+    details: { videoProvider, videoAccount, routingPolicy, routerSandbox: 'dev_sandbox_grok_account_router' },
+  });
   let imagePath = options.imagePath || '';
   if (imagePath && !(await pathExists(imagePath))) imagePath = '';
   const expectedImagePath = path.join(sceneDir, `scene_${String(sceneId).padStart(3, '0')}_keyframe.png`);
@@ -3007,6 +3022,7 @@ function sanitizeFileName(value) {
 app.whenReady().then(() => {
   ipcMain.handle('app:append-log', appendAppLog);
   ipcMain.handle('app:get-log-path', getAppLogPath);
+  ipcMain.handle('router:open-grok-folder', openGrokRouterFolder);
   ipcMain.handle('view:get-pipeline-log-visible', getPipelineLogVisibility);
   ipcMain.handle('browser:open-login', openWebLogin);
   ipcMain.handle('browser:check-login', checkWebLogin);

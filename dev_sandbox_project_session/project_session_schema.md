@@ -22,6 +22,11 @@ Suggested extension: `.grokproj`
     "selectedAccount": "Account 1",
     "selectedModel": "cx/gpt-5.5",
     "videoPlatform": "grok",
+    "grokRouter": {
+      "activeAccountId": "grok-account-1",
+      "routingPolicy": "manual",
+      "sandboxFolder": "dev_sandbox_grok_account_router"
+    },
     "skipReview": true
   },
   "videoConfig": {
@@ -71,3 +76,24 @@ Each scene should preserve:
 - Reject unknown future major schema unless migrated.
 - Do not require local files to exist; mark missing assets in UI.
 - Never auto-run after opening unless user clicks Start.
+- Restore Grok router selection as metadata only.
+
+## Grok router metadata rules
+
+`.grokproj` may store:
+
+- selected Grok account id/display label
+- selected routing policy
+- router sandbox folder reference
+
+`.grokproj` must not store:
+
+- Grok cookies
+- session tokens
+- passwords
+- raw browser localStorage auth data
+- API keys unless a separate explicit encrypted export feature is approved
+
+## Test requirement
+
+Use `TESTING.md` and fill `DONE_CHECKLIST.md` before handoff.

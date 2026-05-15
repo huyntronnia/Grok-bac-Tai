@@ -1,4 +1,4 @@
-﻿# Account Security Model
+# Account Security Model
 
 ## Non-negotiable requirements
 
@@ -69,3 +69,11 @@ Protect against:
 Not guaranteed:
 
 - protection from a fully compromised OS user account
+
+## Security test and handoff
+
+Before handoff:
+- Run the no-secret checks in `TESTING.md`.
+- Confirm test fixtures use fake or masked identifiers only.
+- Confirm logs/examples do not contain cookies, tokens, passwords, or full private emails.
+- Record the result in `DONE_CHECKLIST.md`.

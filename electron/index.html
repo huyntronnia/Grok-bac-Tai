@@ -119,6 +119,40 @@
           <label for="api-key-input">API key / token</label>
           <input id="api-key-input" type="password" placeholder="Dùng local trên máy; 9Router có thể để token proxy nếu cần" />
 
+          <div class="grok-account-router-card" aria-labelledby="grok-account-router-title">
+            <div class="config-head">
+              <div>
+                <span class="preview-label">Grok Account Router</span>
+                <h3 id="grok-account-router-title">Acc Grok cho batch chính</h3>
+              </div>
+              <span id="grok-router-state" class="energy-pill">Sandbox linked</span>
+            </div>
+            <p>
+              Phần này dùng cho tài khoản Grok chạy video/motion trong pipeline, tách riêng với 9Router/API key tạo prompt.
+            </p>
+            <div class="config-grid wide-config-grid">
+              <label>Active Grok account
+                <select id="grok-account-select">
+                  <option value="grok-account-1">Grok Account 1</option>
+                  <option value="grok-account-2">Grok Account 2</option>
+                  <option value="grok-account-3">Grok Account 3</option>
+                  <option value="grok-fallback">Grok Fallback</option>
+                </select>
+              </label>
+              <label>Routing policy
+                <select id="grok-routing-policy-select">
+                  <option value="manual">Manual chọn acc</option>
+                  <option value="round-robin">Round-robin khi bị limit</option>
+                  <option value="first-available">First available</option>
+                </select>
+              </label>
+            </div>
+            <div class="router-link-row">
+              <code id="grok-router-folder">dev_sandbox_grok_account_router</code>
+              <button id="open-grok-router-folder-btn" class="mini" type="button">Mở folder router</button>
+            </div>
+          </div>
+
           <div class="router-actions">
             <button id="run-batch-btn" class="ghost primary manual-only" type="button" hidden>Run batch kế tiếp</button>
             <button id="pause-btn" class="ghost" type="button" disabled>Pause</button>

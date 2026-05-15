@@ -3,6 +3,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('videoPlannerAPI', {
   appendAppLog: (entry) => ipcRenderer.invoke('app:append-log', entry),
   getAppLogPath: () => ipcRenderer.invoke('app:get-log-path'),
+  openGrokRouterFolder: () => ipcRenderer.invoke('router:open-grok-folder'),
   getPipelineLogVisible: () => ipcRenderer.invoke('view:get-pipeline-log-visible'),
   onPipelineLogVisible: (callback) => {
     const listener = (_event, visible) => callback(Boolean(visible));

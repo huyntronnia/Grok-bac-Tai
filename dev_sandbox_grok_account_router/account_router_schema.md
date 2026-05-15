@@ -1,4 +1,4 @@
-﻿# Account Router Schema Proposal
+# Account Router Schema Proposal
 
 This schema is for an isolated prototype. Do not store real secrets in sample files.
 
@@ -50,3 +50,13 @@ This schema is for an isolated prototype. Do not store real secrets in sample fi
 ```
 
 Do not save this plaintext payload to disk.
+
+## Test requirement
+
+Use `TESTING.md` to validate:
+- sample JSON shape
+- no plaintext secrets
+- routing strategy fields
+- active account metadata
+
+Fill `DONE_CHECKLIST.md` before handoff.

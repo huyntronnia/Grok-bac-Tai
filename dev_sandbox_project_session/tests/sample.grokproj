@@ -17,6 +17,11 @@
     "selectedAccount": "Account 1",
     "selectedModel": "cx/gpt-5.5",
     "videoPlatform": "grok",
+    "grokRouter": {
+      "activeAccountId": "grok-account-1",
+      "routingPolicy": "manual",
+      "sandboxFolder": "dev_sandbox_grok_account_router"
+    },
     "skipReview": false
   },
   "videoConfig": {
