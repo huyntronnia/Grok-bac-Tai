@@ -3,18 +3,43 @@
   "accounts": [
     {
       "accountId": "acc_sample_001",
-      "displayName": "Sample Grok Account",
-      "maskedEmail": "s***@example.com",
-      "status": "available",
+      "displayName": "Sample Grok Account 1",
+      "maskedEmail": "s***1@example.test",
+      "status": "active",
       "priority": 10,
       "lastUsedAt": null,
       "cooldownUntil": null,
-      "encryptedSecretRef": "sample-only-no-real-secret"
+      "encryptedSecretRef": "mock-secret-ref-acc-sample-001",
+      "canvasRef": "canvas_sample_001",
+      "profileRef": "profile_sample_001"
+    },
+    {
+      "accountId": "acc_sample_002",
+      "displayName": "Sample Grok Account 2",
+      "maskedEmail": "s***2@example.test",
+      "status": "available",
+      "priority": 20,
+      "lastUsedAt": null,
+      "cooldownUntil": null,
+      "encryptedSecretRef": "mock-secret-ref-acc-sample-002",
+      "canvasRef": "canvas_sample_002",
+      "profileRef": "profile_sample_002"
+    },
+    {
+      "accountId": "acc_sample_disabled",
+      "displayName": "Disabled Sample Grok Account",
+      "maskedEmail": "d***@example.test",
+      "status": "disabled_by_user",
+      "priority": 99,
+      "lastUsedAt": null,
+      "cooldownUntil": null,
+      "encryptedSecretRef": "mock-secret-ref-disabled"
     }
   ],
   "routing": {
     "strategy": "round_robin",
     "activeAccountId": "acc_sample_001",
-    "maxSwitchesPerScene": 3
+    "maxSwitchesPerScene": 3,
+    "futureStrategies": ["priority", "least_recently_used", "quota_aware", "fallback_group"]
   }
 }

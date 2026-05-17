@@ -4,6 +4,11 @@ contextBridge.exposeInMainWorld('videoPlannerAPI', {
   appendAppLog: (entry) => ipcRenderer.invoke('app:append-log', entry),
   getAppLogPath: () => ipcRenderer.invoke('app:get-log-path'),
   openGrokRouterFolder: () => ipcRenderer.invoke('router:open-grok-folder'),
+  getGrokRouterStatus: () => ipcRenderer.invoke('router:get-status'),
+  listGrokAccountsSafe: () => ipcRenderer.invoke('router:list-accounts-safe'),
+  selectGrokAccount: (accountId) => ipcRenderer.invoke('router:select-account', accountId),
+  setAccountRouterEnabled: (enabled) => ipcRenderer.invoke('router:set-enabled', enabled),
+  resumeFromRouterCheckpoint: () => ipcRenderer.invoke('router:resume-checkpoint'),
   getPipelineLogVisible: () => ipcRenderer.invoke('view:get-pipeline-log-visible'),
   onPipelineLogVisible: (callback) => {
     const listener = (_event, visible) => callback(Boolean(visible));

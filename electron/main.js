@@ -21,6 +21,145 @@ const challengeRecoveryAttempts = new Map();
 let chromeProcess = null;
 let showPipelineLog = false;
 const APP_LOG_FILE = path.join(app.getPath('userData'), 'ai-video-pipeline.log');
+const GROK_ROUTER_CHECKPOINT_FILE = path.join(app.getPath('userData'), 'grok-router-checkpoint.json');
+const GROK_ROUTER_ALLOWED_STATES = new Set(['available', 'active', 'cooldown', 'limited', 'login_required', 'invalid', 'disabled_by_user']);
+const grokRouterState = {
+  accountRouterEnabled: false,
+  routingPolicy: 'round_robin',
+  paused: false,
+  pauseReason: '',
+  lastErrorClassification: '',
+  lastSafeMessage: '',
+  selectedAccountId: 'grok-default-profile',
+  accounts: [
+    { accountId: 'grok-default-profile', label: 'Grok default profile', maskedEmail: 'gr***@masked.local', state: 'active', profileRef: 'grok-web-session', canvasRef: '' },
+  ],
+  checkpoint: null,
+};
+
+function maskRouterText(value = '') {
+  const text = String(value || '');
+  return text
+    .replace(/[A-Z0-9._%+-]+@([A-Z0-9.-]+\.[A-Z]{2,})/gi, '***@$1')
+    .replace(/(bearer\s+)[a-z0-9._-]+/gi, '$1[redacted]')
+    .replace(/(password|cookie|session[_-]?token|refresh[_-]?token|api[_-]?key)\s*[:=]\s*[^\s,;]+/gi, '$1=[redacted]');
+}
+
+function getSafeGrokAccounts() {
+  return grokRouterState.accounts.map((account) => ({
+    accountId: account.accountId,
+    label: maskRouterText(account.label || account.accountId),
+    maskedEmail: maskRouterText(account.maskedEmail || '***@masked.local'),
+    state: GROK_ROUTER_ALLOWED_STATES.has(account.state) ? account.state : 'invalid',
+    selected: account.accountId === grokRouterState.selectedAccountId,
+  }));
+}
+
+function getGrokRouterStatus() {
+  const active = getSafeGrokAccounts().find((account) => account.selected) || null;
+  return {
+    accountRouterEnabled: Boolean(grokRouterState.accountRouterEnabled),
+    routingPolicy: grokRouterState.routingPolicy,
+    paused: Boolean(grokRouterState.paused),
+    pauseReason: grokRouterState.pauseReason,
+    lastErrorClassification: grokRouterState.lastErrorClassification,
+    lastSafeMessage: grokRouterState.lastSafeMessage,
+    selectedAccountId: grokRouterState.selectedAccountId,
+    activeAccount: active,
+    checkpointStatus: grokRouterState.checkpoint?.currentStatus || 'none',
+    checkpointUpdatedAt: grokRouterState.checkpoint?.updatedAt || '',
+  };
+}
+
+function setGrokAccountState(accountId, state) {
+  if (!GROK_ROUTER_ALLOWED_STATES.has(state)) return false;
+  const account = grokRouterState.accounts.find((item) => item.accountId === accountId);
+  if (!account) return false;
+  account.state = state;
+  return true;
+}
+
+async function selectGrokAccount(_event, accountId) {
+  const id = String(accountId || '').trim();
+  const account = grokRouterState.accounts.find((item) => item.accountId === id);
+  if (!account) return { ok: false, error: 'Unknown sanitized Grok account.' };
+  if (['limited', 'login_required', 'invalid', 'disabled_by_user'].includes(account.state)) {
+    return { ok: false, error: `Account is not available: ${account.state}` };
+  }
+  grokRouterState.accounts.forEach((item) => {
+    if (item.state === 'active') item.state = 'available';
+  });
+  account.state = 'active';
+  grokRouterState.selectedAccountId = id;
+  grokRouterState.paused = false;
+  grokRouterState.pauseReason = '';
+  grokRouterState.lastSafeMessage = 'Grok router account selected safely.';
+  return { ok: true, status: getGrokRouterStatus(), accounts: getSafeGrokAccounts() };
+}
+
+async function setAccountRouterEnabled(_event, enabled) {
+  grokRouterState.accountRouterEnabled = Boolean(enabled);
+  if (!grokRouterState.accountRouterEnabled) {
+    grokRouterState.paused = false;
+    grokRouterState.pauseReason = '';
+    grokRouterState.lastSafeMessage = 'Router disabled; single-account Grok pipeline is active.';
+  }
+  return getGrokRouterStatus();
+}
+
+function classifyGrokRouterError(error) {
+  const text = `${error?.message || error || ''}\n${error?.stack || ''}`;
+  if (/canvas limit|limit trong canvas|đổi canvas|new canvas|empty canvas/i.test(text)) return 'canvas_limit';
+  if (/quota|plan|account.*limit|feature tạo video chưa khả dụng|đổi account/i.test(text)) return 'account_limit';
+  if (/chưa đăng nhập|sign in|login|đăng nhập/i.test(text)) return 'login_required';
+  if (/network|timeout|fetch|net::|econn|timed out|hết thời gian/i.test(text)) return 'network_error';
+  return 'unknown_error';
+}
+
+async function writeGrokRouterCheckpoint(sceneDir, fields = {}) {
+  const checkpoint = {
+    projectName: maskRouterText(fields.projectName || 'project'),
+    sceneId: fields.sceneId ?? '',
+    sceneIndex: fields.sceneIndex ?? fields.sceneId ?? '',
+    imageRef: fields.imageRef || '',
+    motionPromptRef: fields.motionPromptRef || '',
+    provider: normalizeVideoProvider(fields.provider || 'grok'),
+    accountId: fields.accountId || grokRouterState.selectedAccountId,
+    profileRef: fields.profileRef || 'grok-web-session',
+    canvasRef: fields.canvasRef || '',
+    currentStatus: fields.currentStatus || 'checkpointed',
+    lastErrorClassification: fields.lastErrorClassification || '',
+    createdAt: fields.createdAt || new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  grokRouterState.checkpoint = checkpoint;
+  await fs.writeFile(GROK_ROUTER_CHECKPOINT_FILE, JSON.stringify(checkpoint, null, 2), 'utf8').catch(() => null);
+  if (sceneDir) await fs.writeFile(path.join(sceneDir, 'grok_router_checkpoint.json'), JSON.stringify(checkpoint, null, 2), 'utf8').catch(() => null);
+  return checkpoint;
+}
+
+async function pauseGrokRouterForError(sceneDir, classification, safeMessage, checkpointFields = {}) {
+  grokRouterState.paused = true;
+  grokRouterState.pauseReason = classification;
+  grokRouterState.lastErrorClassification = classification;
+  grokRouterState.lastSafeMessage = safeMessage;
+  if (classification === 'account_limit') setGrokAccountState(grokRouterState.selectedAccountId, 'limited');
+  if (classification === 'login_required') setGrokAccountState(grokRouterState.selectedAccountId, 'login_required');
+  await writeGrokRouterCheckpoint(sceneDir, { ...checkpointFields, currentStatus: 'paused', lastErrorClassification: classification });
+  await notifyRenderer('grok-router-paused', safeMessage, getGrokRouterStatus());
+}
+
+async function resumeFromRouterCheckpoint() {
+  if (!grokRouterState.checkpoint && await pathExists(GROK_ROUTER_CHECKPOINT_FILE)) {
+    const raw = await fs.readFile(GROK_ROUTER_CHECKPOINT_FILE, 'utf8').catch(() => '');
+    grokRouterState.checkpoint = raw ? JSON.parse(raw) : null;
+  }
+  if (!grokRouterState.checkpoint) return { ok: false, error: 'No safe Grok router checkpoint is available.' };
+  grokRouterState.paused = false;
+  grokRouterState.pauseReason = '';
+  grokRouterState.lastSafeMessage = 'Checkpoint is ready; start the pipeline again to resume safely.';
+  return { ok: true, status: getGrokRouterStatus(), checkpoint: grokRouterState.checkpoint };
+}
 
 async function appendAppLog(_event, entry = {}) {
   const line = JSON.stringify({
@@ -52,6 +191,10 @@ async function openGrokRouterFolder() {
   await fs.mkdir(routerPath, { recursive: true });
   await shell.openPath(routerPath);
   return { ok: true, path: routerPath };
+}
+
+async function listGrokAccountsSafe() {
+  return getSafeGrokAccounts();
 }
 
 function createWindow() {
@@ -157,15 +300,15 @@ function normalizeWebProvider(provider) {
 
 async function closeChromeDebug() {
   for (const win of webWindows.values()) {
-    try { if (!win.isDestroyed()) win.close(); } catch (_error) {}
+    try { if (!win.isDestroyed()) win.close(); } catch (_error) { }
   }
   webWindows.clear();
   try {
     const tabs = await readJson(`${CHROME_CDP_HOST}/json/list`);
     await Promise.all((tabs || []).map((tab) => tab.id ? readJson(`${CHROME_CDP_HOST}/json/close/${tab.id}`).catch(() => null) : null));
-  } catch (_error) {}
+  } catch (_error) { }
   if (chromeProcess?.pid) {
-    try { process.kill(chromeProcess.pid); } catch (_error) {}
+    try { process.kill(chromeProcess.pid); } catch (_error) { }
   }
   chromeProcess = null;
 }
@@ -672,7 +815,7 @@ async function checkWebLogin(_event, provider) {
     if (state.loggedIn) break;
     await sleep(1500);
   }
-  
+
   if (!state.loggedIn && shouldRecoverFromCacheOrChallenge(state, normalizedProvider)) {
     const recovery = await recoverProviderFromCacheOrChallenge(page, normalizedProvider, 'check-login');
     state = await evaluateOnCdpPage(page, `(${detectLoginScript.toString()})(${JSON.stringify(normalizedProvider)})`).catch((error) => ({ loggedIn: false, reason: error.message }));
@@ -745,13 +888,20 @@ async function runScenePipeline(_event, options) {
 
   const videoProvider = normalizeVideoProvider(options.videoProvider);
   const videoAccount = options.videoAccount || '';
-  const routingPolicy = options.routingPolicy || 'manual';
+  const requestedRouterEnabled = Boolean(options.accountRouterEnabled);
+  const routerActive = requestedRouterEnabled && videoProvider === 'grok';
+  const routingPolicy = routerActive ? 'round_robin' : (options.routingPolicy || 'manual');
   const videoConfig = options.videoConfig || {};
+  grokRouterState.routingPolicy = 'round_robin';
+  if (requestedRouterEnabled !== grokRouterState.accountRouterEnabled) {
+    await setAccountRouterEnabled(null, requestedRouterEnabled);
+  }
+  if (routerActive && videoAccount) await selectGrokAccount(null, videoAccount).catch(() => null);
   await appendAppLog(null, {
     source: 'main',
     kind: 'info',
     text: `Scene ${sceneId}: video router ${videoProvider}/${videoAccount || 'default'} (${routingPolicy})`,
-    details: { videoProvider, videoAccount, routingPolicy, routerSandbox: 'dev_sandbox_grok_account_router' },
+    details: { videoProvider, videoAccount: maskRouterText(videoAccount), routingPolicy, accountRouterEnabled: routerActive, routerSandbox: 'dev_sandbox_grok_account_router' },
   });
   let imagePath = options.imagePath || '';
   if (imagePath && !(await pathExists(imagePath))) imagePath = '';
@@ -759,7 +909,7 @@ async function runScenePipeline(_event, options) {
   if (!imagePath && !options.forceRegenerateImage && await pathExists(expectedImagePath)) {
     imagePath = expectedImagePath;
   }
-  
+
   if (!imagePath) {
     const chatGptResult = await generateImageAndMotionWithChatGPT({ imagePrompt, sceneDir, sceneId });
     imagePath = chatGptResult.imagePath;
@@ -784,6 +934,19 @@ async function runScenePipeline(_event, options) {
   if (!motionPrompt?.trim()) throw new Error('Thiếu motion prompt để tiếp tục chạy tạo video.');
   await fs.writeFile(path.join(sceneDir, 'motion_prompt.txt'), motionPrompt, 'utf8');
 
+  const checkpointFields = {
+    projectName,
+    sceneId,
+    sceneIndex: sceneId,
+    imageRef: path.basename(imagePath),
+    motionPromptRef: 'motion_prompt.txt',
+    provider: videoProvider,
+    accountId: grokRouterState.selectedAccountId,
+    profileRef: 'grok-web-session',
+    currentStatus: 'before_generation',
+  };
+  if (routerActive) await writeGrokRouterCheckpoint(sceneDir, checkpointFields);
+
   const existingVideoPath = path.join(sceneDir, `scene_${String(sceneId).padStart(3, '0')}_video.mp4`);
   if (!options.forceRegenerateVideo && await pathExists(existingVideoPath)) {
     await appendAppLog(null, { source: 'main', kind: 'ok', text: `Scene ${sceneId}: đã có video sẵn, bỏ qua tạo lại Grok.`, details: { existingVideoPath } });
@@ -803,10 +966,24 @@ async function runScenePipeline(_event, options) {
   let videoError = '';
   try {
     videoResult = await generateVideoWithProvider({ provider: videoProvider, imagePath, motionPrompt, sceneDir, sceneId, videoConfig });
+    if (routerActive) await writeGrokRouterCheckpoint(sceneDir, { ...checkpointFields, currentStatus: 'completed' });
   } catch (error) {
-    videoError = error.stack || error.message || String(error);
+    videoError = maskRouterText(error.stack || error.message || String(error));
     await fs.writeFile(path.join(sceneDir, 'grok_video_error.txt'), videoError, 'utf8');
-    await appendAppLog(null, { source: 'main', kind: 'error', text: `Scene ${sceneId}: lỗi tạo video ${videoProvider}: ${error.message || error}`, details: { imagePath, motionPrompt: motionPrompt.slice(0, 500) } });
+    if (routerActive) {
+      const classification = classifyGrokRouterError(error);
+      const safeMessage = classification === 'account_limit'
+        ? `Scene ${sceneId}: Grok account reached a quota/plan limit. Generation is paused; select another authorized account or resolve quota before resume.`
+        : classification === 'login_required'
+          ? `Scene ${sceneId}: Grok login is required. Generation is paused until the selected account is reconnected.`
+          : classification === 'canvas_limit'
+            ? `Scene ${sceneId}: Grok canvas limit was detected. Same account is preserved; retry/resume can recreate canvas context.`
+            : classification === 'network_error'
+              ? `Scene ${sceneId}: Network/timeout issue detected. Generation is paused with checkpoint preserved.`
+              : `Scene ${sceneId}: Unknown Grok router error. Generation is paused with checkpoint preserved.`;
+      await pauseGrokRouterForError(sceneDir, classification, safeMessage, checkpointFields);
+    }
+    await appendAppLog(null, { source: 'main', kind: 'error', text: `Scene ${sceneId}: lỗi tạo video ${videoProvider}: ${maskRouterText(error.message || error)}`, details: { imagePath: path.basename(imagePath), routerClassification: routerActive ? grokRouterState.lastErrorClassification : '', motionPromptRef: 'motion_prompt.txt' } });
   }
 
   return {
@@ -816,8 +993,9 @@ async function runScenePipeline(_event, options) {
     imageDataUrl: imagePath ? await imageFileToDataUrl(imagePath).catch(() => '') : '',
     videoPath: videoResult?.videoPath || '',
     videoProvider,
-    videoStatus: videoResult?.status || (videoError ? `error: ${videoError.split('\n')[0]}` : 'pending-selector-or-manual-download'),
-    videoError,
+    videoStatus: videoResult?.status || (videoError ? `error: ${maskRouterText(videoError.split('\n')[0])}` : 'pending-selector-or-manual-download'),
+    videoError: maskRouterText(videoError),
+    router: routerActive ? getGrokRouterStatus() : null,
   };
 }
 
@@ -1831,8 +2009,8 @@ function detectLoginScript(provider) {
       : /New chat|Search chats|Library|Recents|What’s on the agenda|Ask anything|Projects/i.test(bodyText);
   const hasExplicitLoginButton = provider === 'grok'
     ? /(^|\|)\s*(sign in|log in|đăng nhập|sign up|đăng ký)\s*(\||$)/i.test(buttonsText)
-      || /(^|\n)\s*(Sign in|Sign up)\s*($|\n)/i.test(bodyText)
-      || /Sign up to keep chatting/i.test(bodyText)
+    || /(^|\n)\s*(Sign in|Sign up)\s*($|\n)/i.test(bodyText)
+    || /Sign up to keep chatting/i.test(bodyText)
     : /(^|\|)\s*(log in|sign in|đăng nhập)\s*(\||$)/i.test(buttonsText);
   const loggedOutWords = provider === 'grok'
     ? /sign in|log in|đăng nhập|continue with|sign up to keep chatting/i
@@ -2147,7 +2325,7 @@ function getLatestImageBoxScript() {
     if (style.backgroundImage && style.backgroundImage !== 'none' && !style.backgroundImage.includes('gradient')) return true;
     return false;
   };
-  
+
   const nodes = [...document.querySelectorAll('img, canvas, button, div')]
     .filter((node) => {
       const rect = node.getBoundingClientRect();
@@ -2167,7 +2345,7 @@ function getLatestImageBoxScript() {
     })
     // Ưu tiên các node ở xa nhất phía dưới (mới nhất)
     .sort((a, b) => b.box.y - a.box.y);
-    
+
   const best = nodes[0];
   if (!best) return { ok: false, error: 'Không tìm thấy image element đủ lớn trong ChatGPT.' };
   best.node.scrollIntoView({ block: 'center' });
@@ -2866,7 +3044,7 @@ function clickGrokGenerateScript() {
     if (item.disabled || item.getAttribute('aria-disabled') === 'true') return false;
     const rect = item.getBoundingClientRect();
     if (rect.width < 24 || rect.height < 20) return false;
-    
+
     const inputRect = input?.getBoundingClientRect?.();
     const isNearInput = inputRect && rect.top > inputRect.top - 80 && rect.top < inputRect.bottom + 80 && rect.left > inputRect.left - 40;
     const isComposerSubmit = rect.left > window.innerWidth * 0.72 && rect.top > window.innerHeight * 0.72;
@@ -2874,7 +3052,7 @@ function clickGrokGenerateScript() {
 
     const text = `${item.textContent || ''} ${item.getAttribute('aria-label') || ''} ${item.title || ''} ${item.dataset?.testid || ''}`.trim();
     if (/Agent\s*\(?Beta\)?|Create\s*Worlds|Historical\s*Stories|Short\s*Film|UGC\s*Product|^\s*(Image|Video|480p|720p|6s|10s)\s*$/i.test(text)) return false;
-    
+
     const html = item.innerHTML || '';
     const hasSendIcon = /arrow-up|send-icon|paper-plane/i.test(html);
     return /^(Generate|Create|Start|Send|Submit|gửi|Imagine)$/i.test(text) || (text === '' && hasSendIcon);
@@ -2970,7 +3148,7 @@ function readChatGptImageStateScript() {
     })
     .map((node) => node.currentSrc || node.src || node.getAttribute('srcset') || node.getAttribute('src') || '')
     .filter((url) => /^https?:|^blob:|^data:image\//i.test(url));
-    
+
   const customBoxes = [...document.querySelectorAll('div, button, canvas')]
     .filter((node) => {
       const rect = node.getBoundingClientRect?.();
@@ -2979,7 +3157,7 @@ function readChatGptImageStateScript() {
       return /Generated image/i.test(text) || node.tagName === 'CANVAS';
     })
     .map((node) => `chatgpt-custom-box-y${Math.round(node.getBoundingClientRect().y)}`);
-    
+
   urls.push(...customBoxes);
   const assistantNodes = [...document.querySelectorAll('[data-message-author-role="assistant"], article, .message, [class*="response"], [class*="markdown"]')]
     .filter((node) => (node.innerText || '').trim().length > 20);
@@ -3023,6 +3201,11 @@ app.whenReady().then(() => {
   ipcMain.handle('app:append-log', appendAppLog);
   ipcMain.handle('app:get-log-path', getAppLogPath);
   ipcMain.handle('router:open-grok-folder', openGrokRouterFolder);
+  ipcMain.handle('router:get-status', getGrokRouterStatus);
+  ipcMain.handle('router:list-accounts-safe', listGrokAccountsSafe);
+  ipcMain.handle('router:select-account', selectGrokAccount);
+  ipcMain.handle('router:set-enabled', setAccountRouterEnabled);
+  ipcMain.handle('router:resume-checkpoint', resumeFromRouterCheckpoint);
   ipcMain.handle('view:get-pipeline-log-visible', getPipelineLogVisibility);
   ipcMain.handle('browser:open-login', openWebLogin);
   ipcMain.handle('browser:check-login', checkWebLogin);
@@ -3063,6 +3246,6 @@ app.on('before-quit', () => {
 
 process.on('exit', () => {
   if (chromeProcess?.pid) {
-    try { process.kill(chromeProcess.pid); } catch (_error) {}
+    try { process.kill(chromeProcess.pid); } catch (_error) { }
   }
 });
