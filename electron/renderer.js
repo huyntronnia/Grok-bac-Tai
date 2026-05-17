@@ -22,6 +22,10 @@ const grokAccountSelect = document.querySelector('#grok-account-select');
 const grokRoutingPolicySelect = document.querySelector('#grok-routing-policy-select');
 const openGrokRouterFolderBtn = document.querySelector('#open-grok-router-folder-btn');
 const grokRouterState = document.querySelector('#grok-router-state');
+const grokRouterEnabledToggle = document.querySelector('#grok-router-enabled-toggle');
+const grokAccountList = document.querySelector('#grok-account-list');
+const grokRouterMessage = document.querySelector('#grok-router-message');
+const grokRouterResumeBtn = document.querySelector('#grok-router-resume-btn');
 const videoPlatformSelect = document.querySelector('#video-platform-select');
 const skipReviewToggle = document.querySelector('#skip-review-toggle');
 const autoRunBtn = document.querySelector('#auto-run-btn');
@@ -494,6 +498,7 @@ async function runFullPipeline() {
         videoProvider: videoPlatform.value,
         videoAccount: getSelectedVideoAccount(videoPlatform.value),
         routingPolicy: grokRoutingPolicySelect?.value || 'manual',
+        accountRouterEnabled: Boolean(grokRouterEnabledToggle?.checked),
         videoConfig: getVideoProviderConfig(),
       });
       scene.forceRegenerateImage = false;
@@ -587,7 +592,7 @@ function getSelectedVideoPlatform() {
 }
 
 function getSelectedVideoAccount(videoProvider = getSelectedVideoPlatform().value) {
-  if (videoProvider === 'grok') return grokAccountSelect?.value || 'grok-account-1';
+  if (videoProvider === 'grok') return grokAccountSelect?.value || 'grok-default-profile';
   return accountSelect.value;
 }
 
@@ -1241,10 +1246,53 @@ function clamp(value, min, max) {
 
 function getGrokRouterSettings() {
   return {
-    account: grokAccountSelect?.value || 'grok-account-1',
-    routingPolicy: grokRoutingPolicySelect?.value || 'manual',
+    enabled: Boolean(grokRouterEnabledToggle?.checked),
+    account: grokAccountSelect?.value || 'grok-default-profile',
+    routingPolicy: 'round_robin',
     sandboxFolder: 'dev_sandbox_grok_account_router',
   };
+}
+
+function renderGrokRouterStatus(status = {}, accounts = []) {
+  if (grokRouterEnabledToggle) grokRouterEnabledToggle.checked = Boolean(status.accountRouterEnabled);
+  if (grokRoutingPolicySelect) grokRoutingPolicySelect.value = status.routingPolicy || 'round_robin';
+  if (grokRouterState) {
+    const state = status.accountRouterEnabled ? (status.paused ? 'Paused' : 'Enabled') : 'Off';
+    grokRouterState.textContent = `${state} / ${status.routingPolicy || 'round_robin'}`;
+  }
+  if (grokAccountSelect) {
+    grokAccountSelect.innerHTML = '';
+    accounts.forEach((account) => {
+      const option = document.createElement('option');
+      option.value = account.accountId;
+      option.textContent = `${account.label || account.accountId} · ${account.maskedEmail || '***@masked.local'} · ${account.state}`;
+      option.disabled = ['limited', 'login_required', 'invalid', 'disabled_by_user'].includes(account.state);
+      option.selected = account.selected;
+      grokAccountSelect.appendChild(option);
+    });
+  }
+  if (grokAccountList) {
+    grokAccountList.innerHTML = '';
+    accounts.forEach((account) => {
+      const item = document.createElement('div');
+      item.className = `grok-account-row state-${account.state || 'invalid'}`;
+      item.textContent = `${account.selected ? 'Active' : 'Account'}: ${account.label || account.accountId} / ${account.maskedEmail || '***@masked.local'} / ${account.state}`;
+      grokAccountList.appendChild(item);
+    });
+  }
+  if (grokRouterMessage) {
+    const checkpoint = status.checkpointStatus && status.checkpointStatus !== 'none' ? ` Checkpoint: ${status.checkpointStatus}.` : '';
+    grokRouterMessage.textContent = status.lastSafeMessage || (status.accountRouterEnabled ? `Router enabled.${checkpoint}` : 'Router off: single-account Grok pipeline is active.');
+  }
+}
+
+async function refreshGrokRouterStatus() {
+  if (!window.videoPlannerAPI?.getGrokRouterStatus || !window.videoPlannerAPI?.listGrokAccountsSafe) return;
+  const [status, accounts] = await Promise.all([
+    window.videoPlannerAPI.getGrokRouterStatus(),
+    window.videoPlannerAPI.listGrokAccountsSafe(),
+  ]);
+  renderGrokRouterStatus(status, accounts);
 }
 
 function persist() {
@@ -1293,8 +1341,9 @@ function restore() {
       scriptInput.value = project.scenes?.map((scene) => scene.original).join('\n\n') || '';
       batchSizeInput.value = project.batchSize || batchSizeInput.value;
       durationInput.value = project.durationSec || durationInput.value;
+      if (grokRouterEnabledToggle) grokRouterEnabledToggle.checked = Boolean(saved.grokRouter?.enabled);
       if (saved.grokRouter?.account && grokAccountSelect) grokAccountSelect.value = saved.grokRouter.account;
-      if (saved.grokRouter?.routingPolicy && grokRoutingPolicySelect) grokRoutingPolicySelect.value = saved.grokRouter.routingPolicy;
+      if (grokRoutingPolicySelect) grokRoutingPolicySelect.value = 'round_robin';
       if (outputFolder) webSessionStatus.textContent = `Folder lưu: ${outputFolder}`;
       setStatus('Đã khôi phục session đã lưu. Có thể bấm Start pipeline để chạy tiếp.', 'ok');
     } else {
@@ -1321,10 +1370,29 @@ exportBtn.addEventListener('click', exportProject);
 chooseOutputFolderBtn.addEventListener('click', chooseOutputFolder);
 saveSessionBtn?.addEventListener('click', saveSessionForNextLaunch);
 grokAccountSelect?.addEventListener('change', () => {
-  if (grokRouterState) grokRouterState.textContent = `${grokAccountSelect.value} linked`;
+  window.videoPlannerAPI?.selectGrokAccount?.(grokAccountSelect.value)
+    .then((result) => {
+      if (!result?.ok) setStatus(result?.error || 'Không chọn được Grok account.', 'error');
+      return refreshGrokRouterStatus();
+    })
+    .catch((error) => setStatus(`Không chọn được Grok account: ${error.message}`, 'error'));
   persist();
 });
-grokRoutingPolicySelect?.addEventListener('change', persist);
+grokRouterEnabledToggle?.addEventListener('change', () => {
+  window.videoPlannerAPI?.setAccountRouterEnabled?.(grokRouterEnabledToggle.checked)
+    .then(() => refreshGrokRouterStatus())
+    .catch((error) => setStatus(`Không đổi được router flag: ${error.message}`, 'error'));
+  persist();
+});
+grokRouterResumeBtn?.addEventListener('click', async () => {
+  const result = await window.videoPlannerAPI?.resumeFromRouterCheckpoint?.();
+  if (result?.ok) {
+    setStatus('Grok router checkpoint đã sẵn sàng. Bấm Start pipeline để chạy tiếp an toàn.', 'ok');
+  } else {
+    setStatus(result?.error || 'Không có checkpoint Grok router để resume.', 'error');
+  }
+  await refreshGrokRouterStatus();
+});
 openGrokRouterFolderBtn?.addEventListener('click', async () => {
   const result = await window.videoPlannerAPI?.openGrokRouterFolder?.();
   if (result?.ok) {
@@ -1386,7 +1454,7 @@ window.addEventListener('unhandledrejection', (event) => {
 });
 
 syncVideoPlatformConfig();
-if (grokRouterState) grokRouterState.textContent = `${grokAccountSelect?.value || 'grok-account-1'} linked`;
+refreshGrokRouterStatus().catch(() => null);
 renderPipelineLog();
 window.videoPlannerAPI?.getPipelineLogVisible?.().then(setPipelineLogVisible).catch(() => setPipelineLogVisible(false));
 window.videoPlannerAPI?.onPipelineLogVisible?.(setPipelineLogVisible);

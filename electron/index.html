@@ -130,25 +130,23 @@
             <p>
               Phần này dùng cho tài khoản Grok chạy video/motion trong pipeline, tách riêng với 9Router/API key tạo prompt.
             </p>
+            <label class="inline-toggle" for="grok-router-enabled-toggle">
+              <input id="grok-router-enabled-toggle" type="checkbox" />
+              <span>Bật router Grok an toàn</span>
+            </label>
             <div class="config-grid wide-config-grid">
               <label>Active Grok account
-                <select id="grok-account-select">
-                  <option value="grok-account-1">Grok Account 1</option>
-                  <option value="grok-account-2">Grok Account 2</option>
-                  <option value="grok-account-3">Grok Account 3</option>
-                  <option value="grok-fallback">Grok Fallback</option>
-                </select>
+                <select id="grok-account-select"></select>
               </label>
               <label>Routing policy
-                <select id="grok-routing-policy-select">
-                  <option value="manual">Manual chọn acc</option>
-                  <option value="round-robin">Round-robin khi bị limit</option>
-                  <option value="first-available">First available</option>
-                </select>
+                <input id="grok-routing-policy-select" value="round_robin" readonly />
               </label>
             </div>
+            <div id="grok-account-list" class="grok-account-list" aria-live="polite"></div>
+            <div id="grok-router-message" class="router-safe-message">Router off: single-account Grok pipeline is active.</div>
             <div class="router-link-row">
               <code id="grok-router-folder">dev_sandbox_grok_account_router</code>
+              <button id="grok-router-resume-btn" class="mini" type="button">Resume checkpoint</button>
               <button id="open-grok-router-folder-btn" class="mini" type="button">Mở folder router</button>
             </div>
           </div>
