@@ -27,6 +27,17 @@ contextBridge.exposeInMainWorld('videoPlannerAPI', {
   runScenePipeline: (options) => ipcRenderer.invoke('pipeline:run-scene', options),
   generateScenePrompts: (options) => ipcRenderer.invoke('ai:generate-scene-prompts', options),
   exportProject: (payload) => ipcRenderer.invoke('project:export', payload),
+  newProjectSession: (options) => ipcRenderer.invoke('project:new-session', options),
+  saveProjectSession: (payload) => ipcRenderer.invoke('project:save-session-file', payload),
+  openProjectSession: () => ipcRenderer.invoke('project:open-session-file'),
+  onProjectMenuCommand: (callback) => {
+    const allowed = new Set(['new', 'open', 'save']);
+    const listener = (_event, command) => {
+      if (allowed.has(command)) callback(command);
+    };
+    ipcRenderer.on('project:menu-command', listener);
+    return () => ipcRenderer.removeListener('project:menu-command', listener);
+  },
 
   chooseFolder: () => ipcRenderer.invoke('folder:choose'),
   scanFolder: (folderPath) => ipcRenderer.invoke('folder:scan', folderPath),

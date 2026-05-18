@@ -23,6 +23,116 @@ let showPipelineLog = false;
 const APP_LOG_FILE = path.join(app.getPath('userData'), 'ai-video-pipeline.log');
 const GROK_ROUTER_CHECKPOINT_FILE = path.join(app.getPath('userData'), 'grok-router-checkpoint.json');
 const GROK_ROUTER_ALLOWED_STATES = new Set(['available', 'active', 'cooldown', 'limited', 'login_required', 'invalid', 'disabled_by_user']);
+
+const GROKPROJ_SCHEMA_VERSION = 1;
+const SECRET_KEY_PATTERN = /(api[_-]?key|cookie|password|passwd|secret|session[_-]?token|refresh[_-]?token|bearer|authorization|localStorage|sessionStorage|browserStorage|rawBrowserStorage)/i;
+const SECRET_VALUE_PATTERN = /(bearer\s+[a-z0-9._~+/=-]{8,}|sk-[a-z0-9_-]{12,}|xox[baprs]-[a-z0-9-]{8,}|(?:api[_-]?key|cookie|password|passwd|session[_-]?token|refresh[_-]?token)\s*[:=])/i;
+const EMAIL_PATTERN = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i;
+
+function ensureGrokprojPath(filePath) {
+  if (!filePath || path.extname(filePath).toLowerCase() !== '.grokproj') {
+    throw new Error('Project file must use the .grokproj extension.');
+  }
+  return filePath;
+}
+
+function hasFullPrivateEmail(value) {
+  const match = String(value || '').match(EMAIL_PATTERN);
+  if (!match) return false;
+  return !/^\*+@/.test(match[0]) && !/\*{2,}/.test(match[0]);
+}
+
+function sanitizeProjectValue(value) {
+  if (Array.isArray(value)) return value.map((item) => sanitizeProjectValue(item));
+  if (value && typeof value === 'object') {
+    const clean = {};
+    for (const [key, child] of Object.entries(value)) {
+      if (SECRET_KEY_PATTERN.test(key)) continue;
+      clean[key] = sanitizeProjectValue(child);
+    }
+    return clean;
+  }
+  if (typeof value === 'string') return value.replace(EMAIL_PATTERN, (email) => (/^\*+@|\*{2,}/.test(email) ? email : maskRouterText(email)));
+  return value;
+}
+
+function assertNoProjectSecrets(value, keyPath = []) {
+  if (Array.isArray(value)) return value.forEach((item, index) => assertNoProjectSecrets(item, keyPath.concat(String(index))));
+  if (value && typeof value === 'object') {
+    for (const [key, child] of Object.entries(value)) {
+      if (SECRET_KEY_PATTERN.test(key)) throw new Error(`Project payload contains disallowed secret field: ${keyPath.concat(key).join('.')}`);
+      assertNoProjectSecrets(child, keyPath.concat(key));
+    }
+    return;
+  }
+  if (typeof value === 'string') {
+    if (SECRET_VALUE_PATTERN.test(value)) throw new Error(`Project payload contains secret-like value at: ${keyPath.join('.') || 'root'}`);
+    if (hasFullPrivateEmail(value)) throw new Error('Project payload contains a full private email address.');
+  }
+}
+
+function assertObjectField(payload, key) {
+  if (!payload[key] || typeof payload[key] !== 'object' || Array.isArray(payload[key])) {
+    throw new Error(`Invalid .grokproj: ${key} is required.`);
+  }
+}
+
+function validateProjectPayload(payload) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error('Invalid .grokproj: root payload must be an object.');
+  if (typeof payload.schemaVersion !== 'number') throw new Error('Invalid .grokproj: schemaVersion is required.');
+  if (payload.schemaVersion > GROKPROJ_SCHEMA_VERSION) throw new Error(`Unsupported future .grokproj schemaVersion ${payload.schemaVersion}. App supports ${GROKPROJ_SCHEMA_VERSION}.`);
+  if (payload.schemaVersion !== GROKPROJ_SCHEMA_VERSION) throw new Error(`Unsupported .grokproj schemaVersion ${payload.schemaVersion}. App supports ${GROKPROJ_SCHEMA_VERSION}.`);
+  if (!payload.project || typeof payload.project !== 'object') throw new Error('Invalid .grokproj: project is required.');
+  if (!Array.isArray(payload.project.scenes)) throw new Error('Invalid .grokproj: project.scenes[] is required.');
+  ['inputs', 'config', 'router', 'assets'].forEach((key) => assertObjectField(payload, key));
+  if (!Array.isArray(payload.previewTimeline)) throw new Error('Invalid .grokproj: previewTimeline[] is required.');
+  if (!payload.runtime || typeof payload.runtime !== 'object') throw new Error('Invalid .grokproj: runtime is required.');
+  assertNoProjectSecrets(payload);
+  return payload;
+}
+
+async function newProjectSession(event, options = {}) {
+  if (options?.hasUnsavedChanges) {
+    const messageOptions = {
+      type: 'question',
+      title: 'Unsaved Project',
+      message: 'Current project has unsaved changes.',
+      detail: `Save before ${options.actionLabel || 'continuing'}?`,
+      buttons: ['Save', 'Discard', 'Cancel'],
+      defaultId: 0,
+      cancelId: 2,
+    };
+    const window = event?.sender ? BrowserWindow.fromWebContents(event.sender) : null;
+    const result = window ? await dialog.showMessageBox(window, messageOptions) : await dialog.showMessageBox(messageOptions);
+    return { ok: true, action: ['save', 'discard', 'cancel'][result.response] || 'cancel' };
+  }
+  return { ok: true, schemaVersion: GROKPROJ_SCHEMA_VERSION, createdAt: new Date().toISOString() };
+}
+
+async function saveProjectSessionFile(_event, payload = {}) {
+  const safePayload = validateProjectPayload(sanitizeProjectValue(payload));
+  const result = await dialog.showSaveDialog({
+    title: 'Save Project Session',
+    defaultPath: `${sanitizeFileName(safePayload.project?.name || 'ai-scene-project')}.grokproj`,
+    filters: [{ name: 'Grok Project', extensions: ['grokproj'] }],
+  });
+  if (result.canceled || !result.filePath) return { ok: false, canceled: true };
+  const filePath = ensureGrokprojPath(result.filePath.toLowerCase().endsWith('.grokproj') ? result.filePath : `${result.filePath}.grokproj`);
+  await fs.writeFile(filePath, JSON.stringify(safePayload, null, 2), 'utf8');
+  return { ok: true, filePath, payload: safePayload };
+}
+
+async function openProjectSessionFile() {
+  const result = await dialog.showOpenDialog({ title: 'Open Project Session', properties: ['openFile'], filters: [{ name: 'Grok Project', extensions: ['grokproj'] }] });
+  if (result.canceled || !result.filePaths?.[0]) return { ok: false, canceled: true };
+  const filePath = ensureGrokprojPath(result.filePaths[0]);
+  let parsed;
+  try { parsed = JSON.parse(await fs.readFile(filePath, 'utf8')); } catch (_error) { throw new Error('Invalid .grokproj: file is not valid JSON.'); }
+  const payload = validateProjectPayload(sanitizeProjectValue(parsed));
+  payload.runtime = { ...payload.runtime, autoRun: false, waitingForUserStart: true, active: false };
+  return { ok: true, filePath, payload };
+}
+
 const grokRouterState = {
   accountRouterEnabled: false,
   routingPolicy: 'round_robin',
@@ -221,6 +331,12 @@ function broadcastPipelineLogVisibility() {
   });
 }
 
+function sendProjectMenuCommand(command) {
+  const win = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows().find((item) => !item.isDestroyed());
+  if (!win || win.isDestroyed()) return;
+  win.webContents.send('project:menu-command', command);
+}
+
 function buildAppMenu() {
   const template = [
     {
@@ -229,22 +345,17 @@ function buildAppMenu() {
         {
           label: 'New Project',
           accelerator: 'CmdOrCtrl+N',
-          click: () => dialog.showMessageBox({
-            type: 'info',
-            title: 'New Project',
-            message: 'Đang phát triển',
-            detail: `Dev sandbox: ${path.join(__dirname, '..', 'dev_sandbox_project_session')}`,
-          }),
+          click: () => sendProjectMenuCommand('new'),
         },
         {
           label: 'Open Project...',
           accelerator: 'CmdOrCtrl+O',
-          click: () => dialog.showMessageBox({
-            type: 'info',
-            title: 'Open Project',
-            message: 'Đang phát triển',
-            detail: `Dev sandbox: ${path.join(__dirname, '..', 'dev_sandbox_project_session')}`,
-          }),
+          click: () => sendProjectMenuCommand('open'),
+        },
+        {
+          label: 'Save Project',
+          accelerator: 'CmdOrCtrl+S',
+          click: () => sendProjectMenuCommand('save'),
         },
         { type: 'separator' },
         { role: 'quit', label: 'Quit' },
@@ -3223,6 +3334,9 @@ app.whenReady().then(() => {
   ipcMain.handle('ai:split-prompt', splitPromptWithAI);
   ipcMain.handle('ai:generate-scene-prompts', generateScenePrompts);
   ipcMain.handle('project:export', exportProject);
+  ipcMain.handle('project:new-session', newProjectSession);
+  ipcMain.handle('project:save-session-file', saveProjectSessionFile);
+  ipcMain.handle('project:open-session-file', openProjectSessionFile);
 
   buildAppMenu();
   createWindow();

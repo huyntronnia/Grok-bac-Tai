@@ -1,41 +1,41 @@
-# Dev sandbox: Project session feature
+# Project Session Sandbox
 
-This folder is intentionally isolated. Build/prototype the Open/New/Save Project feature here only.
+This sandbox prototypes the `.grokproj` New/Open/Save Project workflow only inside `dev_sandbox_project_session/`. Production Electron files are intentionally out of scope until Phase 2 approval.
 
-## What this folder owns
-This folder owns the `.grokproj` project/session file design:
-- save current project state
-- reopen project state later
-- restore scene prompts, statuses, asset paths, active batch, review state, and final preview metadata
+## Implemented in Phase 1
 
-It does not own Grok account secrets. Grok account routing is documented separately in:
-```txt
-dev_sandbox_grok_account_router/
-```
+- Schema documentation for `.grokproj` version 1 in `grokproj_schema.md`.
+- A safe sample project file in `tests/sample.grokproj`.
+- Pure JavaScript helpers in `prototype/projectSession.js` for creating, saving, validating, migrating, sanitizing, opening, reconciling, and restoring project state.
+- Node tests in `tests/projectSession.test.mjs`.
 
-A `.grokproj` may reference selected Grok account metadata, but must not store cookies, tokens, passwords, or raw API keys.
+## Security boundary
 
-## Read first
-1. `CODE_RULES.md`
-2. `implementation_plan.md`
-3. `project_session_schema.md`
-4. `TESTING.md`
-5. `DONE_CHECKLIST.md`
+`.grokproj` files are untrusted JSON data. Loading must never execute code and must never auto-run a project. A loaded project is restored into `waiting-for-user-start` state.
 
-## Quick smoke test
-From repo root:
+Allowed router data is metadata only:
+
+- `accountRouterEnabled`
+- `selectedGrokAccountId`
+- `routingPolicy`
+- provider/model/account labels after redaction
+- safe status/checkpoint labels
+
+The prototype rejects or strips API keys, cookies, passwords, session tokens, refresh tokens, bearer tokens, raw browser storage, and full private emails.
+
+## Run tests
+
 ```powershell
-npm start
+cd Grok-bac-Tai/dev_sandbox_project_session
+node tests/projectSession.test.mjs
 ```
-Then confirm the app starts and project/session menu or save-session flow still works.
 
-## Review flow
-A reviewer should be able to answer:
-- What fields are saved into `.grokproj`?
-- What fields are intentionally excluded for security?
-- How does Open Project validate and migrate files?
-- What happens if saved image/video paths are missing?
-- How do New/Open/Save affect current pipeline state?
+or:
 
-## Done signal
-The task is ready for review when `DONE_CHECKLIST.md` is filled and all required tests in `TESTING.md` pass.
+```powershell
+npm test
+```
+
+## Phase 2 boundary
+
+Future production integration should happen only after explicit approval and should touch `electron/main.js`, `electron/preload.js`, `electron/renderer.js`, and optional UI/style files as described in `PHASE2_INTEGRATION_PLAN.md`.

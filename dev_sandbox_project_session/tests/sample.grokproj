@@ -1,35 +1,130 @@
 {
   "schemaVersion": 1,
-  "app": "AI Scene Batch Director",
-  "savedAt": "2026-05-14T00:00:00.000Z",
+  "appVersion": "sandbox-phase1",
+  "savedAt": "2026-05-17T01:25:00.000+07:00",
   "project": {
-    "name": "Sample project",
-    "story": "Sample story context",
-    "batchSize": 10,
-    "durationSec": 10,
-    "scenes": []
+    "id": "sample-grokproj-001",
+    "name": "Sample Safe Project Session",
+    "description": "Sandbox fixture for Project Session Phase 1.",
+    "createdAt": "2026-05-17T01:00:00.000+07:00",
+    "updatedAt": "2026-05-17T01:25:00.000+07:00",
+    "scenes": [
+      {
+        "sceneId": "scene-001",
+        "sceneIndex": 0,
+        "rawSceneText": "A quiet workshop wakes up as sunlight crosses tools on a wooden bench.",
+        "imagePrompt": "Warm cinematic workshop interior, morning light, handcrafted tools, detailed texture.",
+        "motionPrompt": "Slow dolly across the bench as dust glows in the light.",
+        "imagePath": "assets/images/scene-001.png",
+        "videoPath": "assets/videos/scene-001.mp4",
+        "status": "video_ready",
+        "errorClassification": null,
+        "promptVersion": "v1",
+        "updatedAt": "2026-05-17T01:10:00.000+07:00"
+      },
+      {
+        "sceneId": "scene-002",
+        "sceneIndex": 1,
+        "rawSceneText": "The maker sketches a bold idea with quick charcoal strokes.",
+        "imagePrompt": "Close-up of hands sketching a product concept, charcoal lines, dramatic side light.",
+        "motionPrompt": "Charcoal lines appear while the camera tilts from page to focused hands.",
+        "imagePath": "assets/images/scene-002.png",
+        "videoPath": "assets/videos/scene-002.mp4",
+        "status": "video_ready",
+        "errorClassification": null,
+        "promptVersion": "v1",
+        "updatedAt": "2026-05-17T01:12:00.000+07:00"
+      },
+      {
+        "sceneId": "scene-003",
+        "sceneIndex": 2,
+        "rawSceneText": "The finished object is revealed on a simple pedestal at sunset.",
+        "imagePrompt": "Minimal reveal pedestal, sunset rim light, elegant object silhouette, premium commercial style.",
+        "motionPrompt": "Orbit reveal around the pedestal with a gentle lens flare.",
+        "imagePath": "assets/images/scene-003.png",
+        "videoPath": "assets/videos/scene-003.mp4",
+        "status": "needs_review",
+        "errorClassification": null,
+        "promptVersion": "v1",
+        "updatedAt": "2026-05-17T01:16:00.000+07:00"
+      }
+    ]
+  },
+  "inputs": {
+    "storyPrompt": "Create a short cinematic maker story for a product reveal.",
+    "scriptPrompt": "Split the story into concise visual scenes with image and motion prompts.",
+    "promptTemplates": {
+      "script": { "id": "template-script-cinematic", "version": "1" },
+      "image": { "id": "template-image-commercial", "version": "1" },
+      "motion": { "id": "template-motion-smooth", "version": "1" }
+    },
+    "batchPromptRefs": ["batch-template-default"]
+  },
+  "config": {
+    "scriptProvider": "ninerouter",
+    "imageProvider": "gemini",
+    "videoProvider": "grok",
+    "selectedModels": {
+      "script": "cx/gpt-5.5",
+      "image": "imagen-preview",
+      "video": "grok-imagine"
+    },
+    "aspectRatio": "16:9",
+    "batchSize": 3,
+    "sceneDurationSeconds": 6,
+    "outputLanguage": "English",
+    "stylePreset": "cinematic-product"
+  },
+  "router": {
+    "accountRouterEnabled": true,
+    "selectedGrokAccountId": "grok-account-1",
+    "routingPolicy": "manual",
+    "selectedLabels": {
+      "provider": "Grok",
+      "model": "Grok Imagine",
+      "account": "Grok Account 1"
+    },
+    "status": {
+      "selectedAccountState": "available",
+      "lastSafeCheckpointRef": "checkpoint-scene-003"
+    }
   },
   "runtime": {
-    "activeBatchIds": [],
-    "paused": false,
-    "outputFolder": "",
-    "selectedProvider": "ninerouter",
-    "selectedAccount": "Account 1",
-    "selectedModel": "cx/gpt-5.5",
-    "videoPlatform": "grok",
-    "grokRouter": {
-      "activeAccountId": "grok-account-1",
-      "routingPolicy": "manual",
-      "sandboxFolder": "dev_sandbox_grok_account_router"
-    },
-    "skipReview": false
+    "currentStage": "review",
+    "currentBatchIndex": 0,
+    "currentSceneId": "scene-003",
+    "paused": true,
+    "lastCheckpointRef": "checkpoint-scene-003",
+    "lastErrorClassification": null,
+    "activePreviewTimeline": [
+      { "sceneId": "scene-001", "videoPath": "assets/videos/scene-001.mp4", "durationSeconds": 6 },
+      { "sceneId": "scene-002", "videoPath": "assets/videos/scene-002.mp4", "durationSeconds": 6 },
+      { "sceneId": "scene-003", "videoPath": "assets/videos/scene-003.mp4", "durationSeconds": 6 }
+    ],
+    "autoRun": false,
+    "waitingForUserStart": true
   },
-  "videoConfig": {
-    "pixverse": {},
-    "grok": {}
+  "assets": {
+    "images": [
+      { "sceneId": "scene-001", "path": "assets/images/scene-001.png" },
+      { "sceneId": "scene-002", "path": "assets/images/scene-002.png" },
+      { "sceneId": "scene-003", "path": "assets/images/scene-003.png" }
+    ],
+    "videos": [
+      { "sceneId": "scene-001", "path": "assets/videos/scene-001.mp4" },
+      { "sceneId": "scene-002", "path": "assets/videos/scene-002.mp4" },
+      { "sceneId": "scene-003", "path": "assets/videos/scene-003.mp4" }
+    ],
+    "finalOutputs": [
+      { "kind": "preview", "path": "outputs/final-preview.mp4" }
+    ]
   },
-  "finalPreview": {
-    "finalVideoPath": "",
-    "timeline": []
+  "previewTimeline": [
+    { "sceneId": "scene-001", "videoPath": "assets/videos/scene-001.mp4", "durationSeconds": 6 },
+    { "sceneId": "scene-002", "videoPath": "assets/videos/scene-002.mp4", "durationSeconds": 6 },
+    { "sceneId": "scene-003", "videoPath": "assets/videos/scene-003.mp4", "durationSeconds": 6 }
+  ],
+  "extensions": {
+    "sandboxNote": "Unknown compatible fields are data only and must not execute."
   }
 }

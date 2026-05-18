@@ -1,85 +1,48 @@
 # Testing: Project Session Sandbox
 
-## Scope
-These tests validate the `.grokproj` project/session design and the current production smoke context. They do not require real API keys or Grok credentials.
+## Command
 
-## Test 1: Sample project file is valid
-Open:
-```txt
-tests/sample.grokproj
-```
+Run from the sandbox folder:
 
-Pass criteria:
-- File is valid JSON.
-- Top-level `schemaVersion` exists.
-- Top-level `project` exists.
-- Top-level `runtime` exists.
-- `project.scenes` is an array if present.
-- No API key, bearer token, cookie, password, or Grok session token exists.
-
-Optional PowerShell check from repo root:
 ```powershell
-node -e "const fs=require('fs'); const p='dev_sandbox_project_session/tests/sample.grokproj'; const j=JSON.parse(fs.readFileSync(p,'utf8')); if(!j.schemaVersion||!j.project||!j.runtime) throw new Error('bad grokproj fixture'); console.log('grokproj fixture ok')"
+cd Grok-bac-Tai/dev_sandbox_project_session
+node tests/projectSession.test.mjs
 ```
 
-## Test 2: Schema completeness review
-Open `project_session_schema.md`.
+or:
 
-Pass criteria:
-- It documents `.grokproj` extension.
-- It includes `schemaVersion`.
-- It includes project fields.
-- It includes runtime fields:
-  - active batch ids
-  - paused state
-  - output folder
-  - selected provider/account/model
-  - video platform
-  - skip review
-- It includes video config.
-- It includes final preview metadata.
-- It includes scene object fields.
-- It excludes secrets.
-
-## Test 3: Save/Open/New plan review
-Open `implementation_plan.md`.
-
-Pass criteria:
-- New Project reset behavior is clear.
-- Save Project payload behavior is clear.
-- Open Project validation/restore behavior is clear.
-- Missing asset reconciliation is documented.
-- Migration/versioning is documented.
-- Security rules are documented.
-
-## Test 4: Production smoke test
-From repo root:
 ```powershell
-npm start
+npm test
 ```
 
-Pass criteria:
-- Electron app starts.
-- Existing Save Session button still works if tested.
-- New/Open Project placeholders or approved implementation do not crash.
-- Existing pipeline UI still renders.
+## Automated coverage
 
-## Test 5: Optional prototype behavior
-If `prototype/` contains a runnable demo, document its command here.
+`tests/projectSession.test.mjs` verifies:
 
-Expected simulated cases:
-- Save a sample state into `.grokproj` JSON.
-- Load the same file.
-- Confirm project name, story, scenes, active batch, runtime config, and final preview metadata match.
-- Load a file with missing asset paths.
-- Confirm the loader reports warnings but does not crash.
-- Load a malformed file.
-- Confirm the loader rejects it with a clear error.
+- `tests/sample.grokproj` is valid JSON.
+- The sample has `schemaVersion`, `runtime`, `project.scenes`, at least 3 scenes, relative assets, final preview timeline, and Grok router metadata only.
+- Secret scanner reports no secrets in the sample.
+- Validator rejects missing `schemaVersion`.
+- Validator rejects non-array `project.scenes`.
+- Validator rejects unsupported future schema versions.
+- Validator rejects secret-like keys/values and sanitizer strips or redacts them.
+- Opening a project never auto-runs and waits for user Start.
+- Missing assets return warnings rather than crashing.
+- Unknown compatible top-level fields are preserved as inert `extensions.unknownTopLevel` data.
+- New Project asks for confirmation when unsaved changes exist.
+- New Project clears active batch, preview, and pipeline logs while preserving explicit global settings and secure credential refs.
+- Save Project includes prompts, config, scenes, assets, runtime, preview timeline, and router metadata.
+- Save Project excludes account/API/session secrets and full private emails.
+- Restore recovers current batch index, current scene, paused state, and router id/policy/labels only.
+- `.grokproj` extension validation is enforced by the open helper.
 
-## Recording results
-After testing, update `DONE_CHECKLIST.md` with:
-- date/time
-- tester
-- exact tests run
-- pass/fail
-- notes and risks
+## Manual review checklist
+
+- Read `implementation_plan.md` and confirm New/Open/Save behavior is represented.
+- Read `grokproj_schema.md` and confirm saved fields and excluded secret fields are documented.
+- Inspect `tests/sample.grokproj` for realistic but non-secret data.
+- Confirm no files outside `dev_sandbox_project_session/` were modified for this Phase 1 sandbox.
+
+## Production smoke test
+
+Not required for Phase 1 sandbox because production files are intentionally untouched. Run `npm start` only during Phase 2 production integration approval.
