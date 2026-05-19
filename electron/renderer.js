@@ -18,6 +18,13 @@ const resumeBtn = document.querySelector('#resume-btn');
 const exportBtn = document.querySelector('#export-btn');
 const chooseOutputFolderBtn = document.querySelector('#choose-output-folder-btn');
 const saveSessionBtn = document.querySelector('#save-session-btn');
+const newProjectBtn = document.querySelector('#new-project-btn');
+const openProjectBtn = document.querySelector('#open-project-btn');
+const saveProjectBtn = document.querySelector('#save-project-btn');
+const openPackageBtn = document.querySelector('#open-package-btn');
+const exportPackageBtn = document.querySelector('#export-package-btn');
+const projectSaveStatus = document.querySelector('#project-save-status');
+const missingAssetWarning = document.querySelector('#missing-asset-warning');
 const grokAccountSelect = document.querySelector('#grok-account-select');
 const grokRoutingPolicySelect = document.querySelector('#grok-routing-policy-select');
 const openGrokRouterFolderBtn = document.querySelector('#open-grok-router-folder-btn');
@@ -148,6 +155,18 @@ let lastStatusText = '';
 let lastStartClickAt = 0;
 let isRunning = false;
 let autoContinuing = false;
+let currentProjectFilePath = '';
+let projectDirty = false;
+let lastMissingAssetCount = 0;
+let projectRuntime = {
+  currentStage: 'idle',
+  currentBatchIndex: null,
+  currentSceneId: null,
+  lastCheckpointRef: null,
+  lastAction: null,
+  resumeMode: 'manual-start',
+  waitingForUserStart: true,
+};
 
 function shouldSkipReview() {
   return Boolean(skipReviewToggle?.checked);
@@ -206,6 +225,9 @@ function createProject(event) {
   };
   activeBatchIds = [];
   paused = false;
+  projectRuntime = { ...projectRuntime, currentStage: 'prompt_pending', currentBatchIndex: null, currentSceneId: null, lastAction: 'create_project', waitingForUserStart: true };
+  currentProjectFilePath = '';
+  markProjectDirty();
   persist();
   render();
   setStatus(`Đã parse ${scenes.length} scene. Bấm Start pipeline để tool tạo prompt và chạy workflow.`, 'ok');
@@ -236,6 +258,7 @@ async function runNextBatch({ regenerate = false } = {}) {
     : project.scenes.filter((scene) => ['queued', 'error'].includes(scene.status));
   const batch = candidates.slice(0, project.batchSize);
   activeBatchIds = batch.map((scene) => scene.id);
+  projectRuntime = { ...projectRuntime, currentStage: 'generating_prompts', currentBatchIndex: 0, currentSceneId: batch[0] ? getSceneRef(batch[0], project.scenes.indexOf(batch[0])) : null, lastAction: 'generate_prompts', waitingForUserStart: false };
 
   if (!batch.length) {
     setRunning(false);
@@ -345,12 +368,18 @@ function approveBatch() {
 
 function pauseRun() {
   paused = true;
+  markProjectDirty();
+  persist();
   setStatus('Đã pause. Có thể đổi account/model rồi Resume.', 'running');
   render();
 }
 
 function resumeRun() {
   paused = false;
+  if (activeBatchIds.length) {
+    autoRunRoute();
+    return;
+  }
   runNextBatch();
 }
 
@@ -372,6 +401,7 @@ async function chooseOutputFolder() {
   const folder = await window.videoPlannerAPI.chooseOutputFolder();
   if (!folder) return;
   outputFolder = folder;
+  markProjectDirty();
   persist();
   webSessionStatus.textContent = `Folder lưu: ${folder}`;
   render();
@@ -467,10 +497,16 @@ async function runFullPipeline() {
     return;
   }
 
-  const runnableStatuses = new Set(['waiting_review', 'approved', 'image_done', 'error']);
+  const runnableStatuses = new Set(['pending', 'waiting_review', 'approved', 'image_pending', 'image_generating', 'keyframe_pending', 'keyframe_generating', 'image_done', 'image_generated', 'motion_prompt_pending', 'motion_prompt_generated', 'video_pending', 'video_generating', 'error', 'failed']);
   const scenesToRun = project.scenes.filter((item) => activeBatchIds.includes(item.id) && runnableStatuses.has(item.status));
   if (!scenesToRun.length) {
-    setStatus('Auto route dừng: Không có scene cần tạo video trong batch hiện tại.', 'error');
+    const decision = getNextResumeAction({ project, runtime: { ...projectRuntime, activeBatchIds } });
+    if (decision.action === 'batch_complete') {
+      setStatus('Batch complete: all active scenes already have videos.', 'ok');
+      render();
+      return;
+    }
+    setStatus('Resume stopped: no runnable scene in current batch.', 'error');
     return;
   }
 
@@ -481,10 +517,15 @@ async function runFullPipeline() {
   for (let i = 0; i < scenesToRun.length; i++) {
     const scene = scenesToRun[i];
     try {
+      const sceneIndex = project.scenes.indexOf(scene);
+      const resumeAction = getNextResumeAction({ project, runtime: { ...projectRuntime, activeBatchIds, currentSceneId: getSceneRef(scene, sceneIndex) } });
+      projectRuntime = { ...projectRuntime, currentStage: resumeAction.currentStage, currentSceneId: getSceneRef(scene, sceneIndex), currentBatchIndex: activeBatchIds.findIndex((id) => id === scene.id), lastAction: resumeAction.action, waitingForUserStart: false };
       scene.status = scene.imagePath ? 'video_generating' : 'image_generating';
       render();
       const imagePrompt = scene.imagePrompt || buildImagePrompt(scene);
       scene.imagePrompt = imagePrompt;
+      const motionPrompt = scene.motionPrompt || (scene.imagePath ? buildMotionPrompt(scene) : '');
+      if (motionPrompt) scene.motionPrompt = motionPrompt;
       scene.progressStep = scene.imagePath ? 'motion' : 'image';
       render();
       const result = await window.videoPlannerAPI.runScenePipeline({
@@ -492,7 +533,7 @@ async function runFullPipeline() {
         outputFolder,
         sceneId: scene.id,
         imagePrompt,
-        motionPrompt: scene.motionPrompt || '',
+        motionPrompt,
         imagePath: scene.imagePath || '',
         forceRegenerateImage: Boolean(scene.forceRegenerateImage),
         videoProvider: videoPlatform.value,
@@ -712,6 +753,7 @@ async function autoRunRoute() {
   if (isRunning) return;
   setRunning(true);
   paused = false;
+  projectRuntime = { ...projectRuntime, waitingForUserStart: false, resumeMode: 'manual-start' };
 
   try {
     if (!outputFolder) {
@@ -835,12 +877,15 @@ function render() {
   resumeBtn.disabled = !project || !paused;
   exportBtn.disabled = !project;
   chooseOutputFolderBtn.disabled = !project;
+  if (saveProjectBtn) saveProjectBtn.disabled = !project;
+  if (exportPackageBtn) exportPackageBtn.disabled = !project;
   autoRunBtn.disabled = false;
   openReviewBtn.disabled = !getCurrentReviewScene();
 
   renderWorkflowProgress();
   renderFinalPreview();
   renderAssetReviewModal();
+  renderProjectSessionStatus();
 }
 
 async function handleTableClick(event) {
@@ -872,6 +917,7 @@ async function handleTableClick(event) {
     setStatus(`Scene ${scene.id} đã đưa về hàng chờ tạo lại. Có thể chỉnh prompt rồi bấm Chạy tự động toàn bộ.`, 'ok');
   }
   scene.updatedAt = new Date().toISOString();
+  markProjectDirty();
   persist();
   render();
 }
@@ -893,6 +939,7 @@ function saveEdit() {
     scene.reviewType = 'prompt';
   }
   scene.updatedAt = new Date().toISOString();
+  markProjectDirty();
   persist();
   render();
   editorDialog.close();
@@ -1001,6 +1048,8 @@ function loadTextFileToTextarea(fileInput, textarea, fileNameEl, label) {
   reader.onload = () => {
     textarea.value = String(reader.result || '').trim();
     if (fileNameEl) fileNameEl.textContent = file.name;
+    markProjectDirty();
+    persist();
     setStatus(`Đã nạp ${label} từ file: ${file.name}`, 'ok');
   };
   reader.onerror = () => setStatus(`Không đọc được file ${label}: ${file.name}`, 'error');
@@ -1029,12 +1078,18 @@ function renderAssetReview(scene) {
 }
 
 function renderImagePreview(scene) {
+  if (scene.imageMissing) {
+    return '<div class="review-hint">Linked keyframe file is missing on this machine. Scene data and prompts were preserved; regenerate or relink media.</div>';
+  }
   const src = scene.imageDataUrl || (scene.imagePath ? `file:///${String(scene.imagePath).replaceAll('\\', '/')}` : '');
   if (!src) return '';
   return `<figure class="scene-image-preview"><img src="${escapeHtml(src)}" alt="Scene ${scene.id} keyframe"><figcaption>Keyframe đã lưu</figcaption></figure>`;
 }
 
 function renderVideoPreview(scene) {
+  if (scene.videoMissing) {
+    return '<div class="review-hint">Linked video file is missing on this machine. Scene data and motion prompt were preserved; regenerate or relink media.</div>';
+  }
   if (!scene.videoPath) {
     if (scene.videoStatus) return `<div class="review-hint">Video đã gửi lên nền tảng. Nếu chưa tự tải được, tải thủ công rồi lưu vào folder scene.</div>`;
     return '';
@@ -1197,6 +1252,13 @@ async function mergeAndShowFinalPreview(options = {}) {
 
 function renderFinalPreview(result = null) {
   if (!finalPreviewCard || !finalPreviewVideo || !finalSceneTimeline) return;
+  if (!project) {
+    finalPreviewCard.hidden = true;
+    finalPreviewVideo.removeAttribute('src');
+    if (finalPreviewMeta) finalPreviewMeta.textContent = '';
+    finalSceneTimeline.innerHTML = '';
+    return;
+  }
   const outputPath = result?.outputPath || project?.finalVideoPath || '';
   const hasAnyVideo = Boolean(project?.scenes?.some((scene) => scene.videoPath));
   finalPreviewCard.hidden = false;
@@ -1208,13 +1270,16 @@ function renderFinalPreview(result = null) {
     return;
   }
 
-  if (outputPath) {
+  if (outputPath && !project.previewMissing) {
     project.finalVideoPath = outputPath;
     project.finalVideoUpdatedAt = new Date().toISOString();
     if (result?.videos) project.finalTimeline = result.videos;
     persist();
     finalPreviewVideo.src = `${fileUrl(outputPath)}?t=${Date.now()}`;
     if (finalPreviewMeta) finalPreviewMeta.textContent = `${result?.count || project.finalTimeline?.length || 0} scene · ${outputPath}`;
+  } else if (outputPath && project.previewMissing) {
+    finalPreviewVideo.removeAttribute('src');
+    if (finalPreviewMeta) finalPreviewMeta.textContent = 'Final preview file is missing on this machine. Timeline metadata was preserved.';
   } else if (finalPreviewMeta) {
     finalPreviewMeta.textContent = 'Đã có video scene, bấm Refresh preview để merge bản final.';
   }
@@ -1229,7 +1294,7 @@ function renderFinalPreview(result = null) {
     const sceneNo = item.sceneNumber || index + 1;
     const scene = project.scenes.find((entry) => entry.id === sceneNo);
     const thumb = item.keyframePath || scene?.imagePath || '';
-    const thumbHtml = thumb
+    const thumbHtml = thumb && !item.keyframeMissing && !scene?.imageMissing
       ? `<img src="${fileUrl(thumb)}" alt="Keyframe scene ${sceneNo}" />`
       : `<div class="timeline-empty-thumb">S${sceneNo}</div>`;
     return `<article class="timeline-scene-card">
@@ -1248,7 +1313,7 @@ function getGrokRouterSettings() {
   return {
     enabled: Boolean(grokRouterEnabledToggle?.checked),
     account: grokAccountSelect?.value || 'grok-default-profile',
-    routingPolicy: 'round_robin',
+    routingPolicy: grokRoutingPolicySelect?.value || 'round_robin',
     sandboxFolder: 'dev_sandbox_grok_account_router',
   };
 }
@@ -1295,24 +1360,504 @@ async function refreshGrokRouterStatus() {
   renderGrokRouterStatus(status, accounts);
 }
 
+
+function getSelectedText(control) {
+  return control?.selectedOptions?.[0]?.textContent || control?.value || '';
+}
+
+function getSceneRef(scene, index) {
+  return String(scene?.sceneId || scene?.id || `scene-${String(index + 1).padStart(3, '0')}`);
+}
+
+const KEYFRAME_RESUME_STATUSES = new Set(['image_pending', 'image_generating', 'keyframe_pending', 'keyframe_generating']);
+const IMAGE_READY_RESUME_STATUSES = new Set(['image_done', 'image_generated', 'motion_prompt_pending', 'motion_prompt_generated', 'video_pending', 'video_generating']);
+const VIDEO_DONE_RESUME_STATUSES = new Set(['video_done', 'video_generated', 'video_ready']);
+
+function isVideoCompleteForResume(scene = {}) {
+  return Boolean(scene.videoPath) || VIDEO_DONE_RESUME_STATUSES.has(scene.status);
+}
+
+function hasKeyframeForResume(scene = {}) {
+  return Boolean(scene.imagePath || scene.imageDataUrl) || IMAGE_READY_RESUME_STATUSES.has(scene.status) || isVideoCompleteForResume(scene);
+}
+
+function findSceneByRuntimeRef(ref, scenes = project?.scenes || []) {
+  if (ref == null || ref === '') return null;
+  const key = String(ref);
+  return scenes.find((scene, index) => String(scene.id) === key || getSceneRef(scene, index) === key) || null;
+}
+
+function normalizeActiveBatchIdsForRuntime(ids = [], scenes = project?.scenes || []) {
+  if (!Array.isArray(ids)) return [];
+  return ids
+    .map((id) => findSceneByRuntimeRef(id, scenes)?.id ?? id)
+    .filter((id) => id != null && id !== '');
+}
+
+function getOrderedResumeScenes(state = {}) {
+  const scenes = state.project?.scenes || [];
+  const activeIds = normalizeActiveBatchIdsForRuntime(state.runtime?.activeBatchIds || state.activeBatchIds || [], scenes);
+  const activeScenes = activeIds.length
+    ? activeIds.map((id) => scenes.find((scene) => String(scene.id) === String(id))).filter(Boolean)
+    : scenes;
+  const currentRef = state.runtime?.currentSceneId || '';
+  const currentIndex = activeScenes.findIndex((scene, index) => String(scene.id) === String(currentRef) || getSceneRef(scene, index) === String(currentRef));
+  return currentIndex > 0 ? activeScenes.slice(currentIndex).concat(activeScenes.slice(0, currentIndex)) : activeScenes;
+}
+
+function getNextResumeAction(state = {}) {
+  const scenes = getOrderedResumeScenes(state);
+  for (const scene of scenes) {
+    if (isVideoCompleteForResume(scene)) continue;
+    const sceneIndex = (state.project?.scenes || []).indexOf(scene);
+    const sceneId = getSceneRef(scene, sceneIndex >= 0 ? sceneIndex : 0);
+    if (!hasKeyframeForResume(scene) || KEYFRAME_RESUME_STATUSES.has(scene.status)) {
+      return { action: 'generate_keyframe', currentStage: 'generating_keyframe', sceneId, internalSceneId: scene.id, status: scene.status };
+    }
+    if (!scene.motionPrompt) {
+      return { action: 'generate_motion_prompt', currentStage: 'generating_motion_prompt', sceneId, internalSceneId: scene.id, status: scene.status };
+    }
+    return { action: 'generate_video', currentStage: 'generating_video', sceneId, internalSceneId: scene.id, status: scene.status };
+  }
+  return { action: 'batch_complete', currentStage: 'batch_complete', sceneId: null, internalSceneId: null, status: 'complete' };
+}
+
+function getCurrentResumeScene() {
+  const activeScenes = (project?.scenes || []).filter((scene) => activeBatchIds.includes(scene.id));
+  const inProgress = activeScenes.find((scene) => ['pending', 'running', 'image_pending', 'image_generating', 'keyframe_pending', 'keyframe_generating', 'motion_prompt_pending', 'video_pending', 'video_generating', 'asset_review', 'waiting_review', 'error', 'failed'].includes(scene.status));
+  if (inProgress) return inProgress;
+  const restored = findSceneByRuntimeRef(projectRuntime.currentSceneId);
+  if (restored) return restored;
+  const decision = getNextResumeAction({ project, runtime: { ...projectRuntime, activeBatchIds } });
+  return decision.internalSceneId != null ? project?.scenes?.find((scene) => scene.id === decision.internalSceneId) || null : null;
+}
+
+function getRuntimeSnapshot() {
+  const currentScene = getCurrentResumeScene();
+  const currentSceneId = currentScene ? getSceneRef(currentScene, project.scenes.indexOf(currentScene)) : null;
+  const normalizedBatchIds = normalizeActiveBatchIdsForRuntime(activeBatchIds, project?.scenes || []);
+  const currentBatchIndex = currentScene ? normalizedBatchIds.findIndex((id) => String(id) === String(currentScene.id)) : -1;
+  const decision = getNextResumeAction({
+    project,
+    runtime: { ...projectRuntime, activeBatchIds: normalizedBatchIds, currentSceneId },
+  });
+  return {
+    currentStage: decision.currentStage || projectRuntime.currentStage || 'idle',
+    currentBatchIndex: currentBatchIndex >= 0 ? currentBatchIndex : (normalizedBatchIds.length ? 0 : null),
+    currentSceneId,
+    activeBatchIds: normalizedBatchIds,
+    paused,
+    lastCheckpointRef: projectRuntime.lastCheckpointRef || getRouterMetadata().status?.lastSafeCheckpointRef || null,
+    lastAction: decision.action || projectRuntime.lastAction || null,
+    resumeMode: projectRuntime.resumeMode || 'manual-start',
+    lastErrorClassification: projectRuntime.lastErrorClassification || null,
+    waitingForUserStart: true,
+  };
+}
+
+function getSceneFileRecord(scene, index) {
+  const sceneId = getSceneRef(scene, index);
+  return {
+    ...scene,
+    sceneId,
+    sceneIndex: index,
+    rawSceneText: scene.rawSceneText || scene.original || '',
+    imagePrompt: scene.imagePrompt || '',
+    motionPrompt: scene.motionPrompt || '',
+    imagePath: scene.imagePath || '',
+    videoPath: scene.videoPath || '',
+    imageAssetRef: scene.imageAssetRef || scene.imagePath || '',
+    videoAssetRef: scene.videoAssetRef || scene.videoPath || '',
+    stage: scene.stage || scene.progressStep || scene.status || '',
+    errorClassification: scene.errorClassification || (scene.error ? 'scene_error' : null),
+    promptVersion: scene.promptVersion || 'v1',
+    updatedAt: scene.updatedAt || new Date().toISOString(),
+  };
+}
+
+function getPreviewTimeline() {
+  if (Array.isArray(project?.finalTimeline) && project.finalTimeline.length) return project.finalTimeline;
+  return (project?.scenes || []).filter((scene) => scene.videoPath).map((scene, index) => ({
+    sceneId: getSceneRef(scene, index),
+    sceneNumber: scene.id,
+    videoPath: scene.videoPath,
+    keyframePath: scene.imagePath || '',
+    durationSeconds: Number(project?.durationSec) || Number(durationInput?.value) || 0,
+    name: `scene_${String(scene.id || index + 1).padStart(3, '0')}`,
+  }));
+}
+
+function getProjectAssets(previewTimeline = getPreviewTimeline()) {
+  const scenes = project?.scenes || [];
+  return {
+    images: scenes.filter((scene) => scene.imagePath).map((scene, index) => ({ sceneId: getSceneRef(scene, index), path: scene.imagePath })),
+    videos: scenes.filter((scene) => scene.videoPath).map((scene, index) => ({ sceneId: getSceneRef(scene, index), path: scene.videoPath })),
+    finalOutputs: project?.finalVideoPath ? [{ kind: 'preview', path: project.finalVideoPath }] : previewTimeline.filter((item) => item.outputPath).map((item) => ({ kind: 'preview', path: item.outputPath })),
+  };
+}
+
+function getCurrentSceneRef() {
+  const currentScene = reviewSceneId ? project?.scenes?.find((scene) => scene.id === reviewSceneId) : getCurrentResumeScene();
+  if (!currentScene) return null;
+  const index = project?.scenes?.indexOf(currentScene);
+  return index >= 0 ? getSceneRef(currentScene, index) : String(currentScene.id);
+}
+
+function getRouterMetadata() {
+  return {
+    accountRouterEnabled: Boolean(grokRouterEnabledToggle?.checked),
+    selectedGrokAccountId: grokAccountSelect?.value || null,
+    routingPolicy: grokRoutingPolicySelect?.value || 'round_robin',
+    selectedLabels: {
+      provider: 'Grok',
+      model: videoPlatformSelect?.value === 'pixverse' ? 'PixVerse' : 'Grok',
+      account: getSelectedText(grokAccountSelect),
+    },
+    status: {
+      selectedAccountState: grokAccountSelect?.selectedOptions?.[0]?.disabled ? 'unavailable' : 'available',
+      routerState: grokRouterState?.textContent || '',
+    },
+  };
+}
+
+function getProjectSessionPayload() {
+  const previewTimeline = getPreviewTimeline();
+  const scenes = (project?.scenes || []).map(getSceneFileRecord);
+  const runtime = getRuntimeSnapshot();
+  return {
+    schemaVersion: 1,
+    appVersion: 'electron-phase2',
+    savedAt: new Date().toISOString(),
+    project: {
+      ...project,
+      description: project?.description || '',
+      updatedAt: new Date().toISOString(),
+      scenes,
+      finalTimeline: previewTimeline,
+    },
+    inputs: {
+      storyPrompt: storyInput?.value || project?.story || '',
+      scriptPrompt: scriptInput?.value || scenes.map((scene) => scene.rawSceneText).join('\n\n'),
+      promptTemplates: {
+        image: { id: 'renderer-image-rules', version: '1' },
+        motion: { id: 'renderer-motion-rules', version: '1' },
+        story: { id: 'renderer-story-rules', version: '1' },
+      },
+      batchPromptRefs: [],
+    },
+    config: {
+      scriptProvider: providerSelect?.value || '',
+      imageProvider: providerSelect?.value || '',
+      videoProvider: videoPlatformSelect?.value || 'grok',
+      selectedModels: {
+        script: modelInput?.value || '',
+        image: providerSelect?.value || '',
+        video: videoPlatformSelect?.value || 'grok',
+      },
+      selectedLabels: {
+        provider: getSelectedText(providerSelect),
+        account: getSelectedText(accountSelect),
+        model: modelInput?.value || '',
+      },
+      batchSize: Number(batchSizeInput?.value) || project?.batchSize || 10,
+      sceneDurationSeconds: Number(durationInput?.value) || project?.durationSec || 10,
+      outputLanguage: 'Vietnamese',
+      stylePreset: 'current-renderer-settings',
+    },
+    router: getRouterMetadata(),
+    runtime: {
+      ...runtime,
+      outputFolder,
+      videoPlatform: videoPlatformSelect?.value || 'grok',
+      skipReview: shouldSkipReview(),
+      pixverse: {
+        resolution: pixverseResolutionSelect?.value || '',
+        ratio: pixverseRatioSelect?.value || '',
+        duration: pixverseDurationSelect?.value || '',
+        model: pixverseModelSelect?.value || '',
+        preview: Boolean(pixversePreviewToggle?.checked),
+        audio: Boolean(pixverseAudioToggle?.checked),
+      },
+      grokRouter: getGrokRouterSettings(),
+      activePreviewTimeline: previewTimeline,
+      autoRun: false,
+      waitingForUserStart: true,
+      active: false,
+    },
+    assets: getProjectAssets(previewTimeline),
+    previewTimeline,
+    extensions: {},
+  };
+}
+
+function normalizeRendererScene(scene = {}, index = 0) {
+  const numericId = Number(scene.id);
+  const sceneIdMatch = String(scene.sceneId || '').match(/\d+$/);
+  const id = scene.id != null && scene.id !== '' && Number.isFinite(numericId) ? numericId : sceneIdMatch ? Number(sceneIdMatch[0]) : index + 1;
+  return {
+    ...scene,
+    id,
+    original: scene.original || scene.rawSceneText || '',
+    previous: scene.previous || '',
+    next: scene.next || '',
+    status: scene.status || 'queued',
+    imagePrompt: scene.imagePrompt || '',
+    motionPrompt: scene.motionPrompt || '',
+    provider: scene.provider || '',
+    account: scene.account || '',
+    imagePath: scene.imagePath || '',
+    imageDataUrl: scene.imageDataUrl || '',
+    videoPath: scene.videoPath || '',
+    imageAssetRef: scene.imageAssetRef || scene.imagePath || '',
+    videoAssetRef: scene.videoAssetRef || scene.videoPath || '',
+    imageMissing: Boolean(scene.imageMissing),
+    videoMissing: Boolean(scene.videoMissing),
+    videoStatus: scene.videoStatus || '',
+    reviewType: scene.reviewType || '',
+    progressStep: scene.progressStep || '',
+    stage: scene.stage || scene.progressStep || scene.status || '',
+    promptVersion: scene.promptVersion || 'v1',
+    updatedAt: scene.updatedAt || new Date().toISOString(),
+  };
+}
+
+function normalizeProjectSessionForRenderer(payload = {}) {
+  const sourceProject = payload.project || {};
+  const scenes = Array.isArray(sourceProject.scenes) ? sourceProject.scenes.map(normalizeRendererScene) : [];
+  scenes.forEach((scene, index) => {
+    if (!scene.previous) scene.previous = scenes[index - 1]?.original || '';
+    if (!scene.next) scene.next = scenes[index + 1]?.original || '';
+  });
+  return {
+    ...sourceProject,
+    story: sourceProject.story || payload.inputs?.storyPrompt || '',
+    scenes,
+    batchSize: sourceProject.batchSize || payload.config?.batchSize || 10,
+    durationSec: sourceProject.durationSec || payload.config?.sceneDurationSeconds || 10,
+    finalVideoPath: sourceProject.finalVideoPath || payload.assets?.finalOutputs?.[0]?.path || '',
+    finalTimeline: Array.isArray(payload.previewTimeline) && payload.previewTimeline.length
+      ? payload.previewTimeline
+      : Array.isArray(sourceProject.finalTimeline) ? sourceProject.finalTimeline : payload.runtime?.activePreviewTimeline || [],
+  };
+}
+
+function setControlValue(control, value) {
+  if (!control || value == null || value === '') return;
+  control.value = String(value);
+}
+
+function applyProjectSessionPayload(payload = {}, filePath = '') {
+  project = normalizeProjectSessionForRenderer(payload);
+  activeBatchIds = normalizeActiveBatchIdsForRuntime(payload.runtime?.activeBatchIds || [], project.scenes);
+  paused = Boolean(payload.runtime?.paused);
+  projectRuntime = {
+    currentStage: payload.runtime?.currentStage || 'idle',
+    currentBatchIndex: payload.runtime?.currentBatchIndex ?? null,
+    currentSceneId: payload.runtime?.currentSceneId || null,
+    lastCheckpointRef: payload.runtime?.lastCheckpointRef || payload.router?.status?.lastSafeCheckpointRef || null,
+    lastAction: payload.runtime?.lastAction || null,
+    resumeMode: payload.runtime?.resumeMode || 'manual-start',
+    lastErrorClassification: payload.runtime?.lastErrorClassification || null,
+    waitingForUserStart: true,
+  };
+  isRunning = false;
+  autoContinuing = false;
+  reviewSceneId = null;
+  outputFolder = payload.runtime?.outputFolder || '';
+  currentProjectFilePath = filePath || '';
+  projectDirty = false;
+  lastMissingAssetCount = 0;
+  if (payload.runtime?.currentSceneId) {
+    const currentRef = String(payload.runtime.currentSceneId);
+    const found = project.scenes.find((scene, index) => String(scene.id) === currentRef || getSceneRef(scene, index) === currentRef);
+    if (found) reviewSceneId = found.id;
+  }
+  if (projectNameInput) projectNameInput.value = project?.name || '';
+  if (storyInput) storyInput.value = payload.inputs?.storyPrompt || project?.story || '';
+  if (scriptInput) scriptInput.value = project?.scenes?.map((scene) => scene.original).join('\n\n') || payload.inputs?.scriptPrompt || '';
+  setControlValue(batchSizeInput, project?.batchSize);
+  setControlValue(durationInput, project?.durationSec);
+  setControlValue(providerSelect, payload.config?.scriptProvider);
+  setControlValue(accountSelect, payload.config?.selectedLabels?.account);
+  setControlValue(modelInput, payload.config?.selectedModels?.script || payload.config?.selectedLabels?.model);
+  setControlValue(videoPlatformSelect, payload.runtime?.videoPlatform || payload.config?.videoProvider);
+  if (skipReviewToggle) skipReviewToggle.checked = Boolean(payload.runtime?.skipReview);
+  setControlValue(pixverseResolutionSelect, payload.runtime?.pixverse?.resolution);
+  setControlValue(pixverseRatioSelect, payload.runtime?.pixverse?.ratio);
+  setControlValue(pixverseDurationSelect, payload.runtime?.pixverse?.duration);
+  setControlValue(pixverseModelSelect, payload.runtime?.pixverse?.model);
+  if (pixversePreviewToggle) pixversePreviewToggle.checked = Boolean(payload.runtime?.pixverse?.preview ?? payload.runtime?.pixverse?.previewMode);
+  if (pixverseAudioToggle) pixverseAudioToggle.checked = Boolean(payload.runtime?.pixverse?.audio);
+  const router = payload.router || payload.runtime?.grokRouter || {};
+  if (grokRouterEnabledToggle) grokRouterEnabledToggle.checked = Boolean(router.accountRouterEnabled ?? router.enabled);
+  setControlValue(grokAccountSelect, router.selectedGrokAccountId || router.account);
+  setControlValue(grokRoutingPolicySelect, router.routingPolicy || 'round_robin');
+  if (webSessionStatus) webSessionStatus.textContent = outputFolder ? `Folder lưu: ${outputFolder}` : 'Opened project. Waiting for Start.';
+  syncVideoPlatformConfig();
+  updatePixVerseConfigAdvice();
+  persist();
+  render();
+}
+
+function renderProjectSessionStatus() {
+  if (projectSaveStatus) {
+    const label = currentProjectFilePath ? currentProjectFilePath.split(/[\\/]/).pop() : 'Unsaved project';
+    projectSaveStatus.textContent = !project && !currentProjectFilePath ? 'No project file loaded' : projectDirty ? `Unsaved changes - ${label}` : `Saved - ${label}`;
+    projectSaveStatus.className = `project-save-status ${projectDirty ? 'dirty' : 'saved'}`;
+  }
+  if (missingAssetWarning) {
+    missingAssetWarning.hidden = !lastMissingAssetCount;
+    missingAssetWarning.textContent = lastMissingAssetCount
+      ? `Project opened with missing linked assets: ${lastMissingAssetCount} file(s) not found. Scene data, prompts, and motion prompts were preserved. Missing media can be regenerated or relinked.`
+      : '';
+  }
+}
+
+function markProjectDirty() {
+  projectDirty = Boolean(project);
+  renderProjectSessionStatus();
+}
+
+async function confirmUnsavedProjectAction(actionLabel) {
+  if (!projectDirty) return true;
+  const decision = await window.videoPlannerAPI?.newProjectSession?.({ hasUnsavedChanges: true, actionLabel }).catch(() => null);
+  if (decision?.action === 'save') return saveProjectSessionFlow({ silent: true });
+  if (decision?.action === 'discard') return true;
+  return false;
+}
+
+async function newProjectSessionFlow() {
+  if (!(await confirmUnsavedProjectAction('creating a new project'))) return;
+  await window.videoPlannerAPI?.newProjectSession?.().catch(() => null);
+  project = null;
+  activeBatchIds = [];
+  paused = false;
+  isRunning = false;
+  autoContinuing = false;
+  reviewSceneId = null;
+  pipelineLogs = [];
+  lastStatusText = '';
+  currentProjectFilePath = '';
+  projectDirty = false;
+  lastMissingAssetCount = 0;
+  projectRuntime = { currentStage: 'idle', currentBatchIndex: null, currentSceneId: null, lastCheckpointRef: null, lastAction: 'new_project', resumeMode: 'manual-start', waitingForUserStart: true };
+  projectForm?.reset?.();
+  persist();
+  render();
+  setStatus('New project ready. Enter story and scenes, then press Start pipeline.', 'idle');
+}
+
+async function saveProjectSessionFlow(options = {}) {
+  if (!project || !window.videoPlannerAPI?.saveProjectSession) return false;
+  const checked = await reconcileSavedAssets();
+  lastMissingAssetCount = checked.missing || 0;
+  const result = await window.videoPlannerAPI.saveProjectSession(getProjectSessionPayload());
+  if (!result?.ok) return false;
+  currentProjectFilePath = result.filePath || currentProjectFilePath;
+  projectDirty = false;
+  persist();
+  render();
+  if (!options.silent) {
+    setStatus(lastMissingAssetCount
+      ? `Project saved. ${lastMissingAssetCount} linked asset file(s) are currently missing on this machine. Scene data and prompts were preserved.`
+      : 'Project saved as .grokproj.', 'ok');
+  }
+  return true;
+}
+
+async function exportPortableProjectPackageFlow() {
+  if (!project || !window.videoPlannerAPI?.exportPortableProjectPackage) return false;
+  const checked = await reconcileSavedAssets();
+  lastMissingAssetCount = checked.missing || 0;
+  const result = await window.videoPlannerAPI.exportPortableProjectPackage(getProjectSessionPayload());
+  if (!result?.ok) return false;
+  render();
+  const skipped = Array.isArray(result.warnings) ? result.warnings.length : 0;
+  setStatus(skipped
+    ? `Portable package exported successfully. ${result.assetCount || 0} assets bundled; ${skipped} asset warning(s). Scene data and prompts were preserved.`
+    : `Portable package exported successfully. ${result.assetCount || 0} assets bundled.`, 'ok');
+  return true;
+}
+
+async function openProjectSessionFlow() {
+  if (!window.videoPlannerAPI?.openProjectSession) return;
+  if (!(await confirmUnsavedProjectAction('opening a different project'))) return;
+  const result = await window.videoPlannerAPI.openProjectSession();
+  if (!result?.ok) return;
+  applyProjectSessionPayload(result.payload, result.filePath);
+  const checked = await reconcileSavedAssets();
+  lastMissingAssetCount = checked.missing || 0;
+  projectDirty = Boolean(lastMissingAssetCount);
+  persist();
+  render();
+  setStatus(lastMissingAssetCount
+    ? `Project opened with missing linked assets: ${lastMissingAssetCount} file(s) not found. Scene data, prompts, and motion prompts were preserved. Press Start pipeline to regenerate or relink media.`
+    : 'Opened .grokproj. Press Start pipeline to continue.', lastMissingAssetCount ? 'error' : 'ok');
+}
+
+async function openPortableProjectPackageFlow() {
+  if (!window.videoPlannerAPI?.openPortableProjectPackage) return;
+  if (!(await confirmUnsavedProjectAction('opening a portable project package'))) return;
+  const result = await window.videoPlannerAPI.openPortableProjectPackage();
+  if (!result?.ok) return;
+  applyProjectSessionPayload(result.payload, result.filePath);
+  const checked = await reconcileSavedAssets();
+  const warningCount = (Array.isArray(result.warnings) ? result.warnings.length : 0) + (checked.missing || 0);
+  lastMissingAssetCount = warningCount;
+  projectDirty = Boolean(warningCount);
+  persist();
+  render();
+  setStatus(warningCount
+    ? `Package opened. ${result.assetCount || 0} assets restored. ${warningCount} assets missing or skipped. Scene data and prompts were preserved.`
+    : `Package opened. ${result.assetCount || 0} assets restored. Press Start pipeline to continue.`, warningCount ? 'error' : 'ok');
+}
+
 function persist() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify({ project, activeBatchIds, paused, outputFolder, grokRouter: getGrokRouterSettings() }));
+  localStorage.setItem(STORAGE_KEY, JSON.stringify({ project, activeBatchIds, paused, outputFolder, currentProjectFilePath, projectDirty, projectRuntime, grokRouter: getGrokRouterSettings() }));
 }
 
 async function reconcileSavedAssets() {
   if (!project?.scenes?.length || !window.videoPlannerAPI?.assetExists) return { missing: 0 };
   let missing = 0;
+  const missingPaths = new Set();
+  const countMissingPath = (filePath) => {
+    if (!filePath || missingPaths.has(filePath)) return;
+    missingPaths.add(filePath);
+    missing += 1;
+  };
+  const markMissing = (target, field, missingField, isMissing) => {
+    if (!target) return;
+    target[missingField] = Boolean(isMissing);
+    if (target[field]) target[`${field}Exists`] = !isMissing;
+  };
+  const pathMissingCache = new Map();
+  const missingPath = async (filePath) => {
+    if (!filePath) return false;
+    if (pathMissingCache.has(filePath)) return pathMissingCache.get(filePath);
+    const isMissing = !(await window.videoPlannerAPI.assetExists(filePath).catch(() => false));
+    pathMissingCache.set(filePath, isMissing);
+    return isMissing;
+  };
   for (const scene of project.scenes) {
-    if (scene.imagePath && !(await window.videoPlannerAPI.assetExists(scene.imagePath).catch(() => false))) {
-      scene.imagePath = '';
-      scene.imageDataUrl = '';
-      if (['image_done', 'video_generating', 'asset_review'].includes(scene.status)) scene.status = 'waiting_review';
-      missing += 1;
-    }
-    if (scene.videoPath && !(await window.videoPlannerAPI.assetExists(scene.videoPath).catch(() => false))) {
-      scene.videoPath = '';
-      if (scene.status === 'video_done') scene.status = 'image_done';
-      missing += 1;
+    const imageMissing = scene.imagePath && await missingPath(scene.imagePath);
+    const videoMissing = scene.videoPath && await missingPath(scene.videoPath);
+    markMissing(scene, 'imagePath', 'imageMissing', imageMissing);
+    markMissing(scene, 'videoPath', 'videoMissing', videoMissing);
+    if (imageMissing) countMissingPath(scene.imagePath);
+    if (videoMissing) countMissingPath(scene.videoPath);
+  }
+  const finalMissing = project.finalVideoPath && await missingPath(project.finalVideoPath);
+  markMissing(project, 'finalVideoPath', 'previewMissing', finalMissing);
+  if (finalMissing) countMissingPath(project.finalVideoPath);
+  if (Array.isArray(project.finalTimeline)) {
+    for (const item of project.finalTimeline) {
+      const videoMissing = item.videoPath && await missingPath(item.videoPath);
+      const keyframeMissing = item.keyframePath && await missingPath(item.keyframePath);
+      markMissing(item, 'videoPath', 'videoMissing', videoMissing);
+      markMissing(item, 'keyframePath', 'keyframeMissing', keyframeMissing);
+      item.previewMissing = Boolean(videoMissing || keyframeMissing);
+      if (videoMissing) countMissingPath(item.videoPath);
+      if (keyframeMissing) countMissingPath(item.keyframePath);
     }
   }
   return { missing };
@@ -1331,10 +1876,13 @@ function restore() {
     const shouldRestore = localStorage.getItem(RESTORE_SESSION_KEY) === '1';
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
     outputFolder = saved.outputFolder || '';
+    currentProjectFilePath = saved.currentProjectFilePath || '';
+    projectDirty = Boolean(saved.projectDirty);
+    projectRuntime = { ...projectRuntime, ...(saved.projectRuntime || {}) };
     localStorage.removeItem(RESTORE_SESSION_KEY);
     if (shouldRestore && saved.project) {
       project = saved.project;
-      activeBatchIds = saved.activeBatchIds || [];
+      activeBatchIds = normalizeActiveBatchIdsForRuntime(saved.activeBatchIds || [], project.scenes || []);
       paused = Boolean(saved.paused);
       projectNameInput.value = project.name || projectNameInput.value;
       storyInput.value = project.story || '';
@@ -1351,6 +1899,9 @@ function restore() {
       project = null;
       activeBatchIds = [];
       paused = false;
+      currentProjectFilePath = '';
+      projectDirty = false;
+      projectRuntime = { currentStage: 'idle', currentBatchIndex: null, currentSceneId: null, lastCheckpointRef: null, lastAction: null, resumeMode: 'manual-start', waitingForUserStart: true };
       if (outputFolder) webSessionStatus.textContent = `Folder lưu: ${outputFolder}`;
       setStatus('Phiên mới: đã xóa tiến trình cũ. Bấm Start pipeline để chạy lại từ scene 1.', 'idle');
     }
@@ -1358,6 +1909,7 @@ function restore() {
     project = null;
     activeBatchIds = [];
     paused = false;
+    projectRuntime = { currentStage: 'idle', currentBatchIndex: null, currentSceneId: null, lastCheckpointRef: null, lastAction: null, resumeMode: 'manual-start', waitingForUserStart: true };
   }
   render();
 }
@@ -1369,7 +1921,17 @@ resumeBtn.addEventListener('click', resumeRun);
 exportBtn.addEventListener('click', exportProject);
 chooseOutputFolderBtn.addEventListener('click', chooseOutputFolder);
 saveSessionBtn?.addEventListener('click', saveSessionForNextLaunch);
+newProjectBtn?.addEventListener('click', newProjectSessionFlow);
+openProjectBtn?.addEventListener('click', openProjectSessionFlow);
+saveProjectBtn?.addEventListener('click', saveProjectSessionFlow);
+openPackageBtn?.addEventListener('click', openPortableProjectPackageFlow);
+exportPackageBtn?.addEventListener('click', exportPortableProjectPackageFlow);
+[projectNameInput, storyInput, scriptInput, batchSizeInput, durationInput].forEach((control) => control?.addEventListener('input', () => {
+  markProjectDirty();
+  persist();
+}));
 grokAccountSelect?.addEventListener('change', () => {
+  markProjectDirty();
   window.videoPlannerAPI?.selectGrokAccount?.(grokAccountSelect.value)
     .then((result) => {
       if (!result?.ok) setStatus(result?.error || 'Không chọn được Grok account.', 'error');
@@ -1379,6 +1941,7 @@ grokAccountSelect?.addEventListener('change', () => {
   persist();
 });
 grokRouterEnabledToggle?.addEventListener('change', () => {
+  markProjectDirty();
   window.videoPlannerAPI?.setAccountRouterEnabled?.(grokRouterEnabledToggle.checked)
     .then(() => refreshGrokRouterStatus())
     .catch((error) => setStatus(`Không đổi được router flag: ${error.message}`, 'error'));
@@ -1436,14 +1999,34 @@ zoomInBtn?.addEventListener('click', () => setReviewZoom(reviewZoom + 10));
 saveEditBtn.addEventListener('click', saveEdit);
 videoPlatformSelect?.addEventListener('change', () => {
   syncVideoPlatformConfig();
+  markProjectDirty();
+  persist();
   render();
 });
 [pixverseResolutionSelect, pixverseRatioSelect, pixverseDurationSelect, pixverseModelSelect, pixversePreviewToggle, pixverseAudioToggle]
   .filter(Boolean)
-  .forEach((control) => control.addEventListener('change', updatePixVerseConfigAdvice));
+  .forEach((control) => control.addEventListener('change', () => {
+    updatePixVerseConfigAdvice();
+    markProjectDirty();
+    persist();
+  }));
 providerSelect.addEventListener('change', () => {
   if (providerSelect.value === 'ninerouter') modelInput.value = 'cx/gpt-5.5';
   if (providerSelect.value === 'grok') modelInput.value = 'grok-3-latest';
+  markProjectDirty();
+  persist();
+});
+accountSelect?.addEventListener('change', () => {
+  markProjectDirty();
+  persist();
+});
+modelInput?.addEventListener('input', () => {
+  markProjectDirty();
+  persist();
+});
+skipReviewToggle?.addEventListener('change', () => {
+  markProjectDirty();
+  persist();
 });
 
 window.addEventListener('error', (event) => {
@@ -1458,6 +2041,13 @@ refreshGrokRouterStatus().catch(() => null);
 renderPipelineLog();
 window.videoPlannerAPI?.getPipelineLogVisible?.().then(setPipelineLogVisible).catch(() => setPipelineLogVisible(false));
 window.videoPlannerAPI?.onPipelineLogVisible?.(setPipelineLogVisible);
+window.videoPlannerAPI?.onProjectMenuCommand?.((command) => {
+  if (command === 'new') newProjectSessionFlow();
+  if (command === 'open') openProjectSessionFlow();
+  if (command === 'save') saveProjectSessionFlow();
+  if (command === 'open-package') openPortableProjectPackageFlow();
+  if (command === 'export-package') exportPortableProjectPackageFlow();
+});
 window.videoPlannerAPI?.appendAppLog?.({ source: 'renderer', kind: 'info', text: 'Renderer loaded' }).catch(() => null);
 
 restore();

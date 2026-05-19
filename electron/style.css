@@ -869,3 +869,34 @@ tr:hover td { background: rgba(255, 255, 255, 0.025); }
   .hero-metrics { grid-template-columns: 1fr; }
   .router-actions, .batch-actions { display: grid; }
 }
+
+
+.project-session-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  margin-top: 16px;
+}
+
+.project-save-status {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.project-save-status.dirty {
+  color: #ffd166;
+}
+
+.project-save-status.saved {
+  color: #88f0b0;
+}
+
+.missing-asset-warning {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 209, 102, 0.45);
+  border-radius: 12px;
+  color: #ffe7a3;
+  background: rgba(255, 209, 102, 0.08);
+}

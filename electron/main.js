@@ -1,9 +1,11 @@
 const { execFileSync, spawn } = require('child_process');
+const crypto = require('crypto');
 const { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, Menu, shell } = require('electron');
 const CDP = require('chrome-remote-interface');
 const ffmpegPath = require('ffmpeg-static');
 const fs = require('fs/promises');
 const path = require('path');
+const zlib = require('zlib');
 
 const VIDEO_EXTENSIONS = new Set(['.mp4', '.mov', '.mkv', '.webm', '.avi', '.m4v']);
 const webWindows = new Map();
@@ -23,6 +25,573 @@ let showPipelineLog = false;
 const APP_LOG_FILE = path.join(app.getPath('userData'), 'ai-video-pipeline.log');
 const GROK_ROUTER_CHECKPOINT_FILE = path.join(app.getPath('userData'), 'grok-router-checkpoint.json');
 const GROK_ROUTER_ALLOWED_STATES = new Set(['available', 'active', 'cooldown', 'limited', 'login_required', 'invalid', 'disabled_by_user']);
+
+const GROKPROJ_SCHEMA_VERSION = 1;
+const GROKPKG_PACKAGE_VERSION = 1;
+const SECRET_KEY_PATTERN = /(api[_-]?key|cookie|password|passwd|secret|session[_-]?token|refresh[_-]?token|bearer|authorization|localStorage|sessionStorage|browserStorage|rawBrowserStorage)/i;
+const SECRET_VALUE_PATTERN = /(bearer\s+[a-z0-9._~+/=-]{8,}|sk-[a-z0-9_-]{12,}|xox[baprs]-[a-z0-9-]{8,}|(?:api[_-]?key|cookie|password|passwd|session[_-]?token|refresh[_-]?token)\s*[:=])/i;
+const EMAIL_PATTERN = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i;
+const PACKAGE_IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp']);
+const PACKAGE_VIDEO_EXTENSIONS = new Set(['.mp4', '.mov', '.webm']);
+const PACKAGE_AUDIO_EXTENSIONS = new Set(['.wav', '.mp3']);
+const PACKAGE_MEDIA_EXTENSIONS = new Set([...PACKAGE_IMAGE_EXTENSIONS, ...PACKAGE_VIDEO_EXTENSIONS, ...PACKAGE_AUDIO_EXTENSIONS]);
+const PACKAGE_EXECUTABLE_EXTENSIONS = new Set(['.exe', '.bat', '.cmd', '.ps1', '.js', '.vbs', '.sh', '.dll', '.msi', '.scr']);
+
+function ensureGrokprojPath(filePath) {
+  if (!filePath || path.extname(filePath).toLowerCase() !== '.grokproj') {
+    throw new Error('Project file must use the .grokproj extension.');
+  }
+  return filePath;
+}
+
+function ensureGrokpkgPath(filePath) {
+  if (!filePath || path.extname(filePath).toLowerCase() !== '.grokpkg') {
+    throw new Error('Portable project package must use the .grokpkg extension.');
+  }
+  return filePath;
+}
+
+function hasFullPrivateEmail(value) {
+  const match = String(value || '').match(EMAIL_PATTERN);
+  if (!match) return false;
+  return !/^\*+@/.test(match[0]) && !/\*{2,}/.test(match[0]);
+}
+
+function sanitizeProjectValue(value) {
+  if (Array.isArray(value)) return value.map((item) => sanitizeProjectValue(item));
+  if (value && typeof value === 'object') {
+    const clean = {};
+    for (const [key, child] of Object.entries(value)) {
+      if (SECRET_KEY_PATTERN.test(key)) continue;
+      clean[key] = sanitizeProjectValue(child);
+    }
+    return clean;
+  }
+  if (typeof value === 'string') return value.replace(EMAIL_PATTERN, (email) => (/^\*+@|\*{2,}/.test(email) ? email : maskRouterText(email)));
+  return value;
+}
+
+function assertNoProjectSecrets(value, keyPath = []) {
+  if (Array.isArray(value)) return value.forEach((item, index) => assertNoProjectSecrets(item, keyPath.concat(String(index))));
+  if (value && typeof value === 'object') {
+    for (const [key, child] of Object.entries(value)) {
+      if (SECRET_KEY_PATTERN.test(key)) throw new Error(`Project payload contains disallowed secret field: ${keyPath.concat(key).join('.')}`);
+      assertNoProjectSecrets(child, keyPath.concat(key));
+    }
+    return;
+  }
+  if (typeof value === 'string') {
+    if (SECRET_VALUE_PATTERN.test(value)) throw new Error(`Project payload contains secret-like value at: ${keyPath.join('.') || 'root'}`);
+    if (hasFullPrivateEmail(value)) throw new Error('Project payload contains a full private email address.');
+  }
+}
+
+function assertObjectField(payload, key) {
+  if (!payload[key] || typeof payload[key] !== 'object' || Array.isArray(payload[key])) {
+    throw new Error(`Invalid .grokproj: ${key} is required.`);
+  }
+}
+
+function validateProjectPayload(payload) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error('Invalid .grokproj: root payload must be an object.');
+  if (typeof payload.schemaVersion !== 'number') throw new Error('Invalid .grokproj: schemaVersion is required.');
+  if (payload.schemaVersion > GROKPROJ_SCHEMA_VERSION) throw new Error(`Unsupported future .grokproj schemaVersion ${payload.schemaVersion}. App supports ${GROKPROJ_SCHEMA_VERSION}.`);
+  if (payload.schemaVersion !== GROKPROJ_SCHEMA_VERSION) throw new Error(`Unsupported .grokproj schemaVersion ${payload.schemaVersion}. App supports ${GROKPROJ_SCHEMA_VERSION}.`);
+  if (!payload.project || typeof payload.project !== 'object') throw new Error('Invalid .grokproj: project is required.');
+  if (!Array.isArray(payload.project.scenes)) throw new Error('Invalid .grokproj: project.scenes[] is required.');
+  ['inputs', 'config', 'router', 'assets'].forEach((key) => assertObjectField(payload, key));
+  if (!Array.isArray(payload.previewTimeline)) throw new Error('Invalid .grokproj: previewTimeline[] is required.');
+  if (!payload.runtime || typeof payload.runtime !== 'object') throw new Error('Invalid .grokproj: runtime is required.');
+  assertNoProjectSecrets(payload);
+  return payload;
+}
+
+async function newProjectSession(event, options = {}) {
+  if (options?.hasUnsavedChanges) {
+    const messageOptions = {
+      type: 'question',
+      title: 'Unsaved Project',
+      message: 'Current project has unsaved changes.',
+      detail: `Save before ${options.actionLabel || 'continuing'}?`,
+      buttons: ['Save', 'Discard', 'Cancel'],
+      defaultId: 0,
+      cancelId: 2,
+    };
+    const window = event?.sender ? BrowserWindow.fromWebContents(event.sender) : null;
+    const result = window ? await dialog.showMessageBox(window, messageOptions) : await dialog.showMessageBox(messageOptions);
+    return { ok: true, action: ['save', 'discard', 'cancel'][result.response] || 'cancel' };
+  }
+  return { ok: true, schemaVersion: GROKPROJ_SCHEMA_VERSION, createdAt: new Date().toISOString() };
+}
+
+async function saveProjectSessionFile(_event, payload = {}) {
+  const safePayload = validateProjectPayload(sanitizeProjectValue(payload));
+  const result = await dialog.showSaveDialog({
+    title: 'Save Project Session',
+    defaultPath: `${sanitizeFileName(safePayload.project?.name || 'ai-scene-project')}.grokproj`,
+    filters: [{ name: 'Grok Project', extensions: ['grokproj'] }],
+  });
+  if (result.canceled || !result.filePath) return { ok: false, canceled: true };
+  const filePath = ensureGrokprojPath(result.filePath.toLowerCase().endsWith('.grokproj') ? result.filePath : `${result.filePath}.grokproj`);
+  await fs.writeFile(filePath, JSON.stringify(safePayload, null, 2), 'utf8');
+  return { ok: true, filePath, payload: safePayload };
+}
+
+async function openProjectSessionFile() {
+  const result = await dialog.showOpenDialog({ title: 'Open Project Session', properties: ['openFile'], filters: [{ name: 'Grok Project', extensions: ['grokproj'] }] });
+  if (result.canceled || !result.filePaths?.[0]) return { ok: false, canceled: true };
+  const filePath = ensureGrokprojPath(result.filePaths[0]);
+  let parsed;
+  try { parsed = JSON.parse(await fs.readFile(filePath, 'utf8')); } catch (_error) { throw new Error('Invalid .grokproj: file is not valid JSON.'); }
+  const payload = validateProjectPayload(sanitizeProjectValue(parsed));
+  payload.runtime = { ...payload.runtime, autoRun: false, waitingForUserStart: true, active: false };
+  return { ok: true, filePath, payload };
+}
+
+function crc32(buffer) {
+  const table = crc32.table || (crc32.table = Array.from({ length: 256 }, (_, index) => {
+    let value = index;
+    for (let bit = 0; bit < 8; bit += 1) value = value & 1 ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
+    return value >>> 0;
+  }));
+  let crc = 0xffffffff;
+  for (const byte of buffer) crc = table[(crc ^ byte) & 0xff] ^ (crc >>> 8);
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function dosDateTime(date = new Date()) {
+  const year = Math.max(1980, date.getFullYear());
+  const dosTime = (date.getHours() << 11) | (date.getMinutes() << 5) | Math.floor(date.getSeconds() / 2);
+  const dosDate = ((year - 1980) << 9) | ((date.getMonth() + 1) << 5) | date.getDate();
+  return { dosTime, dosDate };
+}
+
+function createZipBuffer(entries) {
+  const chunks = [];
+  const central = [];
+  let offset = 0;
+  const { dosTime, dosDate } = dosDateTime();
+  for (const entry of entries) {
+    const nameBuffer = Buffer.from(entry.name, 'utf8');
+    const data = Buffer.isBuffer(entry.data) ? entry.data : Buffer.from(String(entry.data || ''), 'utf8');
+    const crc = crc32(data);
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034b50, 0);
+    local.writeUInt16LE(20, 4);
+    local.writeUInt16LE(0x0800, 6);
+    local.writeUInt16LE(0, 8);
+    local.writeUInt16LE(dosTime, 10);
+    local.writeUInt16LE(dosDate, 12);
+    local.writeUInt32LE(crc, 14);
+    local.writeUInt32LE(data.length, 18);
+    local.writeUInt32LE(data.length, 22);
+    local.writeUInt16LE(nameBuffer.length, 26);
+    local.writeUInt16LE(0, 28);
+    chunks.push(local, nameBuffer, data);
+
+    const centralHeader = Buffer.alloc(46);
+    centralHeader.writeUInt32LE(0x02014b50, 0);
+    centralHeader.writeUInt16LE(20, 4);
+    centralHeader.writeUInt16LE(20, 6);
+    centralHeader.writeUInt16LE(0x0800, 8);
+    centralHeader.writeUInt16LE(0, 10);
+    centralHeader.writeUInt16LE(dosTime, 12);
+    centralHeader.writeUInt16LE(dosDate, 14);
+    centralHeader.writeUInt32LE(crc, 16);
+    centralHeader.writeUInt32LE(data.length, 20);
+    centralHeader.writeUInt32LE(data.length, 24);
+    centralHeader.writeUInt16LE(nameBuffer.length, 28);
+    centralHeader.writeUInt16LE(0, 30);
+    centralHeader.writeUInt16LE(0, 32);
+    centralHeader.writeUInt16LE(0, 34);
+    centralHeader.writeUInt16LE(0, 36);
+    centralHeader.writeUInt32LE(0, 38);
+    centralHeader.writeUInt32LE(offset, 42);
+    central.push(centralHeader, nameBuffer);
+    offset += local.length + nameBuffer.length + data.length;
+  }
+  const centralSize = central.reduce((sum, item) => sum + item.length, 0);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(0, 4);
+  end.writeUInt16LE(0, 6);
+  end.writeUInt16LE(entries.length, 8);
+  end.writeUInt16LE(entries.length, 10);
+  end.writeUInt32LE(centralSize, 12);
+  end.writeUInt32LE(offset, 16);
+  end.writeUInt16LE(0, 20);
+  return Buffer.concat([...chunks, ...central, end]);
+}
+
+function parseZipBuffer(buffer) {
+  const eocdSignature = 0x06054b50;
+  let eocdOffset = -1;
+  for (let index = buffer.length - 22; index >= Math.max(0, buffer.length - 65557); index -= 1) {
+    if (buffer.readUInt32LE(index) === eocdSignature) {
+      eocdOffset = index;
+      break;
+    }
+  }
+  if (eocdOffset < 0) throw new Error('Invalid .grokpkg: missing ZIP directory.');
+  const entryCount = buffer.readUInt16LE(eocdOffset + 10);
+  const centralOffset = buffer.readUInt32LE(eocdOffset + 16);
+  if (centralOffset >= buffer.length) throw new Error('Invalid .grokpkg: bad ZIP directory offset.');
+  const entries = [];
+  let ptr = centralOffset;
+  for (let index = 0; index < entryCount; index += 1) {
+    if (ptr + 46 > buffer.length) throw new Error('Invalid .grokpkg: truncated ZIP directory.');
+    if (buffer.readUInt32LE(ptr) !== 0x02014b50) throw new Error('Invalid .grokpkg: corrupt ZIP directory.');
+    const method = buffer.readUInt16LE(ptr + 10);
+    const compressedSize = buffer.readUInt32LE(ptr + 20);
+    const uncompressedSize = buffer.readUInt32LE(ptr + 24);
+    const nameLength = buffer.readUInt16LE(ptr + 28);
+    const extraLength = buffer.readUInt16LE(ptr + 30);
+    const commentLength = buffer.readUInt16LE(ptr + 32);
+    const localOffset = buffer.readUInt32LE(ptr + 42);
+    if (ptr + 46 + nameLength + extraLength + commentLength > buffer.length) throw new Error('Invalid .grokpkg: truncated ZIP entry name.');
+    const name = buffer.slice(ptr + 46, ptr + 46 + nameLength).toString('utf8');
+    ptr += 46 + nameLength + extraLength + commentLength;
+    if (localOffset + 30 > buffer.length) throw new Error('Invalid .grokpkg: bad ZIP entry offset.');
+    if (buffer.readUInt32LE(localOffset) !== 0x04034b50) throw new Error('Invalid .grokpkg: corrupt ZIP entry.');
+    const localNameLength = buffer.readUInt16LE(localOffset + 26);
+    const localExtraLength = buffer.readUInt16LE(localOffset + 28);
+    const dataOffset = localOffset + 30 + localNameLength + localExtraLength;
+    if (dataOffset + compressedSize > buffer.length) throw new Error(`Invalid .grokpkg: truncated ZIP data for ${name}.`);
+    const compressed = buffer.slice(dataOffset, dataOffset + compressedSize);
+    let data;
+    if (method === 0) data = compressed;
+    else if (method === 8) data = zlib.inflateRawSync(compressed);
+    else throw new Error(`Invalid .grokpkg: unsupported compression method ${method}.`);
+    if (data.length !== uncompressedSize) throw new Error(`Invalid .grokpkg: bad size for ${name}.`);
+    entries.push({ name, data });
+  }
+  return entries;
+}
+
+function decodePackagePathForSafety(name) {
+  let decoded = String(name || '').replace(/\\/g, '/');
+  for (let i = 0; i < 3; i += 1) {
+    try {
+      const next = decodeURIComponent(decoded).replace(/\\/g, '/');
+      if (next === decoded) break;
+      decoded = next;
+    } catch (_error) {
+      break;
+    }
+  }
+  return decoded;
+}
+
+function isUnsafePackagePath(name) {
+  const value = String(name || '').replace(/\\/g, '/');
+  return !value || value.startsWith('/') || /^[a-z]:/i.test(value) || value.split('/').includes('..');
+}
+
+function normalizePackageEntryName(name) {
+  const clean = String(name || '').replace(/\\/g, '/');
+  const decoded = decodePackagePathForSafety(clean);
+  if (isUnsafePackagePath(clean) || isUnsafePackagePath(decoded)) {
+    throw new Error(`Invalid .grokpkg: unsafe package path ${name}.`);
+  }
+  return clean;
+}
+
+function buildPackageEntryMap(entries) {
+  const entryMap = new Map();
+  for (const entry of entries) {
+    const name = normalizePackageEntryName(entry.name);
+    if (entryMap.has(name)) throw new Error(`Invalid .grokpkg: duplicate package entry ${name}.`);
+    entryMap.set(name, entry.data);
+  }
+  return entryMap;
+}
+
+function sanitizePackageWarningValue(value) {
+  const clean = sanitizeProjectValue(value);
+  if (typeof clean === 'string' && SECRET_VALUE_PATTERN.test(clean)) return '[redacted]';
+  if (Array.isArray(clean)) return clean.map(sanitizePackageWarningValue);
+  if (clean && typeof clean === 'object') {
+    const next = {};
+    for (const [key, child] of Object.entries(clean)) {
+      if (SECRET_KEY_PATTERN.test(key)) continue;
+      next[key] = sanitizePackageWarningValue(child);
+    }
+    return next;
+  }
+  return clean;
+}
+
+function sanitizePackageWarnings(warnings) {
+  if (!Array.isArray(warnings)) return [];
+  return warnings.slice(0, 200).map(sanitizePackageWarningValue).filter((warning) => warning && typeof warning === 'object' && !Array.isArray(warning));
+}
+
+function validatePortableManifest(manifest) {
+  if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) {
+    throw new Error('Invalid .grokpkg: manifest.json must be an object.');
+  }
+  if (typeof manifest.packageVersion !== 'number') {
+    throw new Error('Invalid .grokpkg: manifest packageVersion is required.');
+  }
+  if (manifest.packageVersion > GROKPKG_PACKAGE_VERSION) {
+    throw new Error(`Unsupported .grokpkg packageVersion ${manifest.packageVersion}. App supports ${GROKPKG_PACKAGE_VERSION}.`);
+  }
+  if (manifest.schemaVersion != null && manifest.schemaVersion !== GROKPROJ_SCHEMA_VERSION) {
+    throw new Error(`Unsupported .grokpkg schemaVersion ${manifest.schemaVersion}. App supports ${GROKPROJ_SCHEMA_VERSION}.`);
+  }
+  return manifest;
+}
+
+function sanitizePackageFileName(value, fallback = 'asset') {
+  return sanitizeFileName(String(value || fallback)).replace(/^-+|-+$/g, '') || fallback;
+}
+
+function packagePathForAsset(kind, sourcePath, sceneId, usedPaths) {
+  const ext = path.extname(sourcePath).toLowerCase();
+  const folder = kind === 'image' ? 'assets/images' : kind === 'video' ? 'assets/videos' : 'assets/final';
+  const baseName = sanitizePackageFileName(path.basename(sourcePath, ext), kind);
+  const scenePrefix = sceneId ? `${sanitizePackageFileName(sceneId, 'scene')}_` : '';
+  let candidate = `${folder}/${scenePrefix}${baseName}${ext}`;
+  let counter = 2;
+  while (usedPaths.has(candidate)) {
+    candidate = `${folder}/${scenePrefix}${baseName}_${counter}${ext}`;
+    counter += 1;
+  }
+  usedPaths.add(candidate);
+  return candidate;
+}
+
+function addPortableAsset(items, sourcePath, kind, sceneId = null) {
+  if (!sourcePath) return;
+  const ext = path.extname(sourcePath).toLowerCase();
+  if (!PACKAGE_MEDIA_EXTENSIONS.has(ext)) return;
+  items.push({ sourcePath, kind, sceneId });
+}
+
+function collectPortableAssets(payload) {
+  const items = [];
+  for (const [index, scene] of (payload.project?.scenes || []).entries()) {
+    const sceneId = scene.sceneId || scene.id || `scene-${String(index + 1).padStart(3, '0')}`;
+    addPortableAsset(items, scene.imagePath, 'image', sceneId);
+    addPortableAsset(items, scene.videoPath, 'video', sceneId);
+  }
+  for (const item of payload.assets?.images || []) addPortableAsset(items, item.path, 'image', item.sceneId || null);
+  for (const item of payload.assets?.videos || []) addPortableAsset(items, item.path, 'video', item.sceneId || null);
+  for (const item of payload.assets?.finalOutputs || []) addPortableAsset(items, item.path, 'final', item.sceneId || null);
+  for (const item of payload.previewTimeline || []) {
+    addPortableAsset(items, item.keyframePath, 'image', item.sceneId || null);
+    addPortableAsset(items, item.videoPath, 'video', item.sceneId || null);
+    addPortableAsset(items, item.outputPath, 'final', item.sceneId || null);
+  }
+  if (payload.project?.finalVideoPath) addPortableAsset(items, payload.project.finalVideoPath, 'final', null);
+  return items;
+}
+
+function rewriteAssetPathValue(value, pathMap, warnings, missingFlagTarget = null, missingKey = '') {
+  if (!value) return value;
+  const mapped = pathMap.get(value);
+  if (mapped) {
+    if (missingFlagTarget && missingKey) missingFlagTarget[missingKey] = false;
+    return mapped;
+  }
+  if (missingFlagTarget && missingKey) missingFlagTarget[missingKey] = true;
+  warnings.push({ type: 'missing_asset', path: value });
+  return value;
+}
+
+function rewritePayloadAssetPathsForPackage(payload, pathMap, warnings) {
+  for (const scene of payload.project?.scenes || []) {
+    scene.imagePath = rewriteAssetPathValue(scene.imagePath, pathMap, warnings, scene, 'imageMissing');
+    scene.videoPath = rewriteAssetPathValue(scene.videoPath, pathMap, warnings, scene, 'videoMissing');
+    scene.imageAssetRef = scene.imagePath || scene.imageAssetRef || '';
+    scene.videoAssetRef = scene.videoPath || scene.videoAssetRef || '';
+  }
+  for (const item of payload.assets?.images || []) item.path = rewriteAssetPathValue(item.path, pathMap, warnings, item, 'missing');
+  for (const item of payload.assets?.videos || []) item.path = rewriteAssetPathValue(item.path, pathMap, warnings, item, 'missing');
+  for (const item of payload.assets?.finalOutputs || []) item.path = rewriteAssetPathValue(item.path, pathMap, warnings, item, 'missing');
+  for (const item of payload.previewTimeline || []) {
+    item.keyframePath = rewriteAssetPathValue(item.keyframePath, pathMap, warnings, item, 'keyframeMissing');
+    item.videoPath = rewriteAssetPathValue(item.videoPath, pathMap, warnings, item, 'videoMissing');
+    item.outputPath = rewriteAssetPathValue(item.outputPath, pathMap, warnings, item, 'previewMissing');
+  }
+  if (payload.project?.finalVideoPath) payload.project.finalVideoPath = rewriteAssetPathValue(payload.project.finalVideoPath, pathMap, warnings, payload.project, 'previewMissing');
+}
+
+function rewritePackagePathsToLocal(payload, relToLocal, warnings) {
+  const rewrite = (value, target, missingKey) => {
+    if (!value) return value;
+    const normalized = String(value).replace(/\\/g, '/');
+    if (!normalized.startsWith('assets/')) return value;
+    const localPath = relToLocal.get(normalized);
+    if (localPath) {
+      if (target && missingKey) target[missingKey] = false;
+      return localPath;
+    }
+    if (target && missingKey) target[missingKey] = true;
+    warnings.push({ type: 'missing_asset', path: normalized });
+    return value;
+  };
+  for (const scene of payload.project?.scenes || []) {
+    scene.imagePath = rewrite(scene.imagePath, scene, 'imageMissing');
+    scene.videoPath = rewrite(scene.videoPath, scene, 'videoMissing');
+    scene.imageAssetRef = scene.imagePath || scene.imageAssetRef || '';
+    scene.videoAssetRef = scene.videoPath || scene.videoAssetRef || '';
+  }
+  for (const item of payload.assets?.images || []) item.path = rewrite(item.path, item, 'missing');
+  for (const item of payload.assets?.videos || []) item.path = rewrite(item.path, item, 'missing');
+  for (const item of payload.assets?.finalOutputs || []) item.path = rewrite(item.path, item, 'missing');
+  for (const item of payload.previewTimeline || []) {
+    item.keyframePath = rewrite(item.keyframePath, item, 'keyframeMissing');
+    item.videoPath = rewrite(item.videoPath, item, 'videoMissing');
+    item.outputPath = rewrite(item.outputPath, item, 'previewMissing');
+  }
+  if (payload.project?.finalVideoPath) payload.project.finalVideoPath = rewrite(payload.project.finalVideoPath, payload.project, 'previewMissing');
+}
+
+function parseChecksumsEntry(entryMap, warnings) {
+  const raw = entryMap.get('checksums.json');
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw.toString('utf8'));
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch (_error) {
+    warnings.push({ type: 'invalid_checksums', path: 'checksums.json' });
+    return {};
+  }
+}
+
+function checksumMatches(name, data, checksums, warnings) {
+  const expected = checksums[name];
+  if (!expected) return true;
+  const actual = crypto.createHash('sha256').update(data).digest('hex');
+  if (String(expected).toLowerCase() === actual) return true;
+  warnings.push({ type: 'checksum_mismatch', path: name });
+  return false;
+}
+
+async function exportPortableProjectPackage(_event, payload = {}) {
+  const safePayload = validateProjectPayload(sanitizeProjectValue(payload));
+  const packagePayload = JSON.parse(JSON.stringify(safePayload));
+  const result = await dialog.showSaveDialog({
+    title: 'Export Portable Project Package',
+    defaultPath: `${sanitizeFileName(packagePayload.project?.name || 'ai-scene-project')}.grokpkg`,
+    filters: [{ name: 'Grok Portable Package', extensions: ['grokpkg'] }],
+  });
+  if (result.canceled || !result.filePath) return { ok: false, canceled: true };
+
+  const filePath = ensureGrokpkgPath(result.filePath.toLowerCase().endsWith('.grokpkg') ? result.filePath : `${result.filePath}.grokpkg`);
+  const warnings = [];
+  const checksums = {};
+  const entries = [];
+  const pathMap = new Map();
+  const usedPackagePaths = new Set(['manifest.json', 'project.grokproj', 'checksums.json']);
+  const copiedSources = new Map();
+
+  for (const asset of collectPortableAssets(packagePayload)) {
+    if (copiedSources.has(asset.sourcePath)) {
+      pathMap.set(asset.sourcePath, copiedSources.get(asset.sourcePath));
+      continue;
+    }
+    const ext = path.extname(asset.sourcePath).toLowerCase();
+    if (!PACKAGE_MEDIA_EXTENSIONS.has(ext)) {
+      warnings.push({ type: 'skipped_asset_type', path: asset.sourcePath });
+      continue;
+    }
+    let bytes;
+    try {
+      bytes = await fs.readFile(asset.sourcePath);
+    } catch (_error) {
+      warnings.push({ type: 'missing_asset', path: asset.sourcePath, sceneId: asset.sceneId || null });
+      continue;
+    }
+    const packagePath = packagePathForAsset(asset.kind, asset.sourcePath, asset.sceneId, usedPackagePaths);
+    entries.push({ name: packagePath, data: bytes });
+    checksums[packagePath] = crypto.createHash('sha256').update(bytes).digest('hex');
+    copiedSources.set(asset.sourcePath, packagePath);
+    pathMap.set(asset.sourcePath, packagePath);
+  }
+
+  rewritePayloadAssetPathsForPackage(packagePayload, pathMap, warnings);
+  packagePayload.runtime = { ...packagePayload.runtime, autoRun: false, waitingForUserStart: true, active: false };
+  validateProjectPayload(packagePayload);
+
+  const manifestWarnings = sanitizePackageWarnings(warnings);
+  const manifest = {
+    packageVersion: GROKPKG_PACKAGE_VERSION,
+    createdAt: new Date().toISOString(),
+    appVersion: packagePayload.appVersion || 'electron',
+    projectName: packagePayload.project?.name || 'Untitled Project',
+    schemaVersion: packagePayload.schemaVersion,
+    assetCount: entries.length,
+    warnings: manifestWarnings,
+  };
+  const zip = createZipBuffer([
+    { name: 'manifest.json', data: JSON.stringify(manifest, null, 2) },
+    { name: 'project.grokproj', data: JSON.stringify(packagePayload, null, 2) },
+    { name: 'checksums.json', data: JSON.stringify(checksums, null, 2) },
+    ...entries,
+  ]);
+  await fs.writeFile(filePath, zip);
+  return { ok: true, filePath, manifest, payload: packagePayload, warnings: manifestWarnings, assetCount: entries.length };
+}
+
+async function openPortableProjectPackage() {
+  const result = await dialog.showOpenDialog({ title: 'Open Portable Project Package', properties: ['openFile'], filters: [{ name: 'Grok Portable Package', extensions: ['grokpkg'] }] });
+  if (result.canceled || !result.filePaths?.[0]) return { ok: false, canceled: true };
+  const filePath = ensureGrokpkgPath(result.filePaths[0]);
+  const entries = parseZipBuffer(await fs.readFile(filePath));
+  const entryMap = buildPackageEntryMap(entries);
+  const manifestRaw = entryMap.get('manifest.json');
+  const projectRaw = entryMap.get('project.grokproj');
+  if (!manifestRaw || !projectRaw) throw new Error('Invalid .grokpkg: manifest.json and project.grokproj are required.');
+  let manifest;
+  let parsed;
+  try {
+    manifest = JSON.parse(manifestRaw.toString('utf8'));
+    parsed = JSON.parse(projectRaw.toString('utf8'));
+  } catch (_error) {
+    throw new Error('Invalid .grokpkg: manifest/project JSON is invalid.');
+  }
+  validatePortableManifest(manifest);
+  const payload = validateProjectPayload(sanitizeProjectValue(parsed));
+  const warnings = sanitizePackageWarnings(manifest.warnings);
+  const checksums = parseChecksumsEntry(entryMap, warnings);
+  const relToLocal = new Map();
+  const extractBase = path.join(app.getPath('userData'), 'portable-project-assets');
+  await fs.mkdir(extractBase, { recursive: true });
+  const extractRoot = await fs.mkdtemp(path.join(extractBase, `${sanitizeFileName(payload.project?.name || 'project')}-`));
+  const extractedNames = new Set();
+
+  for (const entry of entries) {
+    const name = normalizePackageEntryName(entry.name);
+    if (['manifest.json', 'project.grokproj', 'checksums.json'].includes(name) || name.endsWith('/')) continue;
+    const ext = path.extname(name).toLowerCase();
+    if (PACKAGE_EXECUTABLE_EXTENSIONS.has(ext)) {
+      warnings.push({ type: 'skipped_executable', path: name });
+      continue;
+    }
+    if (!name.startsWith('assets/') || !PACKAGE_MEDIA_EXTENSIONS.has(ext)) {
+      warnings.push({ type: 'skipped_package_entry', path: name });
+      continue;
+    }
+    if (!checksumMatches(name, entry.data, checksums, warnings)) continue;
+    if (extractedNames.has(name)) {
+      warnings.push({ type: 'skipped_duplicate_entry', path: name });
+      continue;
+    }
+    extractedNames.add(name);
+    const targetPath = path.resolve(extractRoot, ...name.split('/'));
+    if (!targetPath.startsWith(path.resolve(extractRoot) + path.sep)) throw new Error(`Invalid .grokpkg: unsafe extraction path ${name}.`);
+    await fs.mkdir(path.dirname(targetPath), { recursive: true });
+    await fs.writeFile(targetPath, entry.data);
+    relToLocal.set(name, targetPath);
+  }
+
+  rewritePackagePathsToLocal(payload, relToLocal, warnings);
+  payload.runtime = { ...payload.runtime, autoRun: false, waitingForUserStart: true, active: false };
+  return { ok: true, filePath, payload, manifest, warnings: sanitizePackageWarnings(warnings), assetCount: relToLocal.size, extractedTo: extractRoot };
+}
+
 const grokRouterState = {
   accountRouterEnabled: false,
   routingPolicy: 'round_robin',
@@ -221,6 +790,12 @@ function broadcastPipelineLogVisibility() {
   });
 }
 
+function sendProjectMenuCommand(command) {
+  const win = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows().find((item) => !item.isDestroyed());
+  if (!win || win.isDestroyed()) return;
+  win.webContents.send('project:menu-command', command);
+}
+
 function buildAppMenu() {
   const template = [
     {
@@ -229,22 +804,25 @@ function buildAppMenu() {
         {
           label: 'New Project',
           accelerator: 'CmdOrCtrl+N',
-          click: () => dialog.showMessageBox({
-            type: 'info',
-            title: 'New Project',
-            message: 'Đang phát triển',
-            detail: `Dev sandbox: ${path.join(__dirname, '..', 'dev_sandbox_project_session')}`,
-          }),
+          click: () => sendProjectMenuCommand('new'),
         },
         {
           label: 'Open Project...',
           accelerator: 'CmdOrCtrl+O',
-          click: () => dialog.showMessageBox({
-            type: 'info',
-            title: 'Open Project',
-            message: 'Đang phát triển',
-            detail: `Dev sandbox: ${path.join(__dirname, '..', 'dev_sandbox_project_session')}`,
-          }),
+          click: () => sendProjectMenuCommand('open'),
+        },
+        {
+          label: 'Open Portable Package...',
+          click: () => sendProjectMenuCommand('open-package'),
+        },
+        {
+          label: 'Save Project',
+          accelerator: 'CmdOrCtrl+S',
+          click: () => sendProjectMenuCommand('save'),
+        },
+        {
+          label: 'Export Portable Package...',
+          click: () => sendProjectMenuCommand('export-package'),
         },
         { type: 'separator' },
         { role: 'quit', label: 'Quit' },
@@ -3223,6 +3801,11 @@ app.whenReady().then(() => {
   ipcMain.handle('ai:split-prompt', splitPromptWithAI);
   ipcMain.handle('ai:generate-scene-prompts', generateScenePrompts);
   ipcMain.handle('project:export', exportProject);
+  ipcMain.handle('project:new-session', newProjectSession);
+  ipcMain.handle('project:save-session-file', saveProjectSessionFile);
+  ipcMain.handle('project:open-session-file', openProjectSessionFile);
+  ipcMain.handle('project:export-portable-package', exportPortableProjectPackage);
+  ipcMain.handle('project:open-portable-package', openPortableProjectPackage);
 
   buildAppMenu();
   createWindow();
