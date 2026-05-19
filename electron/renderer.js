@@ -21,6 +21,8 @@ const saveSessionBtn = document.querySelector('#save-session-btn');
 const newProjectBtn = document.querySelector('#new-project-btn');
 const openProjectBtn = document.querySelector('#open-project-btn');
 const saveProjectBtn = document.querySelector('#save-project-btn');
+const openPackageBtn = document.querySelector('#open-package-btn');
+const exportPackageBtn = document.querySelector('#export-package-btn');
 const projectSaveStatus = document.querySelector('#project-save-status');
 const missingAssetWarning = document.querySelector('#missing-asset-warning');
 const grokAccountSelect = document.querySelector('#grok-account-select');
@@ -876,6 +878,7 @@ function render() {
   exportBtn.disabled = !project;
   chooseOutputFolderBtn.disabled = !project;
   if (saveProjectBtn) saveProjectBtn.disabled = !project;
+  if (exportPackageBtn) exportPackageBtn.disabled = !project;
   autoRunBtn.disabled = false;
   openReviewBtn.disabled = !getCurrentReviewScene();
 
@@ -1075,12 +1078,18 @@ function renderAssetReview(scene) {
 }
 
 function renderImagePreview(scene) {
+  if (scene.imageMissing) {
+    return '<div class="review-hint">Linked keyframe file is missing on this machine. Scene data and prompts were preserved; regenerate or relink media.</div>';
+  }
   const src = scene.imageDataUrl || (scene.imagePath ? `file:///${String(scene.imagePath).replaceAll('\\', '/')}` : '');
   if (!src) return '';
   return `<figure class="scene-image-preview"><img src="${escapeHtml(src)}" alt="Scene ${scene.id} keyframe"><figcaption>Keyframe đã lưu</figcaption></figure>`;
 }
 
 function renderVideoPreview(scene) {
+  if (scene.videoMissing) {
+    return '<div class="review-hint">Linked video file is missing on this machine. Scene data and motion prompt were preserved; regenerate or relink media.</div>';
+  }
   if (!scene.videoPath) {
     if (scene.videoStatus) return `<div class="review-hint">Video đã gửi lên nền tảng. Nếu chưa tự tải được, tải thủ công rồi lưu vào folder scene.</div>`;
     return '';
@@ -1261,13 +1270,16 @@ function renderFinalPreview(result = null) {
     return;
   }
 
-  if (outputPath) {
+  if (outputPath && !project.previewMissing) {
     project.finalVideoPath = outputPath;
     project.finalVideoUpdatedAt = new Date().toISOString();
     if (result?.videos) project.finalTimeline = result.videos;
     persist();
     finalPreviewVideo.src = `${fileUrl(outputPath)}?t=${Date.now()}`;
     if (finalPreviewMeta) finalPreviewMeta.textContent = `${result?.count || project.finalTimeline?.length || 0} scene · ${outputPath}`;
+  } else if (outputPath && project.previewMissing) {
+    finalPreviewVideo.removeAttribute('src');
+    if (finalPreviewMeta) finalPreviewMeta.textContent = 'Final preview file is missing on this machine. Timeline metadata was preserved.';
   } else if (finalPreviewMeta) {
     finalPreviewMeta.textContent = 'Đã có video scene, bấm Refresh preview để merge bản final.';
   }
@@ -1282,7 +1294,7 @@ function renderFinalPreview(result = null) {
     const sceneNo = item.sceneNumber || index + 1;
     const scene = project.scenes.find((entry) => entry.id === sceneNo);
     const thumb = item.keyframePath || scene?.imagePath || '';
-    const thumbHtml = thumb
+    const thumbHtml = thumb && !item.keyframeMissing && !scene?.imageMissing
       ? `<img src="${fileUrl(thumb)}" alt="Keyframe scene ${sceneNo}" />`
       : `<div class="timeline-empty-thumb">S${sceneNo}</div>`;
     return `<article class="timeline-scene-card">
@@ -1454,7 +1466,11 @@ function getSceneFileRecord(scene, index) {
     motionPrompt: scene.motionPrompt || '',
     imagePath: scene.imagePath || '',
     videoPath: scene.videoPath || '',
+    imageAssetRef: scene.imageAssetRef || scene.imagePath || '',
+    videoAssetRef: scene.videoAssetRef || scene.videoPath || '',
+    stage: scene.stage || scene.progressStep || scene.status || '',
     errorClassification: scene.errorClassification || (scene.error ? 'scene_error' : null),
+    promptVersion: scene.promptVersion || 'v1',
     updatedAt: scene.updatedAt || new Date().toISOString(),
   };
 }
@@ -1592,9 +1608,15 @@ function normalizeRendererScene(scene = {}, index = 0) {
     imagePath: scene.imagePath || '',
     imageDataUrl: scene.imageDataUrl || '',
     videoPath: scene.videoPath || '',
+    imageAssetRef: scene.imageAssetRef || scene.imagePath || '',
+    videoAssetRef: scene.videoAssetRef || scene.videoPath || '',
+    imageMissing: Boolean(scene.imageMissing),
+    videoMissing: Boolean(scene.videoMissing),
     videoStatus: scene.videoStatus || '',
     reviewType: scene.reviewType || '',
     progressStep: scene.progressStep || '',
+    stage: scene.stage || scene.progressStep || scene.status || '',
+    promptVersion: scene.promptVersion || 'v1',
     updatedAt: scene.updatedAt || new Date().toISOString(),
   };
 }
@@ -1685,7 +1707,9 @@ function renderProjectSessionStatus() {
   }
   if (missingAssetWarning) {
     missingAssetWarning.hidden = !lastMissingAssetCount;
-    missingAssetWarning.textContent = lastMissingAssetCount ? `${lastMissingAssetCount} saved asset path(s) are missing. Related previews were cleared and can be regenerated.` : '';
+    missingAssetWarning.textContent = lastMissingAssetCount
+      ? `Project opened with missing linked assets: ${lastMissingAssetCount} file(s) not found. Scene data, prompts, and motion prompts were preserved. Missing media can be regenerated or relinked.`
+      : '';
   }
 }
 
@@ -1733,7 +1757,25 @@ async function saveProjectSessionFlow(options = {}) {
   projectDirty = false;
   persist();
   render();
-  if (!options.silent) setStatus(`Saved .grokproj${lastMissingAssetCount ? `; ${lastMissingAssetCount} missing asset path(s) cleared` : ''}.`, 'ok');
+  if (!options.silent) {
+    setStatus(lastMissingAssetCount
+      ? `Project saved. ${lastMissingAssetCount} linked asset file(s) are currently missing on this machine. Scene data and prompts were preserved.`
+      : 'Project saved as .grokproj.', 'ok');
+  }
+  return true;
+}
+
+async function exportPortableProjectPackageFlow() {
+  if (!project || !window.videoPlannerAPI?.exportPortableProjectPackage) return false;
+  const checked = await reconcileSavedAssets();
+  lastMissingAssetCount = checked.missing || 0;
+  const result = await window.videoPlannerAPI.exportPortableProjectPackage(getProjectSessionPayload());
+  if (!result?.ok) return false;
+  render();
+  const skipped = Array.isArray(result.warnings) ? result.warnings.length : 0;
+  setStatus(skipped
+    ? `Portable package exported successfully. ${result.assetCount || 0} assets bundled; ${skipped} asset warning(s). Scene data and prompts were preserved.`
+    : `Portable package exported successfully. ${result.assetCount || 0} assets bundled.`, 'ok');
   return true;
 }
 
@@ -1748,7 +1790,26 @@ async function openProjectSessionFlow() {
   projectDirty = Boolean(lastMissingAssetCount);
   persist();
   render();
-  setStatus(`Opened .grokproj. ${lastMissingAssetCount ? `${lastMissingAssetCount} missing asset path(s) need regeneration. ` : ''}Press Start pipeline to continue.`, lastMissingAssetCount ? 'error' : 'ok');
+  setStatus(lastMissingAssetCount
+    ? `Project opened with missing linked assets: ${lastMissingAssetCount} file(s) not found. Scene data, prompts, and motion prompts were preserved. Press Start pipeline to regenerate or relink media.`
+    : 'Opened .grokproj. Press Start pipeline to continue.', lastMissingAssetCount ? 'error' : 'ok');
+}
+
+async function openPortableProjectPackageFlow() {
+  if (!window.videoPlannerAPI?.openPortableProjectPackage) return;
+  if (!(await confirmUnsavedProjectAction('opening a portable project package'))) return;
+  const result = await window.videoPlannerAPI.openPortableProjectPackage();
+  if (!result?.ok) return;
+  applyProjectSessionPayload(result.payload, result.filePath);
+  const checked = await reconcileSavedAssets();
+  const warningCount = (Array.isArray(result.warnings) ? result.warnings.length : 0) + (checked.missing || 0);
+  lastMissingAssetCount = warningCount;
+  projectDirty = Boolean(warningCount);
+  persist();
+  render();
+  setStatus(warningCount
+    ? `Package opened. ${result.assetCount || 0} assets restored. ${warningCount} assets missing or skipped. Scene data and prompts were preserved.`
+    : `Package opened. ${result.assetCount || 0} assets restored. Press Start pipeline to continue.`, warningCount ? 'error' : 'ok');
 }
 
 function persist() {
@@ -1758,6 +1819,17 @@ function persist() {
 async function reconcileSavedAssets() {
   if (!project?.scenes?.length || !window.videoPlannerAPI?.assetExists) return { missing: 0 };
   let missing = 0;
+  const missingPaths = new Set();
+  const countMissingPath = (filePath) => {
+    if (!filePath || missingPaths.has(filePath)) return;
+    missingPaths.add(filePath);
+    missing += 1;
+  };
+  const markMissing = (target, field, missingField, isMissing) => {
+    if (!target) return;
+    target[missingField] = Boolean(isMissing);
+    if (target[field]) target[`${field}Exists`] = !isMissing;
+  };
   const pathMissingCache = new Map();
   const missingPath = async (filePath) => {
     if (!filePath) return false;
@@ -1767,34 +1839,26 @@ async function reconcileSavedAssets() {
     return isMissing;
   };
   for (const scene of project.scenes) {
-    if (scene.imagePath && await missingPath(scene.imagePath)) {
-      scene.imagePath = '';
-      scene.imageDataUrl = '';
-      if (['image_done', 'image_generated', 'video_pending', 'video_generating', 'video_done', 'video_generated', 'video_ready', 'asset_review'].includes(scene.status)) scene.status = 'image_pending';
-      missing += 1;
-    }
-    if (scene.videoPath && await missingPath(scene.videoPath)) {
-      scene.videoPath = '';
-      if (['video_done', 'video_generated', 'video_ready'].includes(scene.status)) scene.status = scene.imagePath ? 'image_done' : 'image_pending';
-      missing += 1;
-    }
+    const imageMissing = scene.imagePath && await missingPath(scene.imagePath);
+    const videoMissing = scene.videoPath && await missingPath(scene.videoPath);
+    markMissing(scene, 'imagePath', 'imageMissing', imageMissing);
+    markMissing(scene, 'videoPath', 'videoMissing', videoMissing);
+    if (imageMissing) countMissingPath(scene.imagePath);
+    if (videoMissing) countMissingPath(scene.videoPath);
   }
-  if (project.finalVideoPath && await missingPath(project.finalVideoPath)) {
-    project.finalVideoPath = '';
-    missing += 1;
-  }
+  const finalMissing = project.finalVideoPath && await missingPath(project.finalVideoPath);
+  markMissing(project, 'finalVideoPath', 'previewMissing', finalMissing);
+  if (finalMissing) countMissingPath(project.finalVideoPath);
   if (Array.isArray(project.finalTimeline)) {
-    const kept = [];
     for (const item of project.finalTimeline) {
       const videoMissing = item.videoPath && await missingPath(item.videoPath);
       const keyframeMissing = item.keyframePath && await missingPath(item.keyframePath);
-      if (videoMissing || keyframeMissing) {
-        missing += Number(Boolean(videoMissing)) + Number(Boolean(keyframeMissing));
-      } else {
-        kept.push(item);
-      }
+      markMissing(item, 'videoPath', 'videoMissing', videoMissing);
+      markMissing(item, 'keyframePath', 'keyframeMissing', keyframeMissing);
+      item.previewMissing = Boolean(videoMissing || keyframeMissing);
+      if (videoMissing) countMissingPath(item.videoPath);
+      if (keyframeMissing) countMissingPath(item.keyframePath);
     }
-    project.finalTimeline = kept;
   }
   return { missing };
 }
@@ -1860,6 +1924,8 @@ saveSessionBtn?.addEventListener('click', saveSessionForNextLaunch);
 newProjectBtn?.addEventListener('click', newProjectSessionFlow);
 openProjectBtn?.addEventListener('click', openProjectSessionFlow);
 saveProjectBtn?.addEventListener('click', saveProjectSessionFlow);
+openPackageBtn?.addEventListener('click', openPortableProjectPackageFlow);
+exportPackageBtn?.addEventListener('click', exportPortableProjectPackageFlow);
 [projectNameInput, storyInput, scriptInput, batchSizeInput, durationInput].forEach((control) => control?.addEventListener('input', () => {
   markProjectDirty();
   persist();
@@ -1979,6 +2045,8 @@ window.videoPlannerAPI?.onProjectMenuCommand?.((command) => {
   if (command === 'new') newProjectSessionFlow();
   if (command === 'open') openProjectSessionFlow();
   if (command === 'save') saveProjectSessionFlow();
+  if (command === 'open-package') openPortableProjectPackageFlow();
+  if (command === 'export-package') exportPortableProjectPackageFlow();
 });
 window.videoPlannerAPI?.appendAppLog?.({ source: 'renderer', kind: 'info', text: 'Renderer loaded' }).catch(() => null);
 

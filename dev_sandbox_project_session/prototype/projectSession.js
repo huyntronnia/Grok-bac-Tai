@@ -80,9 +80,15 @@ function sanitizeScene(scene, index) {
     motionPrompt: safeString(source.motionPrompt),
     imagePath: source.imagePath || null,
     videoPath: source.videoPath || null,
+    imageAssetRef: source.imageAssetRef || source.imagePath || null,
+    videoAssetRef: source.videoAssetRef || source.videoPath || null,
     status: safeString(source.status, 'draft'),
+    stage: safeString(source.stage || source.progressStep || source.status),
     progressStep: safeString(source.progressStep),
     reviewType: safeString(source.reviewType),
+    generatedTextOutput: stripSecretFields(source.generatedTextOutput || source.webOutput || null),
+    imageMissing: Boolean(source.imageMissing),
+    videoMissing: Boolean(source.videoMissing),
     errorClassification: source.errorClassification || null,
     promptVersion: safeString(source.promptVersion, 'v1'),
     updatedAt: safeString(source.updatedAt, nowIso())
@@ -126,6 +132,8 @@ function sanitizeRuntime(runtime) {
 const KEYFRAME_STATUSES = new Set(['image_pending', 'image_generating', 'keyframe_pending', 'keyframe_generating']);
 const IMAGE_READY_STATUSES = new Set(['image_done', 'image_generated', 'motion_prompt_pending', 'motion_prompt_generated', 'video_pending', 'video_generating']);
 const VIDEO_READY_STATUSES = new Set(['video_done', 'video_generated', 'video_ready']);
+const PACKAGE_MEDIA_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.mp4', '.mov', '.webm', '.wav', '.mp3']);
+const PACKAGE_EXECUTABLE_EXTENSIONS = new Set(['.exe', '.bat', '.cmd', '.ps1', '.js', '.vbs', '.sh', '.dll', '.msi', '.scr']);
 
 function sceneRef(scene, index = 0) {
   return String(scene?.sceneId || scene?.id || `scene-${String(index + 1).padStart(3, '0')}`);
@@ -166,6 +174,213 @@ function getNextResumeAction(projectState = {}) {
     return { action: 'generate_video', currentStage: 'generating_video', sceneId: sceneRef(scene, scene.sceneIndex), status: scene.status };
   }
   return { action: 'batch_complete', currentStage: 'batch_complete', sceneId: null, status: 'complete' };
+}
+
+function extensionOf(filePath = '') {
+  const match = String(filePath).toLowerCase().match(/(\.[^.\\/]+)$/);
+  return match ? match[1] : '';
+}
+
+function packageAssetPath(kind, sceneId, sourcePath) {
+  const folder = kind === 'image' ? 'assets/images' : kind === 'video' ? 'assets/videos' : 'assets/final';
+  const ext = extensionOf(sourcePath);
+  const name = String(sourcePath || `${kind}${ext}`).split(/[\\/]/).pop().replace(/[^a-z0-9._-]+/gi, '-') || `${kind}${ext}`;
+  const prefix = sceneId ? `${String(sceneId).replace(/[^a-z0-9_-]+/gi, '-')}_` : '';
+  return `${folder}/${prefix}${name}`;
+}
+
+function collectPackageAssetRefs(payload) {
+  const refs = [];
+  asObject(payload.project).scenes?.forEach?.((scene, index) => {
+    const sceneId = scene.sceneId || `scene-${String(index + 1).padStart(3, '0')}`;
+    if (scene.imagePath) refs.push({ kind: 'image', sceneId, path: scene.imagePath });
+    if (scene.videoPath) refs.push({ kind: 'video', sceneId, path: scene.videoPath });
+  });
+  for (const item of asObject(payload.assets).finalOutputs || []) {
+    if (item.path) refs.push({ kind: 'final', sceneId: item.sceneId || null, path: item.path });
+  }
+  for (const item of payload.previewTimeline || []) {
+    if (item.videoPath) refs.push({ kind: 'video', sceneId: item.sceneId || null, path: item.videoPath });
+    if (item.keyframePath) refs.push({ kind: 'image', sceneId: item.sceneId || null, path: item.keyframePath });
+    if (item.outputPath) refs.push({ kind: 'final', sceneId: item.sceneId || null, path: item.outputPath });
+  }
+  return refs;
+}
+
+function rewritePackagePath(value, pathMap, target = null, missingKey = '') {
+  if (!value) return value;
+  if (pathMap.has(value)) {
+    if (target && missingKey) target[missingKey] = false;
+    return pathMap.get(value);
+  }
+  if (target && missingKey) target[missingKey] = true;
+  return value;
+}
+
+function buildPortablePackagePlan(payload, assetExistsFn = () => true) {
+  const safe = sanitizeProjectPayload(payload);
+  const warnings = [];
+  const pathMap = new Map();
+  const assets = [];
+  for (const ref of collectPackageAssetRefs(safe)) {
+    const ext = extensionOf(ref.path);
+    if (!PACKAGE_MEDIA_EXTENSIONS.has(ext)) {
+      warnings.push({ type: 'skipped_asset_type', path: ref.path });
+      continue;
+    }
+    if (!assetExistsFn(ref.path, ref)) {
+      warnings.push({ type: 'missing_asset', path: ref.path, sceneId: ref.sceneId || null });
+      continue;
+    }
+    if (!pathMap.has(ref.path)) {
+      const packagePath = packageAssetPath(ref.kind, ref.sceneId, ref.path);
+      pathMap.set(ref.path, packagePath);
+      assets.push({ sourcePath: ref.path, packagePath, kind: ref.kind, sceneId: ref.sceneId || null });
+    }
+  }
+  for (const scene of safe.project.scenes) {
+    scene.imagePath = rewritePackagePath(scene.imagePath, pathMap, scene, 'imageMissing');
+    scene.videoPath = rewritePackagePath(scene.videoPath, pathMap, scene, 'videoMissing');
+    scene.imageAssetRef = scene.imagePath || scene.imageAssetRef || null;
+    scene.videoAssetRef = scene.videoPath || scene.videoAssetRef || null;
+  }
+  for (const item of safe.previewTimeline) {
+    item.keyframePath = rewritePackagePath(item.keyframePath, pathMap, item, 'keyframeMissing');
+    item.videoPath = rewritePackagePath(item.videoPath, pathMap, item, 'videoMissing');
+    item.outputPath = rewritePackagePath(item.outputPath, pathMap, item, 'previewMissing');
+  }
+  const checksums = {};
+  const safeWarnings = sanitizePackageWarnings(warnings);
+  return {
+    manifest: {
+      packageVersion: 1,
+      createdAt: nowIso(),
+      appVersion: safe.appVersion,
+      projectName: safe.project.name,
+      schemaVersion: safe.schemaVersion,
+      assetCount: assets.length,
+      warnings: safeWarnings
+    },
+    project: safe,
+    assets,
+    checksums,
+    packageEntries: ['manifest.json', 'project.grokproj', 'checksums.json', ...assets.map((asset) => asset.packagePath)],
+    warnings: safeWarnings
+  };
+}
+
+function decodePackagePathForSafety(name) {
+  let decoded = String(name || '').replace(/\\/g, '/');
+  for (let i = 0; i < 3; i += 1) {
+    try {
+      const next = decodeURIComponent(decoded).replace(/\\/g, '/');
+      if (next === decoded) break;
+      decoded = next;
+    } catch (_error) {
+      break;
+    }
+  }
+  return decoded;
+}
+
+function isUnsafePackagePath(name) {
+  const value = String(name || '').replace(/\\/g, '/');
+  return !value || value.startsWith('/') || /^[a-z]:/i.test(value) || value.split('/').includes('..');
+}
+
+function sanitizePackageWarningValue(value) {
+  if (Array.isArray(value)) return value.map(sanitizePackageWarningValue);
+  if (isObject(value)) {
+    const clean = {};
+    for (const [key, item] of Object.entries(value)) {
+      if (SECRET_KEY_RE.test(key)) continue;
+      clean[key] = sanitizePackageWarningValue(item);
+    }
+    return clean;
+  }
+  if (typeof value === 'string') {
+    if (SECRET_VALUE_RE.test(value)) return '[redacted]';
+    return value.replace(FULL_PRIVATE_EMAIL_RE, '[redacted-email]');
+  }
+  return value;
+}
+
+function sanitizePackageWarnings(warnings) {
+  if (!Array.isArray(warnings)) return [];
+  return warnings.slice(0, 200).map(sanitizePackageWarningValue).filter((warning) => isObject(warning));
+}
+
+function validatePackageEntryPath(name) {
+  const normalized = String(name || '').replace(/\\/g, '/');
+  const decoded = decodePackagePathForSafety(normalized);
+  if (isUnsafePackagePath(normalized) || isUnsafePackagePath(decoded)) {
+    return { ok: false, reason: 'path_traversal' };
+  }
+  const ext = extensionOf(normalized);
+  if (PACKAGE_EXECUTABLE_EXTENSIONS.has(ext)) return { ok: false, reason: 'executable' };
+  return { ok: true, normalized };
+}
+
+function openPortablePackagePlan(packageData, extractRoot = '/portable/extracted') {
+  const entries = Array.isArray(packageData.entries) ? packageData.entries : [];
+  const manifest = asObject(packageData.manifest);
+  const warnings = sanitizePackageWarnings(manifest.warnings);
+  if (typeof manifest.packageVersion !== 'number' || manifest.packageVersion > 1) {
+    return { ok: false, errors: ['Invalid or unsupported packageVersion.'] };
+  }
+  const project = packageData.project || entries.find((entry) => entry.name === 'project.grokproj')?.json;
+  const checksums = asObject(packageData.checksums);
+  const seenEntries = new Set();
+  for (const entry of entries) {
+    const validation = validatePackageEntryPath(entry.name);
+    if (!validation.ok && validation.reason === 'path_traversal') return { ok: false, errors: [`Unsafe package path: ${entry.name}`] };
+    if (!validation.ok && validation.reason === 'executable') warnings.push({ type: 'skipped_executable', path: entry.name });
+    if (validation.ok) {
+      if (seenEntries.has(validation.normalized)) return { ok: false, errors: [`Duplicate package entry: ${validation.normalized}`] };
+      seenEntries.add(validation.normalized);
+    }
+  }
+  const safe = sanitizeProjectPayload(project);
+  const mediaEntries = entries
+    .map((entry) => ({ ...entry, validation: validatePackageEntryPath(entry.name) }))
+    .filter((entry) => {
+      if (!entry.validation.ok || !entry.validation.normalized.startsWith('assets/') || !PACKAGE_MEDIA_EXTENSIONS.has(extensionOf(entry.validation.normalized))) return false;
+      if (checksums[entry.validation.normalized] && entry.sha256 && checksums[entry.validation.normalized] !== entry.sha256) {
+        warnings.push({ type: 'checksum_mismatch', path: entry.validation.normalized });
+        return false;
+      }
+      return true;
+    });
+  const relToLocal = new Map(mediaEntries.map((entry) => [entry.validation.normalized, `${extractRoot}/${entry.validation.normalized}`]));
+  const rewrite = (value, target, missingKey) => {
+    if (!value) return value;
+    const normalized = String(value).replace(/\\/g, '/');
+    if (!normalized.startsWith('assets/')) return value;
+    if (relToLocal.has(normalized)) {
+      if (target && missingKey) target[missingKey] = false;
+      return relToLocal.get(normalized);
+    }
+    if (target && missingKey) target[missingKey] = true;
+    warnings.push({ type: 'missing_asset', path: normalized });
+    return value;
+  };
+  for (const scene of safe.project.scenes) {
+    scene.imagePath = rewrite(scene.imagePath, scene, 'imageMissing');
+    scene.videoPath = rewrite(scene.videoPath, scene, 'videoMissing');
+  }
+  for (const item of safe.previewTimeline) {
+    item.keyframePath = rewrite(item.keyframePath, item, 'keyframeMissing');
+    item.videoPath = rewrite(item.videoPath, item, 'videoMissing');
+    item.outputPath = rewrite(item.outputPath, item, 'previewMissing');
+  }
+  return {
+    ok: true,
+    manifest,
+    project: safe,
+    assetCount: mediaEntries.length,
+    warnings: sanitizePackageWarnings(warnings),
+    state: restoreRuntimeState(safe).state
+  };
 }
 
 function sanitizeProjectPayload(payload) {
@@ -303,18 +518,48 @@ function buildSavePayload(currentState) {
 function reconcileAssetPaths(payload, assetExistsFn = () => true) {
   const warnings = [];
   const safe = sanitizeProjectPayload(payload);
-  const paths = [];
+  const seen = new Set();
+  const addWarning = (item) => {
+    if (!item.path) return;
+    const key = `${item.kind}:${item.sceneId || ''}:${item.path}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    warnings.push({ type: 'missing_asset', ...item });
+  };
   safe.project.scenes.forEach((scene) => {
-    if (scene.imagePath) paths.push({ kind: 'image', sceneId: scene.sceneId, path: scene.imagePath });
-    if (scene.videoPath) paths.push({ kind: 'video', sceneId: scene.sceneId, path: scene.videoPath });
+    const imageMissing = Boolean(scene.imagePath && !assetExistsFn(scene.imagePath, { kind: 'image', sceneId: scene.sceneId, path: scene.imagePath }));
+    const videoMissing = Boolean(scene.videoPath && !assetExistsFn(scene.videoPath, { kind: 'video', sceneId: scene.sceneId, path: scene.videoPath }));
+    scene.imageMissing = imageMissing;
+    scene.videoMissing = videoMissing;
+    if (imageMissing) addWarning({ kind: 'image', sceneId: scene.sceneId, path: scene.imagePath });
+    if (videoMissing) addWarning({ kind: 'video', sceneId: scene.sceneId, path: scene.videoPath });
   });
   for (const group of ['images', 'videos', 'finalOutputs']) {
     for (const asset of safe.assets[group] || []) {
-      if (asset?.path) paths.push({ kind: group, sceneId: asset.sceneId || null, path: asset.path });
+      const missing = Boolean(asset?.path && !assetExistsFn(asset.path, { kind: group, sceneId: asset.sceneId || null, path: asset.path }));
+      asset.missing = missing;
+      if (missing) addWarning({ kind: group, sceneId: asset.sceneId || null, path: asset.path });
     }
   }
-  for (const item of paths) {
-    if (!assetExistsFn(item.path, item)) warnings.push({ type: 'missing_asset', ...item });
+  safe.previewTimeline.forEach((item) => {
+    const videoMissing = Boolean(item.videoPath && !assetExistsFn(item.videoPath, { kind: 'preview_video', sceneId: item.sceneId || null, path: item.videoPath }));
+    const keyframeMissing = Boolean(item.keyframePath && !assetExistsFn(item.keyframePath, { kind: 'preview_keyframe', sceneId: item.sceneId || null, path: item.keyframePath }));
+    item.videoMissing = videoMissing;
+    item.keyframeMissing = keyframeMissing;
+    item.previewMissing = Boolean(videoMissing || keyframeMissing);
+    if (videoMissing) addWarning({ kind: 'preview_video', sceneId: item.sceneId || null, path: item.videoPath });
+    if (keyframeMissing) addWarning({ kind: 'preview_keyframe', sceneId: item.sceneId || null, path: item.keyframePath });
+  });
+  if (Array.isArray(safe.project.finalTimeline)) {
+    safe.project.finalTimeline.forEach((item) => {
+      const videoMissing = Boolean(item.videoPath && !assetExistsFn(item.videoPath, { kind: 'project_preview_video', sceneId: item.sceneId || null, path: item.videoPath }));
+      const keyframeMissing = Boolean(item.keyframePath && !assetExistsFn(item.keyframePath, { kind: 'project_preview_keyframe', sceneId: item.sceneId || null, path: item.keyframePath }));
+      item.videoMissing = videoMissing;
+      item.keyframeMissing = keyframeMissing;
+      item.previewMissing = Boolean(videoMissing || keyframeMissing);
+      if (videoMissing) addWarning({ kind: 'project_preview_video', sceneId: item.sceneId || null, path: item.videoPath });
+      if (keyframeMissing) addWarning({ kind: 'project_preview_keyframe', sceneId: item.sceneId || null, path: item.keyframePath });
+    });
   }
   return { payload: safe, warnings };
 }
@@ -375,6 +620,7 @@ function hasUnsavedChanges(state) {
 
 export {
   SUPPORTED_SCHEMA_VERSION,
+  buildPortablePackagePlan,
   buildSavePayload,
   createNewProjectSession,
   getNextResumeAction,
@@ -383,6 +629,7 @@ export {
   markSaved,
   migrateProjectFile,
   openProjectFile,
+  openPortablePackagePlan,
   reconcileAssetPaths,
   restoreRuntimeState,
   sanitizeProjectPayload,

@@ -119,7 +119,18 @@ projectSession.test.mjs: all tests passed
 - [x] Regression fixed: saving/opening mid-batch while scene 3 is in keyframe generation preserves `currentStage`, `currentSceneId`, `activeBatchIds`, `lastAction`, and `resumeMode`.
 - [x] Resume now chooses the next action by scene status, so keyframe/image work resumes before video routing.
 - [x] Regression tests cover mid-keyframe resume, image-ready/video-missing resume, and all-video batch-complete handling.
-- [x] Missing image/video/final preview paths are warnings and cleared from previews instead of crashing.
+- [x] Portability fix: `.grokproj` is treated as a project-state file that preserves scene data, prompts, motion prompts, config, runtime, final timeline metadata, and non-secret router metadata.
+- [x] Missing image/video/final preview paths are warnings and missing flags only; scene rows, raw scene text, image prompts, motion prompts, statuses, runtime, and timeline metadata are preserved.
+- [x] Regression tests cover opening a project on a new machine with missing linked media, saving generated motion prompts without asset files, and missing final preview media without deleting timeline metadata.
+- [x] `.grokproj` does not embed heavy image/video assets. Move projects by copying the asset folder alongside the `.grokproj`, regenerate missing assets after opening, or add future portable package export.
+- [x] `.grokpkg` portable package export added for project state plus referenced media assets.
+- [x] `.grokpkg` package structure includes `manifest.json`, `project.grokproj`, assets under `assets/images`, `assets/videos`, `assets/final`, and `checksums.json`.
+- [x] Export rewrites existing linked asset paths to package-relative paths and keeps missing assets as manifest warnings.
+- [x] Open Package validates untrusted input, rejects path traversal, skips executable/script entries, extracts allowed media only, rewrites paths to extracted files, and preserves no-auto-run.
+- [x] Hardening review: Open Package rejects encoded/double-encoded traversal, absolute paths, and duplicate entries.
+- [x] Hardening review: Open Package extracts into an app-managed unique folder and skips checksum-mismatched assets with warnings.
+- [x] Hardening review: Package warnings from untrusted manifests are sanitized before display.
+- [x] Regression tests cover package manifest, path rewrites, missing/corrupt assets, executable skips, path traversal rejection, checksum mismatch skip, sanitized warnings, and unchanged `.grokproj` open.
 - [x] Secret audit found policy/test guardrail strings only; no real secrets found.
 - [ ] Full human UI click QA remains because Electron GUI smoke could not launch from CLI approval.
 
@@ -135,5 +146,6 @@ projectSession.test.mjs: all tests passed
 
 Notes:
 - Root package exposes `start` and `dev` only; there is no root `test` lifecycle script.
-- Missing assets are warning-only and surfaced in the renderer after Open/Save reconciliation.
+- Missing assets are warning-only and surfaced in the renderer after Open/Save reconciliation; linked media previews may be unavailable, but scene data and prompts remain visible.
 - Secret scanning uses conservative patterns and should be paired with manual review before merge.
+- Future work: optional encrypted portable package export if needed.

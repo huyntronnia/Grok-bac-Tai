@@ -30,8 +30,10 @@ contextBridge.exposeInMainWorld('videoPlannerAPI', {
   newProjectSession: (options) => ipcRenderer.invoke('project:new-session', options),
   saveProjectSession: (payload) => ipcRenderer.invoke('project:save-session-file', payload),
   openProjectSession: () => ipcRenderer.invoke('project:open-session-file'),
+  exportPortableProjectPackage: (payload) => ipcRenderer.invoke('project:export-portable-package', payload),
+  openPortableProjectPackage: () => ipcRenderer.invoke('project:open-portable-package'),
   onProjectMenuCommand: (callback) => {
-    const allowed = new Set(['new', 'open', 'save']);
+    const allowed = new Set(['new', 'open', 'save', 'export-package', 'open-package']);
     const listener = (_event, command) => {
       if (allowed.has(command)) callback(command);
     };

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
+  buildPortablePackagePlan,
   buildSavePayload,
   createNewProjectSession,
   getNextResumeAction,
@@ -9,6 +10,7 @@ import {
   markDirty,
   markSaved,
   openProjectFile,
+  openPortablePackagePlan,
   reconcileAssetPaths,
   restoreRuntimeState,
   sanitizeProjectPayload,
@@ -247,5 +249,200 @@ const batchCompleteOpened = openProjectFile({
 });
 const batchCompleteDecision = getNextResumeAction(batchCompleteOpened.state);
 assert.equal(batchCompleteDecision.action, 'batch_complete', 'all video-generated scenes report batch complete safely');
+
+const portableMissingPayload = deepClone(sample);
+portableMissingPayload.project.scenes.forEach((scene, index) => {
+  scene.status = index < 2 ? 'video_generated' : 'image_generated';
+  scene.imagePath = `missing-machine/assets/scene-${String(index + 1).padStart(3, '0')}.png`;
+  scene.videoPath = index < 2 ? `missing-machine/assets/scene-${String(index + 1).padStart(3, '0')}.mp4` : null;
+  scene.rawSceneText = scene.rawSceneText || `Portable scene ${index + 1}`;
+  scene.imagePrompt = scene.imagePrompt || `Image prompt ${index + 1}`;
+  scene.motionPrompt = scene.motionPrompt || `Motion prompt ${index + 1}`;
+});
+portableMissingPayload.previewTimeline = portableMissingPayload.project.scenes.slice(0, 2).map((scene) => ({
+  sceneId: scene.sceneId,
+  videoPath: scene.videoPath,
+  keyframePath: scene.imagePath,
+  durationSeconds: 6,
+  name: `scene_${scene.sceneId}`
+}));
+const portableReconciled = reconcileAssetPaths(portableMissingPayload, () => false);
+assert.ok(portableReconciled.warnings.length > 0, 'missing portable assets return warnings');
+assert.equal(portableReconciled.payload.project.scenes.length, 3, 'missing assets do not remove scenes');
+portableReconciled.payload.project.scenes.forEach((scene, index) => {
+  assert.ok(scene.rawSceneText, `scene ${index + 1} raw text preserved`);
+  assert.ok(scene.imagePrompt, `scene ${index + 1} image prompt preserved`);
+  assert.ok(scene.motionPrompt, `scene ${index + 1} motion prompt preserved`);
+  assert.equal(scene.status, portableMissingPayload.project.scenes[index].status, `scene ${index + 1} status preserved`);
+});
+assert.equal(portableReconciled.payload.project.scenes[0].imageMissing, true, 'missing image marked on scene');
+assert.equal(portableReconciled.payload.project.scenes[0].videoMissing, true, 'missing video marked on scene');
+
+const missingAssetSavePayload = deepClone(portableMissingPayload);
+missingAssetSavePayload.project.scenes[2].motionPrompt = 'Generated motion prompt survives missing media';
+missingAssetSavePayload.project.scenes[2].status = 'image_generated';
+missingAssetSavePayload.project.scenes[2].imagePath = 'missing-machine/assets/scene-003.png';
+missingAssetSavePayload.project.scenes[2].videoPath = null;
+const missingAssetSaved = buildSavePayload(missingAssetSavePayload);
+assert.equal(missingAssetSaved.ok, true, 'Save payload builds when media files are absent');
+assert.equal(missingAssetSaved.payload.project.scenes[2].motionPrompt, 'Generated motion prompt survives missing media', 'Save preserves generated motion prompt without asset file');
+assert.equal(missingAssetSaved.payload.project.scenes[2].status, 'image_generated', 'Save preserves scene status without asset file');
+assertNoSecrets(missingAssetSaved.payload, 'portable missing asset save payload');
+
+const newMachineOpened = openProjectFile({
+  filePath: 'portable-new-machine.grokproj',
+  fileText: JSON.stringify(portableMissingPayload),
+  assetExistsFn: () => false
+});
+assert.equal(newMachineOpened.ok, true, 'portable project opens on new machine');
+assert.equal(newMachineOpened.state.project.scenes.length, portableMissingPayload.project.scenes.length, 'new machine restore keeps visible scene list');
+assert.equal(newMachineOpened.state.runtime.currentSceneId, portableMissingPayload.runtime.currentSceneId, 'new machine restore keeps current scene');
+assert.equal(newMachineOpened.state.runtime.currentStage, portableMissingPayload.runtime.currentStage, 'new machine restore keeps current stage');
+assert.equal(newMachineOpened.state.runtime.autoRun, false, 'new machine restore does not auto-run');
+assert.ok(newMachineOpened.warnings.length > 0, 'new machine restore reports missing asset warnings');
+assert.ok(newMachineOpened.state.project.scenes.every((scene) => scene.imagePrompt && scene.motionPrompt), 'new machine restore keeps prompts visible');
+
+const missingPreviewPayload = deepClone(sample);
+missingPreviewPayload.previewTimeline = [
+  { sceneId: 'scene-001', videoPath: 'missing-machine/final/scene-001.mp4', keyframePath: 'missing-machine/final/scene-001.png', durationSeconds: 6, name: 'scene_001' }
+];
+const missingPreviewOpened = openProjectFile({
+  filePath: 'missing-preview.grokproj',
+  fileText: JSON.stringify(missingPreviewPayload),
+  assetExistsFn: () => false
+});
+assert.equal(missingPreviewOpened.ok, true, 'project with missing preview opens');
+assert.equal(missingPreviewOpened.state.previewTimeline.length, 1, 'missing preview keeps timeline metadata');
+assert.equal(missingPreviewOpened.state.previewTimeline[0].previewMissing, true, 'missing preview is marked');
+assert.ok(missingPreviewOpened.warnings.some((warning) => warning.kind === 'preview_video'), 'missing preview warning returned');
+
+const packageSource = deepClone(sample);
+packageSource.project.scenes[0].imagePath = 'C:/project/assets/scene-001.png';
+packageSource.project.scenes[0].videoPath = 'C:/project/assets/scene-001.mp4';
+packageSource.project.scenes[1].imagePath = 'C:/project/assets/missing-scene-002.png';
+packageSource.project.scenes[1].motionPrompt = 'Generated motion prompt remains portable';
+packageSource.previewTimeline = [
+  { sceneId: 'scene-001', videoPath: 'C:/project/assets/scene-001.mp4', keyframePath: 'C:/project/assets/scene-001.png', durationSeconds: 6, name: 'scene_001' }
+];
+const packagePlan = buildPortablePackagePlan(packageSource, (assetPath) => !assetPath.includes('missing'));
+assert.ok(packagePlan.packageEntries.includes('manifest.json'), 'package plan includes manifest entry');
+assert.ok(packagePlan.packageEntries.includes('project.grokproj'), 'package plan includes project entry');
+assert.ok(packagePlan.packageEntries.includes('checksums.json'), 'package plan includes checksums entry');
+assert.ok(packagePlan.packageEntries.some((entry) => entry.startsWith('assets/')), 'package plan includes asset entries');
+assert.equal(packagePlan.manifest.projectName, sample.project.name, 'package manifest includes project name');
+assert.equal(packagePlan.manifest.schemaVersion, 1, 'package manifest includes schema version');
+assert.ok(packagePlan.manifest.assetCount >= 2, 'package manifest counts copied assets');
+assert.ok(packagePlan.manifest.warnings.some((warning) => warning.type === 'missing_asset'), 'package manifest includes asset warnings');
+assert.match(packagePlan.project.project.scenes[0].imagePath, /^assets\/images\//, 'export rewrites image path to package-relative path');
+assert.match(packagePlan.project.project.scenes[0].videoPath, /^assets\/videos\//, 'export rewrites video path to package-relative path');
+assert.equal(packagePlan.project.project.scenes[1].motionPrompt, 'Generated motion prompt remains portable', 'export preserves motion prompt with missing asset');
+assertNoSecrets(packagePlan.project, 'portable package project payload');
+assertNoSecrets(packagePlan.manifest, 'portable package manifest');
+assertNoSecrets(packagePlan.checksums, 'portable package checksums');
+
+const openedPackage = openPortablePackagePlan({
+  manifest: packagePlan.manifest,
+  project: packagePlan.project,
+  entries: [
+    { name: 'manifest.json', json: packagePlan.manifest },
+    { name: 'project.grokproj', json: packagePlan.project },
+    ...packagePlan.assets.map((asset) => ({ name: asset.packagePath }))
+  ]
+}, '/tmp/restored-package');
+assert.equal(openedPackage.ok, true, 'open portable package succeeds');
+assert.equal(openedPackage.state.project.scenes.length, packagePlan.project.project.scenes.length, 'open package restores all scenes');
+assert.ok(openedPackage.state.project.scenes[0].motionPrompt, 'open package restores motion prompt');
+assert.match(openedPackage.state.project.scenes[0].imagePath, /^\/tmp\/restored-package\/assets\/images\//, 'open package rewrites image path to extracted path');
+assert.match(openedPackage.state.project.scenes[0].videoPath, /^\/tmp\/restored-package\/assets\/videos\//, 'open package rewrites video path to extracted path');
+assert.equal(openedPackage.state.runtime.autoRun, false, 'open package does not auto-run');
+
+const traversalPackage = openPortablePackagePlan({
+  manifest: packagePlan.manifest,
+  project: packagePlan.project,
+  entries: [{ name: '../evil.exe' }, { name: 'project.grokproj', json: packagePlan.project }]
+});
+assert.equal(traversalPackage.ok, false, 'open package rejects path traversal entries');
+
+const encodedTraversalPackage = openPortablePackagePlan({
+  manifest: packagePlan.manifest,
+  project: packagePlan.project,
+  entries: [{ name: 'assets/%2e%2e/evil.png' }, { name: 'project.grokproj', json: packagePlan.project }]
+});
+assert.equal(encodedTraversalPackage.ok, false, 'open package rejects encoded traversal entries');
+
+const doubleEncodedTraversalPackage = openPortablePackagePlan({
+  manifest: packagePlan.manifest,
+  project: packagePlan.project,
+  entries: [{ name: 'assets/%252e%252e/evil.png' }, { name: 'project.grokproj', json: packagePlan.project }]
+});
+assert.equal(doubleEncodedTraversalPackage.ok, false, 'open package rejects double-encoded traversal entries');
+
+const absolutePathPackage = openPortablePackagePlan({
+  manifest: packagePlan.manifest,
+  project: packagePlan.project,
+  entries: [{ name: 'C:\\temp\\evil.png' }, { name: 'project.grokproj', json: packagePlan.project }]
+});
+assert.equal(absolutePathPackage.ok, false, 'open package rejects absolute path entries');
+
+const duplicateEntryPackage = openPortablePackagePlan({
+  manifest: packagePlan.manifest,
+  project: packagePlan.project,
+  entries: [
+    { name: 'project.grokproj', json: packagePlan.project },
+    { name: 'assets/videos/scene-001.mp4' },
+    { name: 'assets/videos/scene-001.mp4' }
+  ]
+});
+assert.equal(duplicateEntryPackage.ok, false, 'open package rejects duplicate entries');
+
+const executablePackage = openPortablePackagePlan({
+  manifest: packagePlan.manifest,
+  project: packagePlan.project,
+  entries: [
+    { name: 'project.grokproj', json: packagePlan.project },
+    { name: 'assets/videos/scene-001.mp4' },
+    { name: 'assets/videos/run-me.exe' },
+    { name: 'assets/videos/installer.msi' },
+    { name: 'assets/videos/screensaver.scr' }
+  ]
+});
+assert.equal(executablePackage.ok, true, 'open package ignores executable entries without crashing');
+assert.ok(executablePackage.warnings.some((warning) => warning.type === 'skipped_executable'), 'open package warns for executable entries');
+
+const checksumPath = packagePlan.assets[0].packagePath;
+const checksumMismatchPackage = openPortablePackagePlan({
+  manifest: packagePlan.manifest,
+  project: packagePlan.project,
+  checksums: { [checksumPath]: 'expected-sha256' },
+  entries: [
+    { name: 'project.grokproj', json: packagePlan.project },
+    { name: checksumPath, sha256: 'different-sha256' }
+  ]
+});
+assert.equal(checksumMismatchPackage.ok, true, 'open package handles checksum mismatch without crashing');
+assert.ok(checksumMismatchPackage.warnings.some((warning) => warning.type === 'checksum_mismatch'), 'open package warns on checksum mismatch');
+assert.ok(checksumMismatchPackage.warnings.some((warning) => warning.type === 'missing_asset'), 'checksum mismatch skips asset and keeps project data');
+
+const untrustedWarningPackage = openPortablePackagePlan({
+  manifest: {
+    ...packagePlan.manifest,
+    warnings: [{ type: 'missing_asset', path: 'C:/Users/person@gmail.com/asset.png', cookie: 'session=not-real' }]
+  },
+  project: packagePlan.project,
+  entries: [
+    { name: 'project.grokproj', json: packagePlan.project },
+    ...packagePlan.assets.map((asset) => ({ name: asset.packagePath }))
+  ]
+});
+assert.equal(untrustedWarningPackage.ok, true, 'open package sanitizes untrusted manifest warnings');
+assertNoSecrets(untrustedWarningPackage.warnings, 'portable package warning output');
+
+const corruptAssetPackage = openPortablePackagePlan({
+  manifest: packagePlan.manifest,
+  project: packagePlan.project,
+  entries: [{ name: 'project.grokproj', json: packagePlan.project }]
+});
+assert.equal(corruptAssetPackage.ok, true, 'open package handles missing package assets as warnings');
+assert.ok(corruptAssetPackage.warnings.length > 0, 'open package reports missing package assets');
 
 console.log('projectSession.test.mjs: all tests passed');
