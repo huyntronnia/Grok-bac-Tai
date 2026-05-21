@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-label="Vidora icon">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="38%" r="78%">
+      <stop offset="0%" stop-color="#101a44"/>
+      <stop offset="56%" stop-color="#070b20"/>
+      <stop offset="100%" stop-color="#020414"/>
+    </radialGradient>
+    <linearGradient id="rim" x1="115" y1="140" x2="910" y2="885" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#7c3cff"/>
+      <stop offset="0.45" stop-color="#14e8ff"/>
+      <stop offset="1" stop-color="#ff47df"/>
+    </linearGradient>
+    <linearGradient id="play" x1="365" y1="330" x2="690" y2="710" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#12f7ff"/>
+      <stop offset="0.48" stop-color="#3188ff"/>
+      <stop offset="1" stop-color="#ff4cf0"/>
+    </linearGradient>
+    <linearGradient id="orbit" x1="180" y1="220" x2="805" y2="815" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#15f4ff"/>
+      <stop offset="0.48" stop-color="#4775ff"/>
+      <stop offset="1" stop-color="#ff43d7"/>
+    </linearGradient>
+    <filter id="glow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="10" result="blur"/>
+      <feColorMatrix in="blur" type="matrix" values="0 0 0 0 0.2 0 0 0 0 0.6 0 0 0 0 1 0 0 0 .8 0"/>
+      <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="softShadow" x="-40%" y="-40%" width="180%" height="180%">
+      <feDropShadow dx="0" dy="24" stdDeviation="26" flood-color="#000" flood-opacity="0.55"/>
+      <feDropShadow dx="0" dy="0" stdDeviation="18" flood-color="#722cff" flood-opacity="0.45"/>
+    </filter>
+  </defs>
+  <rect x="112" y="112" width="800" height="800" rx="190" fill="url(#bg)" filter="url(#softShadow)"/>
+  <rect x="121" y="121" width="782" height="782" rx="180" fill="none" stroke="url(#rim)" stroke-width="9" opacity="0.85" filter="url(#glow)"/>
+  <path d="M365 352 C286 405 242 497 258 586" fill="none" stroke="url(#orbit)" stroke-width="56" stroke-linecap="round" filter="url(#glow)"/>
+  <path d="M426 306 C500 283 585 286 655 308" fill="none" stroke="url(#orbit)" stroke-width="35" stroke-linecap="round" opacity="0.95" filter="url(#glow)"/>
+  <path d="M749 424 C788 517 762 634 684 711" fill="none" stroke="url(#orbit)" stroke-width="48" stroke-linecap="round" filter="url(#glow)"/>
+  <path d="M292 658 Q395 760 548 746" fill="none" stroke="url(#orbit)" stroke-width="42" stroke-linecap="butt" stroke-dasharray="45 26" filter="url(#glow)"/>
+  <circle cx="380" cy="319" r="46" fill="#07112a" stroke="#19e7ff" stroke-width="30" filter="url(#glow)"/>
+  <circle cx="259" cy="576" r="42" fill="#07112a" stroke="#55a6ff" stroke-width="27" filter="url(#glow)"/>
+  <circle cx="669" cy="706" r="45" fill="#07112a" stroke="#ef45ff" stroke-width="28" filter="url(#glow)"/>
+  <circle cx="787" cy="568" r="38" fill="#07112a" stroke="#ff69df" stroke-width="24" filter="url(#glow)"/>
+  <path d="M432 386 C432 352 469 331 499 349 L675 457 C727 489 727 565 675 597 L499 705 C469 723 432 702 432 668 Z" fill="url(#play)" filter="url(#glow)"/>
+  <path d="M723 217 L754 334 L865 365 L754 397 L723 514 L691 397 L580 365 L691 334 Z" fill="url(#play)" filter="url(#glow)"/>
+</svg>

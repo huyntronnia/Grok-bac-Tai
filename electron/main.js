@@ -122,15 +122,58 @@ async function saveProjectSessionFile(_event, payload = {}) {
   return { ok: true, filePath, payload: safePayload };
 }
 
+async function overwriteProjectSessionFile(_event, { filePath = '', payload = {} } = {}) {
+  if (!filePath) return { ok: false, error: 'Missing project file path.' };
+  const safePayload = validateProjectPayload(sanitizeProjectValue(payload));
+  const targetPath = ensureGrokprojPath(filePath.toLowerCase().endsWith('.grokproj') ? filePath : `${filePath}.grokproj`);
+  await fs.mkdir(path.dirname(targetPath), { recursive: true });
+  await fs.writeFile(targetPath, JSON.stringify(safePayload, null, 2), 'utf8');
+  return { ok: true, filePath: targetPath, payload: safePayload };
+}
+
+async function createProjectSessionFile(_event, { folderPath = '', projectName = '', payload = {} } = {}) {
+  if (!folderPath) return { ok: false, error: 'Missing output folder.' };
+  const safePayload = sanitizeProjectValue(payload);
+  const safeName = sanitizeFileName(projectName || safePayload.project?.name || 'ai-scene-project');
+  const projectFolder = path.join(folderPath, safeName);
+  safePayload.runtime = { ...(safePayload.runtime || {}), outputFolder: projectFolder };
+  const validPayload = validateProjectPayload(safePayload);
+  const filePath = ensureGrokprojPath(path.join(folderPath, `${safeName}.grokproj`));
+  await fs.mkdir(projectFolder, { recursive: true });
+  await fs.writeFile(filePath, JSON.stringify(validPayload, null, 2), 'utf8');
+  return { ok: true, filePath, projectFolder, payload: validPayload };
+}
+
 async function openProjectSessionFile() {
   const result = await dialog.showOpenDialog({ title: 'Open Project Session', properties: ['openFile'], filters: [{ name: 'Grok Project', extensions: ['grokproj'] }] });
   if (result.canceled || !result.filePaths?.[0]) return { ok: false, canceled: true };
   const filePath = ensureGrokprojPath(result.filePaths[0]);
   let parsed;
   try { parsed = JSON.parse(await fs.readFile(filePath, 'utf8')); } catch (_error) { throw new Error('Invalid .grokproj: file is not valid JSON.'); }
+  const projectFolderName = sanitizeFileName(path.basename(filePath, path.extname(filePath)) || parsed?.project?.name || 'ai-scene-project');
+  const projectFolder = path.join(path.dirname(filePath), projectFolderName);
+  parsed.runtime = { ...(parsed.runtime || {}), outputFolder: projectFolder };
+  await fs.mkdir(projectFolder, { recursive: true });
   const payload = validateProjectPayload(sanitizeProjectValue(parsed));
-  payload.runtime = { ...payload.runtime, autoRun: false, waitingForUserStart: true, active: false };
-  return { ok: true, filePath, payload };
+  payload.runtime = { ...payload.runtime, outputFolder: projectFolder, autoRun: false, waitingForUserStart: true, active: false };
+  return { ok: true, filePath, projectFolder, payload };
+}
+
+async function ensureProjectSceneFolders(_event, { outputFolder = '', scenes = [] } = {}) {
+  if (!outputFolder) return { ok: false, error: 'Missing output folder.' };
+  await fs.mkdir(outputFolder, { recursive: true });
+  const records = [];
+  for (const scene of Array.isArray(scenes) ? scenes : []) {
+    const sceneId = scene?.id || scene?.sceneId || records.length + 1;
+    const sceneDir = path.join(outputFolder, `scene_${String(sceneId).padStart(3, '0')}`);
+    await fs.mkdir(sceneDir, { recursive: true });
+    if (scene?.original || scene?.rawSceneText) await fs.writeFile(path.join(sceneDir, 'scene.txt'), scene.original || scene.rawSceneText || '', 'utf8');
+    if (scene?.imagePrompt) await fs.writeFile(path.join(sceneDir, 'image_prompt.txt'), scene.imagePrompt, 'utf8');
+    if (scene?.motionPrompt) await fs.writeFile(path.join(sceneDir, 'motion_prompt.txt'), scene.motionPrompt, 'utf8');
+    const keyframePath = path.join(sceneDir, `scene_${String(sceneId).padStart(3, '0')}_keyframe.png`);
+    records.push({ sceneId, sceneDir, keyframePath, keyframeExists: await pathExists(keyframePath) });
+  }
+  return { ok: true, outputFolder, records };
 }
 
 const grokRouterState = {
@@ -307,13 +350,16 @@ async function listGrokAccountsSafe() {
   return getSafeGrokAccounts();
 }
 
+app.setName('Vidora');
+
 function createWindow() {
   const mainWindow = new BrowserWindow({
     width: 1320,
     height: 900,
     minWidth: 1100,
     minHeight: 720,
-    title: 'AI Video Prompt Planner',
+    title: 'Vidora',
+    icon: path.join(__dirname, 'vidora-icon.svg'),
     backgroundColor: '#090b16',
     webPreferences: {
       contextIsolation: true,
@@ -356,6 +402,11 @@ function buildAppMenu() {
           label: 'Save Project',
           accelerator: 'CmdOrCtrl+S',
           click: () => sendProjectMenuCommand('save'),
+        },
+        {
+          label: 'Settings...',
+          accelerator: 'CmdOrCtrl+,',
+          click: () => sendProjectMenuCommand('settings'),
         },
         { type: 'separator' },
         { role: 'quit', label: 'Quit' },
@@ -916,10 +967,32 @@ async function chooseOutputFolder() {
   return result.canceled ? null : result.filePaths[0];
 }
 
-async function checkWebLogin(_event, provider) {
+async function checkWebLogin(_event, provider, options = {}) {
   const normalizedProvider = normalizeWebProvider(provider);
-  const page = await getCdpPage(normalizedProvider, true);
-  await page.Page.bringToFront().catch(() => null);
+  const autoOpenSaved = Boolean(options?.autoOpenSaved && normalizedProvider === 'grok');
+  let page;
+  try {
+    page = await getCdpPage(normalizedProvider, autoOpenSaved, { bringToFront: Boolean(options?.bringToFront), recover: autoOpenSaved });
+  } catch (error) {
+    const state = {
+      loggedIn: false,
+      reason: 'no-existing-provider-tab',
+      detail: error.message,
+      autoOpenSaved,
+      cdp: true,
+      port: CHROME_DEBUG_PORT,
+      profilePath: CHROME_USER_DATA_DIR,
+    };
+    await appendAppLog(null, {
+      source: 'main',
+      kind: autoOpenSaved ? 'error' : 'running',
+      text: autoOpenSaved
+        ? `Login check ${normalizedProvider}: không mở được saved profile tab`
+        : `Login check ${normalizedProvider}: no existing tab; skipped opening a new tab`,
+      details: state,
+    });
+    return state;
+  }
   let state = { loggedIn: false };
   for (let attempt = 1; attempt <= 5; attempt += 1) {
     state = await evaluateOnCdpPage(page, `(${detectLoginScript.toString()})(${JSON.stringify(normalizedProvider)})`).catch((error) => ({ loggedIn: false, reason: error.message }));
@@ -936,8 +1009,11 @@ async function checkWebLogin(_event, provider) {
   const capability = ['grok', 'pixverse'].includes(normalizedProvider)
     ? await evaluateOnCdpPage(page, `(${detectVideoCapabilityScript.toString()})(${JSON.stringify(normalizedProvider)})`).catch((error) => ({ ok: false, error: error.message }))
     : null;
+  if (!state.loggedIn && autoOpenSaved && state.reason !== 'no-existing-provider-tab') {
+    await page.Page.bringToFront().catch(() => null);
+  }
   await page.close().catch(() => null);
-  return { ...state, capability, cdp: true, port: CHROME_DEBUG_PORT, profilePath: CHROME_USER_DATA_DIR };
+  return { ...state, capability, autoOpenSaved, cdp: true, port: CHROME_DEBUG_PORT, profilePath: CHROME_USER_DATA_DIR };
 }
 
 async function sendPromptViaWeb(_event, options) {
@@ -986,13 +1062,14 @@ async function runScenePipeline(_event, options) {
     outputFolder,
     sceneId,
     imagePrompt,
+    imageProvider = { method: 'web' },
   } = options || {};
   let motionPrompt = options.motionPrompt || '';
 
   if (!outputFolder) throw new Error('Chưa chọn folder output.');
   if (!imagePrompt?.trim()) throw new Error('Thiếu image prompt.');
 
-  const projectDir = path.join(outputFolder, sanitizeFileName(projectName));
+  const projectDir = outputFolder;
   const sceneDir = path.join(projectDir, `scene_${String(sceneId).padStart(3, '0')}`);
   await fs.mkdir(sceneDir, { recursive: true });
   await fs.writeFile(path.join(sceneDir, 'image_prompt.txt'), imagePrompt, 'utf8');
@@ -1022,7 +1099,9 @@ async function runScenePipeline(_event, options) {
   }
 
   if (!imagePath) {
-    const chatGptResult = await generateImageAndMotionWithChatGPT({ imagePrompt, sceneDir, sceneId });
+    const chatGptResult = imageProvider?.method === 'api'
+      ? await generateImageWithImageApi({ imagePrompt, sceneDir, sceneId, config: imageProvider })
+      : await generateImageAndMotionWithChatGPT({ imagePrompt, sceneDir, sceneId });
     imagePath = chatGptResult.imagePath;
     if (chatGptResult.motionPrompt) {
       motionPrompt = chatGptResult.motionPrompt;
@@ -1108,6 +1187,39 @@ async function runScenePipeline(_event, options) {
     videoError: maskRouterText(videoError),
     router: routerActive ? getGrokRouterStatus() : null,
   };
+}
+
+async function generateImageWithImageApi({ imagePrompt, sceneDir, sceneId, config = {} }) {
+  const endpoint = String(config.endpoint || 'http://localhost:20128/v1/images/generations').trim();
+  const apiKey = String(config.apiKey || '').trim();
+  const model = String(config.model || 'cx/gpt-5.5-image').trim();
+  const size = String(config.size || '1024x1024').trim();
+  if (!apiKey) throw new Error('Chưa nhập API key cho 9Router Image API trong Settings.');
+  const imagePath = path.join(sceneDir, `scene_${String(sceneId).padStart(3, '0')}_keyframe.png`);
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey.replace(/^Bearer\s+/i, '')}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ model, prompt: imagePrompt, size, response_format: 'b64_json' }),
+  });
+  const contentType = response.headers.get('content-type') || '';
+  if (!response.ok) {
+    const detail = await response.text().catch(() => '');
+    throw new Error(`9Router Image API lỗi HTTP ${response.status}: ${maskRouterText(detail).slice(0, 400)}`);
+  }
+  if (/image\/|application\/octet-stream/i.test(contentType)) {
+    const buffer = Buffer.from(await response.arrayBuffer());
+    await fs.writeFile(imagePath, buffer);
+    return { imagePath, motionPrompt: '' };
+  }
+  const json = await response.json();
+  const b64 = json?.data?.[0]?.b64_json || json?.b64_json || '';
+  if (!b64) throw new Error('9Router Image API không trả về b64_json.');
+  await fs.writeFile(imagePath, Buffer.from(b64, 'base64'));
+  await fs.writeFile(path.join(sceneDir, 'image_api_response.json'), JSON.stringify({ model, size, endpoint, created: json.created || null }, null, 2), 'utf8');
+  return { imagePath, motionPrompt: '' };
 }
 
 async function generateImageAndMotionWithChatGPT({ imagePrompt, sceneDir, sceneId }) {
@@ -1352,8 +1464,10 @@ async function generateVideoWithGenericProvider({ provider, imagePath, motionPro
   return { status: 'video-downloaded', videoPath };
 }
 
-async function getCdpPage(provider, createIfMissing = true) {
+async function getCdpPage(provider, createIfMissing = true, options = {}) {
   await ensureChromeDebug();
+  const shouldBringToFront = options.bringToFront !== false;
+  const shouldRecover = options.recover !== false;
   const meta = PROVIDER_META[provider] || PROVIDER_META.chatgpt;
   const hostname = new URL(meta.url).hostname;
   const targets = await CDP.List({ host: '127.0.0.1', port: CHROME_DEBUG_PORT });
@@ -1385,9 +1499,9 @@ async function getCdpPage(provider, createIfMissing = true) {
   await client.Runtime.enable();
   await client.DOM.enable();
   await client.Network.enable().catch(() => null);
-  await client.Page.bringToFront().catch(() => null);
+  if (shouldBringToFront) await client.Page.bringToFront().catch(() => null);
   await waitForCdpLoad(client);
-  await recoverProviderFromCacheOrChallenge(client, provider, 'get-page').catch(() => null);
+  if (shouldRecover) await recoverProviderFromCacheOrChallenge(client, provider, 'get-page').catch(() => null);
   return client;
 }
 
@@ -1532,6 +1646,28 @@ async function clearGrokCanvasSelection(page) {
   await sleep(250);
   await evaluateOnCdpPage(page, `(${clickGrokComposerAreaScript.toString()})()`).catch(() => null);
   await sleep(250);
+}
+
+function buildGrokSafeMotionPrompt(originalPrompt = '', retryCount = 1) {
+  return [
+    originalPrompt,
+    '',
+    `CONTENT POLICY SAFE RETRY ${retryCount}: Rewrite the action as non-graphic, PG-13 adventure suspense. Do not show injury, blood, gore, attack impact, harm to a child, or violent contact. Replace any chase/attack/break-in with a safe tense escape, cautious movement, or protective rescue moment. The creature/animal must keep distance and appear non-contact. Generate a cinematic video from the uploaded keyframe now. Do not ask questions.`,
+  ].join('\n');
+}
+
+async function recoverGrokAfterContentPolicy(page, options = {}) {
+  const sceneId = options.sceneId || '';
+  const safePrompt = buildGrokSafeMotionPrompt(options.motionPrompt || '', options.retryCount || 1);
+  if ((options.retryCount || 1) >= 2) {
+    await recoverGrokCanvasAfterLimit(page, { ...options, motionPrompt: safePrompt });
+    return { ok: true, mode: 'new-canvas-safe-retry', safePromptHead: safePrompt.slice(0, 240) };
+  }
+  await clearGrokCanvasChat(page, sceneId);
+  const sent = await submitGrokVideoPrompt(page, safePrompt, {});
+  if (!sent?.ok) throw new Error(sent?.error || 'Không gửi lại safe prompt sau content policy.');
+  const confirmed = await confirmGrokVideoGenerationIfAsked(page, sceneId);
+  return { ok: true, mode: 'same-canvas-safe-retry', sent, confirmed, safePromptHead: safePrompt.slice(0, 240) };
 }
 
 async function recoverGrokCanvasAfterLimit(page, options = {}) {
@@ -1771,6 +1907,7 @@ async function waitForNewVideoUrl(client, existingUrls = [], options = {}) {
   const startedAt = Date.now();
   let retryCount = 0;
   let notifiedLimit = false;
+  let notifiedPolicy = false;
   while (Date.now() - startedAt < 600000) {
     await sleep(5000);
     if (provider === 'grok') {
@@ -1781,6 +1918,20 @@ async function waitForNewVideoUrl(client, existingUrls = [], options = {}) {
         await clickGrokRetryButton(client, grokState).catch(() => null);
         await sleep(8000);
         continue;
+      }
+      if (grokState?.kind === 'content-policy') {
+        if (!notifiedPolicy) {
+          notifiedPolicy = true;
+          await notifyRenderer('grok-content-policy', `Scene ${sceneId}: Grok chặn content policy. Tool sẽ tự sửa prompt an toàn hơn và gửi lại / đổi canvas mới nếu cần.`, grokState);
+        }
+        if (retryCount < 3 && options.sceneDir && options.imagePath && options.motionPrompt) {
+          retryCount += 1;
+          const recovered = await recoverGrokAfterContentPolicy(client, { ...options, retryCount }).catch((error) => ({ ok: false, error: error.message }));
+          await appendAppLog(null, { source: 'main', kind: recovered?.ok ? 'ok' : 'error', text: `Scene ${sceneId}: recover content policy lần ${retryCount}/3: ${recovered?.ok ? 'ok' : recovered?.error}`, details: recovered });
+          await sleep(10000);
+          continue;
+        }
+        throw new Error('Grok chặn content policy sau 3 lần tự sửa prompt/đổi canvas. Cần sửa scene/prompt thủ công.');
       }
       if (grokState?.kind === 'limit') {
         if (!notifiedLimit) {
@@ -2052,6 +2203,18 @@ async function submitGrokVideoPrompt(client, prompt, config = {}) {
   if (!verified?.text || !verified.text.includes(prompt.slice(0, Math.min(24, prompt.length)))) {
     return { ok: false, error: `Grok chưa nhận đúng motion prompt trong composer đang focus. Text hiện tại: ${String(verified?.text || '').slice(0, 160)}` };
   }
+  const beforeSubmitState = await evaluateOnCdpPage(client, `(${captureGrokSubmitStateScript.toString()})()`).catch(() => null);
+  const pressEnterToSubmit = async () => {
+    await client.Input.dispatchKeyEvent({ type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 }).catch(() => null);
+    await client.Input.dispatchKeyEvent({ type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 }).catch(() => null);
+  };
+  await pressEnterToSubmit();
+  await sleep(1800);
+  let started = await evaluateOnCdpPage(client, `(${detectGrokGeneratingStateScript.toString()})(${JSON.stringify(beforeSubmitState || {})})`).catch(() => null);
+  if (started?.generating) {
+    await appendAppLog(null, { source: 'main', kind: 'ok', text: `Grok đã bắt đầu chạy bằng Enter (${started.mode}).`, details: started });
+    return { ok: true, mode: 'grok-started-enter', selector: 'trusted-enter' };
+  }
   let clicked = null;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     clicked = await evaluateOnCdpPage(client, `(${clickGrokGenerateScript.toString()})()`);
@@ -2063,10 +2226,15 @@ async function submitGrokVideoPrompt(client, prompt, config = {}) {
       await client.Input.dispatchMouseEvent({ type: 'mouseReleased', x, y, button: 'left', clickCount: 1 }).catch(() => null);
     }
     await sleep(1200);
-    const afterClick = await evaluateOnCdpPage(client, `(${getComposerTextScript.toString()})()`).catch(() => ({ text: '' }));
-    if (!afterClick?.text || afterClick.text.length < 5) {
-      return { ok: true, mode: `grok-generate-attempt-${attempt}`, selector: clicked?.selector };
+    await pressEnterToSubmit();
+    await sleep(1800);
+    const generating = await evaluateOnCdpPage(client, `(${detectGrokGeneratingStateScript.toString()})(${JSON.stringify(beforeSubmitState || {})})`).catch(() => null);
+    if (generating?.generating) {
+      await appendAppLog(null, { source: 'main', kind: 'ok', text: `Grok đã bắt đầu chạy (${generating.mode}).`, details: generating });
+      return { ok: true, mode: `grok-started-attempt-${attempt}`, selector: clicked?.selector };
     }
+    const afterClick = await evaluateOnCdpPage(client, `(${getComposerTextScript.toString()})()`).catch(() => ({ text: '' }));
+    await appendAppLog(null, { source: 'main', kind: 'running', text: `Grok click/Enter attempt ${attempt}: chưa thấy Thinking/Stop.`, details: { clicked, generating, composerHead: String(afterClick?.text || '').slice(0, 120) } });
   }
   return { ok: false, error: clicked?.error || clicked?.selector || 'Prompt đã paste nhưng Grok chưa gửi sau 3 lần bấm send.' };
 }
@@ -3114,6 +3282,40 @@ function forceGrokVideoModeScript() {
   return { ok: true, status: 'clicked-video-motion-mode', text: textOf(motionTab) };
 }
 
+function captureGrokSubmitStateScript() {
+  return {
+    url: location.href,
+    textLength: (document.body?.innerText || '').length,
+    tail: (document.body?.innerText || '').slice(-1200),
+  };
+}
+
+function detectGrokGeneratingStateScript(before = {}) {
+  const bodyText = document.body?.innerText || '';
+  const tail = bodyText.slice(-2500);
+  const buttons = [...document.querySelectorAll('button, [role="button"]')]
+    .map((node) => {
+      const rect = node.getBoundingClientRect?.();
+      const text = `${node.textContent || ''} ${node.getAttribute?.('aria-label') || ''} ${node.title || ''}`.trim();
+      return { node, rect, text, html: node.innerHTML || '' };
+    })
+    .filter((item) => item.rect && item.rect.width > 10 && item.rect.height > 10);
+  const stopButton = buttons.find((item) => {
+    const nearComposer = item.rect.left > window.innerWidth * 0.72 && item.rect.top > window.innerHeight * 0.68;
+    return nearComposer && (/stop|cancel|square/i.test(item.text) || /rect|square|stop/i.test(item.html));
+  });
+  const thinking = /Thinking|Thinking about your request|Đang suy nghĩ|Generating|Creating/i.test(tail);
+  return {
+    ok: true,
+    generating: Boolean(stopButton || thinking),
+    mode: stopButton ? 'stop-button' : thinking ? 'thinking-text' : '',
+    stopText: stopButton?.text || '',
+    url: location.href,
+    beforeUrl: before?.url || '',
+    tail,
+  };
+}
+
 function detectGrokGenerationProblemScript() {
   const bodyText = document.body?.innerText || '';
   const tail = bodyText.slice(-5000);
@@ -3126,10 +3328,11 @@ function detectGrokGenerationProblemScript() {
     .filter((item) => item.rect && item.rect.width > 10 && item.rect.height > 10);
   const retry = buttons.find((item) => /(^|\s)(Retry|Try again|Thử lại|Gửi lại)(\s|$)/i.test(item.text));
   const unable = /Grok was unable to finish replying|unable to finish replying|couldn'?t finish|Something went wrong|try again/i.test(tail);
+  const contentPolicy = /content policy|blocked by content policy|triggered moderation|cannot generate or retry|I cannot generate|adjust the prompt significantly|chặn.*content|vi phạm.*chính sách/i.test(tail);
   const limit = /Video generation hiện đang gặp giới hạn|generation.*limit|rate limit|too many requests|limit được reset|quota|usage limit|come back later|try again later/i.test(tail);
   return {
     ok: true,
-    kind: limit ? 'limit' : unable || retry ? 'unable-finish' : '',
+    kind: contentPolicy ? 'content-policy' : limit ? 'limit' : unable || retry ? 'unable-finish' : '',
     hasRetry: Boolean(retry),
     retryBox: retry?.rect ? { x: retry.rect.x, y: retry.rect.y, width: retry.rect.width, height: retry.rect.height } : null,
     retryText: retry?.text || '',
@@ -3169,6 +3372,23 @@ function clickGrokGenerateScript() {
     return /^(Generate|Create|Start|Send|Submit|gửi|Imagine)$/i.test(text) || (text === '' && hasSendIcon);
   });
   if (!button) {
+    const bottomRightSend = nodes
+      .filter((item) => {
+        if (item.disabled || item.getAttribute('aria-disabled') === 'true') return false;
+        const rect = item.getBoundingClientRect?.();
+        if (!rect || rect.width < 24 || rect.height < 20) return false;
+        const text = `${item.textContent || ''} ${item.getAttribute('aria-label') || ''} ${item.title || ''} ${item.dataset?.testid || ''}`.trim();
+        if (/microphone|voice|audio|attach|add|upload|\+|new chat/i.test(text)) return false;
+        return rect.left > window.innerWidth * 0.84 && rect.top > window.innerHeight * 0.74;
+      })
+      .sort((a, b) => b.getBoundingClientRect().left - a.getBoundingClientRect().left)[0];
+    if (bottomRightSend) {
+      bottomRightSend.scrollIntoView({ block: 'center', inline: 'center' });
+      bottomRightSend.focus();
+      bottomRightSend.click();
+      const rect = bottomRightSend.getBoundingClientRect();
+      return { ok: true, selector: bottomRightSend.textContent || bottomRightSend.getAttribute('aria-label') || 'grok-bottom-right-send', box: { x: rect.x, y: rect.y, width: rect.width, height: rect.height } };
+    }
     if (input) {
       input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true }));
       input.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', bubbles: true }));
@@ -3336,7 +3556,10 @@ app.whenReady().then(() => {
   ipcMain.handle('project:export', exportProject);
   ipcMain.handle('project:new-session', newProjectSession);
   ipcMain.handle('project:save-session-file', saveProjectSessionFile);
+  ipcMain.handle('project:overwrite-session-file', overwriteProjectSessionFile);
+  ipcMain.handle('project:create-session-file', createProjectSessionFile);
   ipcMain.handle('project:open-session-file', openProjectSessionFile);
+  ipcMain.handle('project:ensure-scene-folders', ensureProjectSceneFolders);
 
   buildAppMenu();
   createWindow();

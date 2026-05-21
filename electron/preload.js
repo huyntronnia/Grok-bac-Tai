@@ -21,7 +21,7 @@ contextBridge.exposeInMainWorld('videoPlannerAPI', {
     return () => ipcRenderer.removeListener('pipeline:notice', listener);
   },
   openWebLogin: (provider) => ipcRenderer.invoke('browser:open-login', provider),
-  checkWebLogin: (provider) => ipcRenderer.invoke('browser:check-login', provider),
+  checkWebLogin: (provider, options) => ipcRenderer.invoke('browser:check-login', provider, options),
   chooseOutputFolder: () => ipcRenderer.invoke('output:choose-folder'),
   sendPromptViaWeb: (options) => ipcRenderer.invoke('browser:send-prompt', options),
   runScenePipeline: (options) => ipcRenderer.invoke('pipeline:run-scene', options),
@@ -29,9 +29,12 @@ contextBridge.exposeInMainWorld('videoPlannerAPI', {
   exportProject: (payload) => ipcRenderer.invoke('project:export', payload),
   newProjectSession: (options) => ipcRenderer.invoke('project:new-session', options),
   saveProjectSession: (payload) => ipcRenderer.invoke('project:save-session-file', payload),
+  overwriteProjectSession: (options) => ipcRenderer.invoke('project:overwrite-session-file', options),
+  createProjectSession: (options) => ipcRenderer.invoke('project:create-session-file', options),
+  ensureProjectSceneFolders: (options) => ipcRenderer.invoke('project:ensure-scene-folders', options),
   openProjectSession: () => ipcRenderer.invoke('project:open-session-file'),
   onProjectMenuCommand: (callback) => {
-    const allowed = new Set(['new', 'open', 'save']);
+    const allowed = new Set(['new', 'open', 'save', 'settings']);
     const listener = (_event, command) => {
       if (allowed.has(command)) callback(command);
     };

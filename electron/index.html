@@ -6,7 +6,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="description"
     content="Dashboard Electron tạo batch image prompt và motion prompt cho workflow sản xuất video AI theo từng scene, có review, pause, resume, lưu session và export." />
-  <title>AI Scene Batch Director</title>
+  <title>Vidora</title>
+  <link rel="icon" type="image/svg+xml" href="vidora-icon.svg" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap"
@@ -80,6 +81,17 @@
 
         <button id="create-project-btn" class="manual-only" type="submit" hidden>Parse scene & tạo project</button>
       </form>
+
+      <section id="quick-actions-panel" class="panel quick-actions-panel" aria-labelledby="quick-actions-title">
+        <div class="panel-head">
+          <span class="pulse-dot"></span>
+          <div>
+            <h2 id="quick-actions-title">2. Project actions</h2>
+            <p>Tạo/mở/lưu project, chọn folder và bắt đầu pipeline nhanh.</p>
+          </div>
+        </div>
+        <div id="quick-actions-slot"></div>
+      </section>
 
       <section class="panel router-panel" aria-labelledby="router-title">
         <div class="panel-head split">
@@ -245,8 +257,6 @@
             <p id="missing-asset-warning" class="missing-asset-warning" hidden></p>
           </div>
           <div class="browser-login-actions stacked-actions">
-            <label class="auto-review-toggle"><input id="skip-review-toggle" type="checkbox" /> Tự động hoàn toàn, không
-              dừng review</label>
             <button id="new-project-btn" class="ghost" type="button">New Project</button>
             <button id="open-project-btn" class="ghost" type="button">Open Project</button>
             <button id="save-project-btn" class="ghost success" type="button">Save Project</button>
@@ -396,6 +406,86 @@
       <textarea id="editor-textarea" rows="18"></textarea>
       <div class="dialog-actions">
         <button id="save-edit-btn" class="ghost primary" value="default" type="button">Lưu sửa</button>
+        <button class="ghost" value="cancel" type="submit">Đóng</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="settings-dialog" class="settings-dialog">
+    <form method="dialog" class="dialog-card settings-card">
+      <div class="panel-head split">
+        <div>
+          <span class="preview-label">Settings</span>
+          <h2>Workflow config</h2>
+          <p>Chỉnh cách pipeline dừng review và thao tác review ảnh/video.</p>
+        </div>
+        <button class="icon-btn" value="cancel" type="submit">×</button>
+      </div>
+
+      <section class="settings-section">
+        <h3>Review automation</h3>
+        <label class="auto-review-toggle settings-toggle">
+          <input id="skip-review-toggle" type="checkbox" />
+          <span>Tự động hoàn toàn, không dừng bất kỳ review nào</span>
+        </label>
+        <div class="settings-grid">
+          <label class="auto-review-toggle settings-toggle">
+            <input id="skip-prompt-review-toggle" type="checkbox" />
+            <span>Bỏ review prompt</span>
+          </label>
+          <label class="auto-review-toggle settings-toggle">
+            <input id="skip-image-review-toggle" type="checkbox" />
+            <span>Bỏ review ảnh</span>
+          </label>
+          <label class="auto-review-toggle settings-toggle">
+            <input id="skip-video-review-toggle" type="checkbox" />
+            <span>Bỏ review video</span>
+          </label>
+        </div>
+        <p class="settings-help">Nếu bật tự động hoàn toàn, 3 tuỳ chọn review riêng sẽ được bỏ qua vì pipeline tự chạy hết.</p>
+      </section>
+
+      <section class="settings-section">
+        <h3>Image generation</h3>
+        <div class="settings-grid image-settings-grid">
+          <label>Image method
+            <select id="image-generation-method-select">
+              <option value="web">ChatGPT web như cũ</option>
+              <option value="api">9Router Image API</option>
+            </select>
+          </label>
+          <label>Endpoint
+            <input id="image-api-endpoint-input" value="http://localhost:20128/v1/images/generations" />
+          </label>
+          <label>Model
+            <select id="image-api-model-select">
+              <option value="cx/gpt-5.5-image">cx/gpt-5.5-image</option>
+              <option value="cx/gpt-5.4-image">cx/gpt-5.4-image</option>
+              <option value="cx/gpt-5.3-image">cx/gpt-5.3-image</option>
+              <option value="cx/gpt-5.2-image">cx/gpt-5.2-image</option>
+            </select>
+          </label>
+          <label>Size
+            <input id="image-api-size-input" value="1024x1024" />
+          </label>
+          <label class="settings-field-wide">API key
+            <input id="image-api-key-input" type="password" placeholder="Nhập Bearer token / API key 9Router" />
+          </label>
+        </div>
+        <p class="settings-help">API key chỉ lưu local trong app. Nếu chọn API, tool gọi endpoint images/generations và lưu ảnh PNG vào scene.</p>
+      </section>
+
+      <section class="settings-section">
+        <h3>Review viewer shortcuts</h3>
+        <ul class="settings-shortcuts">
+          <li><kbd>Ctrl</kbd> + <kbd>+</kbd>/<kbd>-</kbd> zoom ảnh/video review</li>
+          <li><kbd>Ctrl</kbd> + <kbd>0</kbd> reset zoom 100%</li>
+          <li>Giữ <kbd>Space</kbd> rồi kéo chuột để di chuyển vùng zoom</li>
+        </ul>
+      </section>
+
+      <div class="dialog-actions">
+        <button id="settings-save-btn" class="ghost primary" value="default" type="button">Lưu settings</button>
         <button class="ghost" value="cancel" type="submit">Đóng</button>
       </div>
     </form>

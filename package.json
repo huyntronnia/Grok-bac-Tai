@@ -1,7 +1,7 @@
 {
-  "name": "ai-video-prompt-planner",
+  "name": "vidora",
   "version": "1.0.0",
-  "description": "Electron desktop app that splits long AI video ideas into timed one-minute scene prompts.",
+  "description": "Vidora desktop workflow app for AI video scene batching, prompt review, keyframe generation, and Grok video automation.",
   "main": "electron/main.js",
   "scripts": {
     "start": "electron .",
@@ -9,8 +9,9 @@
   },
   "keywords": [
     "electron",
+    "vidora",
     "ai-video",
-    "prompt-planner"
+    "video-automation"
   ],
   "author": "",
   "license": "MIT",

@@ -21,6 +21,8 @@ const saveSessionBtn = document.querySelector('#save-session-btn');
 const newProjectBtn = document.querySelector('#new-project-btn');
 const openProjectBtn = document.querySelector('#open-project-btn');
 const saveProjectBtn = document.querySelector('#save-project-btn');
+const routerPanel = document.querySelector('.router-panel');
+const quickActionsSlot = document.querySelector('#quick-actions-slot');
 const projectSaveStatus = document.querySelector('#project-save-status');
 const missingAssetWarning = document.querySelector('#missing-asset-warning');
 const grokAccountSelect = document.querySelector('#grok-account-select');
@@ -33,6 +35,16 @@ const grokRouterMessage = document.querySelector('#grok-router-message');
 const grokRouterResumeBtn = document.querySelector('#grok-router-resume-btn');
 const videoPlatformSelect = document.querySelector('#video-platform-select');
 const skipReviewToggle = document.querySelector('#skip-review-toggle');
+const skipPromptReviewToggle = document.querySelector('#skip-prompt-review-toggle');
+const skipImageReviewToggle = document.querySelector('#skip-image-review-toggle');
+const skipVideoReviewToggle = document.querySelector('#skip-video-review-toggle');
+const settingsDialog = document.querySelector('#settings-dialog');
+const settingsSaveBtn = document.querySelector('#settings-save-btn');
+const imageGenerationMethodSelect = document.querySelector('#image-generation-method-select');
+const imageApiEndpointInput = document.querySelector('#image-api-endpoint-input');
+const imageApiModelSelect = document.querySelector('#image-api-model-select');
+const imageApiSizeInput = document.querySelector('#image-api-size-input');
+const imageApiKeyInput = document.querySelector('#image-api-key-input');
 const autoRunBtn = document.querySelector('#auto-run-btn');
 const startPipelineInlineBtn = document.querySelector('#start-pipeline-inline-btn');
 const webSessionStatus = document.querySelector('#web-session-status');
@@ -151,6 +163,8 @@ let pipelineLogs = [];
 let pipelineLogVisible = false;
 let lastStatusText = '';
 let lastStartClickAt = 0;
+let isReviewSpaceHeld = false;
+let reviewPanState = null;
 let isRunning = false;
 let autoContinuing = false;
 let currentProjectFilePath = '';
@@ -166,8 +180,75 @@ let projectRuntime = {
   waitingForUserStart: true,
 };
 
-function shouldSkipReview() {
-  return Boolean(skipReviewToggle?.checked);
+function getReviewSettings() {
+  const skipAll = Boolean(skipReviewToggle?.checked);
+  return {
+    skipAll,
+    skipPrompt: skipAll || Boolean(skipPromptReviewToggle?.checked),
+    skipImage: skipAll || Boolean(skipImageReviewToggle?.checked),
+    skipVideo: skipAll || Boolean(skipVideoReviewToggle?.checked),
+  };
+}
+
+function shouldSkipReview(type = 'all') {
+  const settings = getReviewSettings();
+  if (type === 'prompt') return settings.skipPrompt;
+  if (type === 'image') return settings.skipImage;
+  if (type === 'video') return settings.skipVideo;
+  return settings.skipAll;
+}
+
+function applyReviewSettings(settings = {}) {
+  if (skipReviewToggle) skipReviewToggle.checked = Boolean(settings.skipAll ?? settings.skipReview);
+  if (skipPromptReviewToggle) skipPromptReviewToggle.checked = Boolean(settings.skipPrompt);
+  if (skipImageReviewToggle) skipImageReviewToggle.checked = Boolean(settings.skipImage);
+  if (skipVideoReviewToggle) skipVideoReviewToggle.checked = Boolean(settings.skipVideo);
+}
+
+function getImageGenerationSettings() {
+  return {
+    method: imageGenerationMethodSelect?.value || 'web',
+    endpoint: imageApiEndpointInput?.value?.trim() || 'http://localhost:20128/v1/images/generations',
+    model: imageApiModelSelect?.value || 'cx/gpt-5.5-image',
+    size: imageApiSizeInput?.value?.trim() || '1024x1024',
+    apiKey: imageApiKeyInput?.value?.trim() || '',
+  };
+}
+
+function applyImageGenerationSettings(settings = {}) {
+  if (imageGenerationMethodSelect) imageGenerationMethodSelect.value = settings.method || 'web';
+  if (imageApiEndpointInput) imageApiEndpointInput.value = settings.endpoint || 'http://localhost:20128/v1/images/generations';
+  if (imageApiModelSelect) imageApiModelSelect.value = settings.model || 'cx/gpt-5.5-image';
+  if (imageApiSizeInput) imageApiSizeInput.value = settings.size || '1024x1024';
+  if (imageApiKeyInput) imageApiKeyInput.value = settings.apiKey || '';
+}
+
+function embedRouterPanelInSettings() {
+  if (!routerPanel || !settingsDialog) return;
+  const settingsCard = settingsDialog.querySelector('.settings-card');
+  if (!settingsCard || settingsCard.contains(routerPanel)) return;
+  const firstSettingsSection = settingsCard.querySelector('.settings-section');
+  routerPanel.classList.add('settings-embedded-router');
+  settingsCard.insertBefore(routerPanel, firstSettingsSection || settingsCard.querySelector('.dialog-actions'));
+}
+
+function moveProjectActionsOutsideSettings() {
+  const actions = document.querySelector('.browser-login-actions.stacked-actions');
+  if (!actions || !quickActionsSlot || quickActionsSlot.contains(actions)) return;
+  actions.classList.add('quick-actions-stack');
+  quickActionsSlot.appendChild(actions);
+}
+
+function openSettingsDialog() {
+  embedRouterPanelInSettings();
+  moveProjectActionsOutsideSettings();
+  settingsDialog?.showModal?.();
+}
+
+function saveSettingsDialog() {
+  persist();
+  settingsDialog?.close?.();
+  setStatus('Đã lưu Settings review automation.', 'ok');
 }
 
 function queueAutoContinue(delay = 350) {
@@ -224,7 +305,6 @@ function createProject(event) {
   activeBatchIds = [];
   paused = false;
   projectRuntime = { ...projectRuntime, currentStage: 'prompt_pending', currentBatchIndex: null, currentSceneId: null, lastAction: 'create_project', waitingForUserStart: true };
-  currentProjectFilePath = '';
   markProjectDirty();
   persist();
   render();
@@ -279,6 +359,7 @@ async function runNextBatch({ regenerate = false } = {}) {
       scene.provider = providerSelect.value;
       scene.account = accountSelect.value;
       scene.updatedAt = new Date().toISOString();
+      await syncProjectSceneFolders();
     } catch (error) {
       scene.status = 'error';
       scene.error = error.message;
@@ -296,9 +377,27 @@ async function runNextBatch({ regenerate = false } = {}) {
   if (!paused) {
     const firstReview = batch.find((scene) => scene.status === 'waiting_review');
     setStatus(`Batch ${activeBatchIds[0]}-${activeBatchIds.at(-1)} đang chờ review prompt. Popup review đã mở tự động.`, 'ok');
-    if (firstReview && !shouldSkipReview()) openAssetReview(firstReview.id);
+    if (firstReview && !shouldSkipReview('prompt')) openAssetReview(firstReview.id);
   }
   render();
+}
+
+async function syncProjectSceneFolders({ repairFromDisk = false } = {}) {
+  if (!outputFolder || !project?.scenes?.length || !window.videoPlannerAPI?.ensureProjectSceneFolders) return null;
+  const result = await window.videoPlannerAPI.ensureProjectSceneFolders({ outputFolder, scenes: project.scenes }).catch(() => null);
+  if (repairFromDisk && result?.records?.length) {
+    result.records.forEach((record) => {
+      const scene = project.scenes.find((item) => String(item.id) === String(record.sceneId) || String(item.sceneId) === String(record.sceneId));
+      if (!scene || !record.keyframeExists || scene.imagePath) return;
+      scene.imagePath = record.keyframePath;
+      if (['waiting_review', 'approved', 'image_generating', 'asset_review', 'queued'].includes(scene.status) && scene.reviewType !== 'video') {
+        scene.status = 'image_done';
+        scene.progressStep = 'motion';
+        scene.reviewType = '';
+      }
+    });
+  }
+  return result;
 }
 
 async function generateWithProvider(scene) {
@@ -407,7 +506,7 @@ async function chooseOutputFolder() {
 
 async function checkSelectedWebLogin() {
   const webProvider = getSelectedWebProvider();
-  const state = await window.videoPlannerAPI.checkWebLogin(webProvider, accountSelect.value);
+  const state = await window.videoPlannerAPI.checkWebLogin(webProvider, {});
   webSessionStatus.textContent = state.loggedIn
     ? `${webProvider === 'grok' ? 'Grok' : 'ChatGPT'} / ${accountSelect.value}: đã đăng nhập.`
     : `${webProvider === 'grok' ? 'Grok' : 'ChatGPT'} / ${accountSelect.value}: chưa đăng nhập, cửa sổ login đã mở.`;
@@ -539,6 +638,7 @@ async function runFullPipeline() {
         routingPolicy: grokRoutingPolicySelect?.value || 'manual',
         accountRouterEnabled: Boolean(grokRouterEnabledToggle?.checked),
         videoConfig: getVideoProviderConfig(),
+        imageProvider: getImageGenerationSettings(),
       });
       scene.forceRegenerateImage = false;
       scene.imagePrompt = imagePrompt;
@@ -546,9 +646,12 @@ async function runFullPipeline() {
         scene.motionPrompt = result.motionPrompt;
       }
       scene.pipeline = result;
-      scene.imagePath = result.imagePath || scene.imagePath || '';
-      scene.imageDataUrl = result.imageDataUrl || scene.imageDataUrl || '';
-      scene.videoPath = result.videoPath || scene.videoPath || '';
+      const sceneFolderToken = `scene_${String(scene.id).padStart(3, '0')}`;
+      const resultImagePath = result.imagePath || '';
+      const resultVideoPath = result.videoPath || '';
+      scene.imagePath = resultImagePath && String(resultImagePath).includes(sceneFolderToken) ? resultImagePath : scene.imagePath || '';
+      scene.imageDataUrl = resultImagePath && String(resultImagePath).includes(sceneFolderToken) ? (result.imageDataUrl || scene.imageDataUrl || '') : scene.imageDataUrl || '';
+      scene.videoPath = resultVideoPath && String(resultVideoPath).includes(sceneFolderToken) ? resultVideoPath : scene.videoPath || '';
       scene.videoProvider = result.videoProvider || videoPlatform.value;
       scene.videoStatus = result.videoStatus || '';
       if (result.phase === 'video' && !result.videoPath) {
@@ -569,7 +672,7 @@ async function runFullPipeline() {
       scene.updatedAt = new Date().toISOString();
       persist();
       render();
-      if (shouldSkipReview()) {
+      if (shouldSkipReview(scene.reviewType)) {
         scene.status = scene.reviewType === 'video' ? 'video_done' : 'image_done';
         scene.progressStep = scene.reviewType === 'video' ? 'merge' : 'motion';
         scene.reviewType = '';
@@ -715,7 +818,10 @@ async function waitForProviderReady(providerValue, label) {
   if (loginWaitDialog && !loginWaitDialog.open) loginWaitDialog.showModal();
   while (!paused) {
     attempt += 1;
-    const state = await window.videoPlannerAPI.checkWebLogin(providerValue, accountSelect.value);
+    const state = await window.videoPlannerAPI.checkWebLogin(providerValue, {
+      autoOpenSaved: providerValue === 'grok' && Boolean(grokRouterEnabledToggle?.checked) && attempt === 1,
+      bringToFront: providerValue === 'grok' && Boolean(grokRouterEnabledToggle?.checked) && attempt === 1,
+    });
     if (state.loggedIn) {
       if (loginWaitDesc) loginWaitDesc.textContent = `${label} đã sẵn sàng. Đang tiếp tục pipeline...`;
       return state;
@@ -744,9 +850,9 @@ async function startPipelineFromClick(event) {
 window.startPipelineFromClick = startPipelineFromClick;
 
 async function autoRunRoute() {
-  if (!project) {
+  if (!project || !project.scenes?.length) {
     createProject();
-    if (!project) return;
+    if (!project || !project.scenes?.length) return;
   }
   if (isRunning) return;
   setRunning(true);
@@ -810,12 +916,12 @@ async function autoRunRoute() {
 
     webSessionStatus.textContent = `Đã login ChatGPT + ${videoPlatform.label}. Output: ${outputFolder}`;
     const waitingPrompt = project.scenes.find((scene) => activeBatchIds.includes(scene.id) && scene.status === 'waiting_review');
-    if (waitingPrompt && !shouldSkipReview()) {
+    if (waitingPrompt && !shouldSkipReview('prompt')) {
       openAssetReview(waitingPrompt.id);
       setStatus(`Scene ${waitingPrompt.id} đang chờ review prompt. Bấm Ổn/Next để tool tự tạo ảnh.`, 'ok');
       return;
     }
-    if (waitingPrompt && shouldSkipReview()) {
+    if (waitingPrompt && shouldSkipReview('prompt')) {
       activeScenes.forEach((scene) => {
         if (scene.status === 'waiting_review') {
           scene.status = 'approved';
@@ -1117,7 +1223,7 @@ function openAssetReview(sceneId) {
 }
 
 function renderAssetReviewModal() {
-  const scene = getCurrentReviewScene();
+  const scene = reviewSceneId ? project?.scenes?.find((item) => item.id === reviewSceneId) : getCurrentReviewScene();
   if (!scene) {
     reviewSceneTitle.textContent = 'Chưa có scene cần review';
     reviewSceneStatus.textContent = 'Chạy pipeline để tạo ảnh/video rồi review tại popup này.';
@@ -1151,6 +1257,7 @@ function renderAssetReviewModal() {
   if (reviewMediaPanel) reviewMediaPanel.hidden = !showMedia;
   if (reviewMediaStage) {
     reviewMediaStage.style.setProperty('--review-zoom', `${reviewZoom / 100}`);
+    reviewMediaStage.classList.toggle('is-zoomed', reviewZoom > 100);
     reviewMediaStage.innerHTML = showMedia ? renderFocusedMedia(scene, reviewType) : '<div class="empty-review-media">Prompt review không cần preview ảnh/video.</div>';
   }
   if (zoomRange) zoomRange.value = String(reviewZoom);
@@ -1168,10 +1275,89 @@ function renderFocusedMedia(scene, reviewType) {
   return '<div class="empty-review-media">Không tìm thấy file ảnh/video đã lưu. Kiểm tra output folder hoặc tạo lại scene.</div>';
 }
 
-function setReviewZoom(value) {
-  reviewZoom = clamp(value, 60, 200);
+function setReviewZoom(value, { rerender = false } = {}) {
+  reviewZoom = clamp(value, 60, 320);
   if (zoomRange) zoomRange.value = String(reviewZoom);
-  renderAssetReviewModal();
+  if (reviewMediaStage) {
+    reviewMediaStage.style.setProperty('--review-zoom', `${reviewZoom / 100}`);
+    reviewMediaStage.classList.toggle('is-zoomed', reviewZoom > 100);
+  }
+  if (rerender) renderAssetReviewModal();
+}
+
+function handleReviewWheelZoom(event) {
+  if (!isAssetReviewOpen() || !event.ctrlKey) return;
+  event.preventDefault();
+  const before = reviewMediaStage ? {
+    left: reviewMediaStage.scrollLeft,
+    top: reviewMediaStage.scrollTop,
+    width: reviewMediaStage.scrollWidth,
+    height: reviewMediaStage.scrollHeight,
+  } : null;
+  setReviewZoom(reviewZoom + (event.deltaY < 0 ? 12 : -12));
+  if (before && reviewMediaStage) {
+    requestAnimationFrame(() => {
+      const widthRatio = before.width ? reviewMediaStage.scrollWidth / before.width : 1;
+      const heightRatio = before.height ? reviewMediaStage.scrollHeight / before.height : 1;
+      reviewMediaStage.scrollLeft = before.left * widthRatio;
+      reviewMediaStage.scrollTop = before.top * heightRatio;
+    });
+  }
+}
+
+function isAssetReviewOpen() {
+  return Boolean(assetReviewDialog?.open && assetReviewDialog?.classList.contains('media-review-dialog'));
+}
+
+function startReviewPan(event) {
+  if (!isAssetReviewOpen() || !isReviewSpaceHeld || !reviewMediaStage) return;
+  event.preventDefault();
+  reviewPanState = {
+    pointerId: event.pointerId,
+    startX: event.clientX,
+    startY: event.clientY,
+    scrollLeft: reviewMediaStage.scrollLeft,
+    scrollTop: reviewMediaStage.scrollTop,
+  };
+  reviewMediaStage.classList.add('is-panning');
+  reviewMediaStage.setPointerCapture?.(event.pointerId);
+}
+
+function moveReviewPan(event) {
+  if (!reviewPanState || !reviewMediaStage) return;
+  event.preventDefault();
+  reviewMediaStage.scrollLeft = reviewPanState.scrollLeft - (event.clientX - reviewPanState.startX);
+  reviewMediaStage.scrollTop = reviewPanState.scrollTop - (event.clientY - reviewPanState.startY);
+}
+
+function stopReviewPan(event) {
+  if (!reviewPanState || !reviewMediaStage) return;
+  reviewMediaStage.releasePointerCapture?.(event.pointerId || reviewPanState.pointerId);
+  reviewPanState = null;
+  reviewMediaStage.classList.remove('is-panning');
+}
+
+function handleReviewShortcut(event) {
+  if (!isAssetReviewOpen()) return;
+  const targetTag = event.target?.tagName?.toLowerCase();
+  if (['input', 'textarea', 'select'].includes(targetTag)) return;
+  if ((event.ctrlKey || event.metaKey) && ['+', '=', '-', '_', '0'].includes(event.key)) {
+    event.preventDefault();
+    if (event.key === '0') setReviewZoom(100);
+    else setReviewZoom(reviewZoom + (event.key === '-' || event.key === '_' ? -10 : 10));
+    return;
+  }
+  if (event.code === 'Space') {
+    event.preventDefault();
+    isReviewSpaceHeld = true;
+    reviewMediaStage?.classList.add('is-panning');
+  }
+}
+
+function releaseReviewShortcut(event) {
+  if (event.code !== 'Space') return;
+  isReviewSpaceHeld = false;
+  stopReviewPan(event);
 }
 
 function approveCurrentReviewScene() {
@@ -1440,6 +1626,10 @@ function getRuntimeSnapshot() {
     resumeMode: projectRuntime.resumeMode || 'manual-start',
     lastErrorClassification: projectRuntime.lastErrorClassification || null,
     waitingForUserStart: true,
+    imageGeneration: {
+      ...getImageGenerationSettings(),
+      apiKey: '',
+    },
   };
 }
 
@@ -1533,6 +1723,10 @@ function getProjectSessionPayload() {
       scriptProvider: providerSelect?.value || '',
       imageProvider: providerSelect?.value || '',
       videoProvider: videoPlatformSelect?.value || 'grok',
+      imageGeneration: {
+        ...getImageGenerationSettings(),
+        apiKey: '',
+      },
       selectedModels: {
         script: modelInput?.value || '',
         image: providerSelect?.value || '',
@@ -1553,6 +1747,7 @@ function getProjectSessionPayload() {
       ...runtime,
       outputFolder,
       videoPlatform: videoPlatformSelect?.value || 'grok',
+      reviewSettings: getReviewSettings(),
       skipReview: shouldSkipReview(),
       pixverse: {
         resolution: pixverseResolutionSelect?.value || '',
@@ -1624,6 +1819,26 @@ function setControlValue(control, value) {
   control.value = String(value);
 }
 
+function migrateProjectAssetPathsToOutputFolder(filePath = '') {
+  if (!outputFolder || !project?.scenes?.length) return;
+  const baseDir = filePath ? filePath.replace(/[\\/][^\\/]+$/, '') : '';
+  const projectFolderName = outputFolder.split(/[\\/]/).pop();
+  project.scenes.forEach((scene) => {
+    ['imagePath', 'videoPath'].forEach((key) => {
+      const value = scene[key];
+      if (!value) return;
+      const normalized = String(value).replace(/\\/g, '/');
+      const doubleSegment = `/${projectFolderName}/${projectFolderName}/`;
+      if (normalized.includes(doubleSegment)) {
+        scene[key] = normalized.replace(doubleSegment, `/${projectFolderName}/`).replace(/\//g, value.includes('\\') ? '\\' : '/');
+      } else if (baseDir && !normalized.includes(`/${projectFolderName}/`) && /scene_\d+/.test(normalized)) {
+        const tail = normalized.slice(normalized.search(/scene_\d+/));
+        scene[key] = `${outputFolder}${outputFolder.includes('\\') ? '\\' : '/'}${tail.replace(/\//g, outputFolder.includes('\\') ? '\\' : '/')}`;
+      }
+    });
+  });
+}
+
 function applyProjectSessionPayload(payload = {}, filePath = '') {
   project = normalizeProjectSessionForRenderer(payload);
   activeBatchIds = normalizeActiveBatchIdsForRuntime(payload.runtime?.activeBatchIds || [], project.scenes);
@@ -1642,6 +1857,7 @@ function applyProjectSessionPayload(payload = {}, filePath = '') {
   autoContinuing = false;
   reviewSceneId = null;
   outputFolder = payload.runtime?.outputFolder || '';
+  migrateProjectAssetPathsToOutputFolder(filePath);
   currentProjectFilePath = filePath || '';
   projectDirty = false;
   lastMissingAssetCount = 0;
@@ -1659,7 +1875,8 @@ function applyProjectSessionPayload(payload = {}, filePath = '') {
   setControlValue(accountSelect, payload.config?.selectedLabels?.account);
   setControlValue(modelInput, payload.config?.selectedModels?.script || payload.config?.selectedLabels?.model);
   setControlValue(videoPlatformSelect, payload.runtime?.videoPlatform || payload.config?.videoProvider);
-  if (skipReviewToggle) skipReviewToggle.checked = Boolean(payload.runtime?.skipReview);
+  applyImageGenerationSettings(payload.runtime?.imageGeneration || payload.config?.imageGeneration);
+  applyReviewSettings(payload.runtime?.reviewSettings || { skipReview: payload.runtime?.skipReview });
   setControlValue(pixverseResolutionSelect, payload.runtime?.pixverse?.resolution);
   setControlValue(pixverseRatioSelect, payload.runtime?.pixverse?.ratio);
   setControlValue(pixverseDurationSelect, payload.runtime?.pixverse?.duration);
@@ -1673,6 +1890,11 @@ function applyProjectSessionPayload(payload = {}, filePath = '') {
   if (webSessionStatus) webSessionStatus.textContent = outputFolder ? `Folder lưu: ${outputFolder}` : 'Opened project. Waiting for Start.';
   syncVideoPlatformConfig();
   updatePixVerseConfigAdvice();
+  syncProjectSceneFolders({ repairFromDisk: true }).then(() => {
+    projectDirty = false;
+    persist();
+    render();
+  }).catch(() => null);
   persist();
   render();
 }
@@ -1702,6 +1924,41 @@ async function confirmUnsavedProjectAction(actionLabel) {
   return false;
 }
 
+function createBlankProjectFromName() {
+  const now = new Date().toISOString();
+  return {
+    id: crypto.randomUUID(),
+    name: projectNameInput?.value?.trim() || 'Untitled project',
+    story: storyInput?.value?.trim() || '',
+    scenes: [],
+    batchSize: clamp(Number(batchSizeInput?.value) || 10, 1, 10),
+    durationSec: Math.max(1, Number(durationInput?.value) || 10),
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+async function createInitialProjectFileInOutputFolder() {
+  if (!outputFolder || !window.videoPlannerAPI?.createProjectSession) return null;
+  project = createBlankProjectFromName();
+  const result = await window.videoPlannerAPI.createProjectSession({
+    folderPath: outputFolder,
+    projectName: project.name,
+    payload: getProjectSessionPayload(),
+  }).catch((error) => ({ ok: false, error: error.message }));
+  if (!result?.ok) {
+    project = null;
+    setStatus(`Không tạo được file .grokproj: ${result?.error || 'unknown error'}`, 'error');
+    return null;
+  }
+  currentProjectFilePath = result.filePath || '';
+  outputFolder = result.projectFolder || outputFolder;
+  projectDirty = false;
+  persist();
+  render();
+  return result;
+}
+
 async function newProjectSessionFlow() {
   if (!(await confirmUnsavedProjectAction('creating a new project'))) return;
   await window.videoPlannerAPI?.newProjectSession?.().catch(() => null);
@@ -1720,14 +1977,26 @@ async function newProjectSessionFlow() {
   projectForm?.reset?.();
   persist();
   render();
-  setStatus('New project ready. Enter story and scenes, then press Start pipeline.', 'idle');
+  setStatus('Chọn folder lưu cho project mới...', 'running');
+  await chooseOutputFolder();
+  const createdFile = outputFolder ? await createInitialProjectFileInOutputFolder() : null;
+  setStatus(createdFile?.ok
+    ? `New project ready. Đã tạo ${currentProjectFilePath.split(/[\\/]/).pop()} và folder ${outputFolder.split(/[\\/]/).pop()}.`
+    : outputFolder
+      ? 'New project ready nhưng chưa tạo được file .grokproj; bấm Save Project để lưu lại.'
+      : 'New project ready. Chưa chọn folder lưu; khi chạy pipeline tool sẽ hỏi lại.',
+    createdFile?.ok ? 'ok' : 'idle');
 }
 
 async function saveProjectSessionFlow(options = {}) {
-  if (!project || !window.videoPlannerAPI?.saveProjectSession) return false;
+  if (!project) return false;
   const checked = await reconcileSavedAssets();
+  await syncProjectSceneFolders({ repairFromDisk: true });
   lastMissingAssetCount = checked.missing || 0;
-  const result = await window.videoPlannerAPI.saveProjectSession(getProjectSessionPayload());
+  const payload = getProjectSessionPayload();
+  const result = currentProjectFilePath && window.videoPlannerAPI?.overwriteProjectSession
+    ? await window.videoPlannerAPI.overwriteProjectSession({ filePath: currentProjectFilePath, payload })
+    : await window.videoPlannerAPI?.saveProjectSession?.(payload);
   if (!result?.ok) return false;
   currentProjectFilePath = result.filePath || currentProjectFilePath;
   projectDirty = false;
@@ -1743,6 +2012,7 @@ async function openProjectSessionFlow() {
   const result = await window.videoPlannerAPI.openProjectSession();
   if (!result?.ok) return;
   applyProjectSessionPayload(result.payload, result.filePath);
+  await syncProjectSceneFolders({ repairFromDisk: true });
   const checked = await reconcileSavedAssets();
   lastMissingAssetCount = checked.missing || 0;
   projectDirty = Boolean(lastMissingAssetCount);
@@ -1752,7 +2022,7 @@ async function openProjectSessionFlow() {
 }
 
 function persist() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify({ project, activeBatchIds, paused, outputFolder, currentProjectFilePath, projectDirty, projectRuntime, grokRouter: getGrokRouterSettings() }));
+  localStorage.setItem(STORAGE_KEY, JSON.stringify({ project, activeBatchIds, paused, outputFolder, currentProjectFilePath, projectDirty, projectRuntime, grokRouter: getGrokRouterSettings(), reviewSettings: getReviewSettings(), imageGeneration: getImageGenerationSettings() }));
 }
 
 async function reconcileSavedAssets() {
@@ -1812,6 +2082,8 @@ function restore() {
     const shouldRestore = localStorage.getItem(RESTORE_SESSION_KEY) === '1';
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
     outputFolder = saved.outputFolder || '';
+    applyImageGenerationSettings(saved.imageGeneration || {});
+    applyReviewSettings(saved.reviewSettings || { skipReview: saved.skipReview });
     currentProjectFilePath = saved.currentProjectFilePath || '';
     projectDirty = Boolean(saved.projectDirty);
     projectRuntime = { ...projectRuntime, ...(saved.projectRuntime || {}) };
@@ -1925,11 +2197,17 @@ clearLogBtn?.addEventListener('click', () => {
 });
 refreshFinalPreviewBtn?.addEventListener('click', () => mergeAndShowFinalPreview().catch((error) => setStatus(`Không merge/preview được final video: ${error.message}`, 'error')));
 zoomRange?.addEventListener('input', () => {
-  reviewZoom = Number(zoomRange.value) || 100;
-  renderAssetReviewModal();
+  setReviewZoom(Number(zoomRange.value) || 100);
 });
-zoomOutBtn?.addEventListener('click', () => setReviewZoom(reviewZoom - 10));
-zoomInBtn?.addEventListener('click', () => setReviewZoom(reviewZoom + 10));
+reviewMediaStage?.addEventListener('wheel', handleReviewWheelZoom, { passive: false });
+zoomOutBtn?.addEventListener('click', () => setReviewZoom((Number(zoomRange?.value) || reviewZoom || 100) - 10));
+zoomInBtn?.addEventListener('click', () => setReviewZoom((Number(zoomRange?.value) || reviewZoom || 100) + 10));
+reviewMediaStage?.addEventListener('pointerdown', startReviewPan);
+reviewMediaStage?.addEventListener('pointermove', moveReviewPan);
+reviewMediaStage?.addEventListener('pointerup', stopReviewPan);
+reviewMediaStage?.addEventListener('pointercancel', stopReviewPan);
+document.addEventListener('keydown', handleReviewShortcut);
+document.addEventListener('keyup', releaseReviewShortcut);
 saveEditBtn.addEventListener('click', saveEdit);
 videoPlatformSelect?.addEventListener('change', () => {
   syncVideoPlatformConfig();
@@ -1958,10 +2236,24 @@ modelInput?.addEventListener('input', () => {
   markProjectDirty();
   persist();
 });
-skipReviewToggle?.addEventListener('change', () => {
-  markProjectDirty();
-  persist();
-});
+[skipReviewToggle, skipPromptReviewToggle, skipImageReviewToggle, skipVideoReviewToggle]
+  .filter(Boolean)
+  .forEach((control) => control.addEventListener('change', () => {
+    if (control === skipReviewToggle && skipReviewToggle.checked) {
+      [skipPromptReviewToggle, skipImageReviewToggle, skipVideoReviewToggle].forEach((item) => {
+        if (item) item.checked = true;
+      });
+    }
+    markProjectDirty();
+    persist();
+  }));
+[imageGenerationMethodSelect, imageApiEndpointInput, imageApiModelSelect, imageApiSizeInput, imageApiKeyInput]
+  .filter(Boolean)
+  .forEach((control) => control.addEventListener('change', () => {
+    markProjectDirty();
+    persist();
+  }));
+settingsSaveBtn?.addEventListener('click', saveSettingsDialog);
 
 window.addEventListener('error', (event) => {
   setStatus(`Renderer lỗi: ${event.message}`, 'error');
@@ -1970,6 +2262,8 @@ window.addEventListener('unhandledrejection', (event) => {
   setStatus(`Promise lỗi: ${event.reason?.message || event.reason}`, 'error');
 });
 
+embedRouterPanelInSettings();
+moveProjectActionsOutsideSettings();
 syncVideoPlatformConfig();
 refreshGrokRouterStatus().catch(() => null);
 renderPipelineLog();
@@ -1979,6 +2273,7 @@ window.videoPlannerAPI?.onProjectMenuCommand?.((command) => {
   if (command === 'new') newProjectSessionFlow();
   if (command === 'open') openProjectSessionFlow();
   if (command === 'save') saveProjectSessionFlow();
+  if (command === 'settings') openSettingsDialog();
 });
 window.videoPlannerAPI?.appendAppLog?.({ source: 'renderer', kind: 'info', text: 'Renderer loaded' }).catch(() => null);
 
