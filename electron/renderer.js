@@ -40,6 +40,7 @@ const skipImageReviewToggle = document.querySelector('#skip-image-review-toggle'
 const skipVideoReviewToggle = document.querySelector('#skip-video-review-toggle');
 const settingsDialog = document.querySelector('#settings-dialog');
 const settingsSaveBtn = document.querySelector('#settings-save-btn');
+const openHardPromptBtn = document.querySelector('#open-hard-prompt-btn');
 const imageGenerationMethodSelect = document.querySelector('#image-generation-method-select');
 const imageApiEndpointInput = document.querySelector('#image-api-endpoint-input');
 const imageApiModelSelect = document.querySelector('#image-api-model-select');
@@ -77,6 +78,19 @@ const openReviewBtn = document.querySelector('#open-review-btn');
 const loginWaitDialog = document.querySelector('#login-wait-dialog');
 const loginWaitTitle = document.querySelector('#login-wait-title');
 const loginWaitDesc = document.querySelector('#login-wait-desc');
+const loginWaitOpenBtn = document.querySelector('#login-wait-open-btn');
+const newProjectDialog = document.querySelector('#new-project-dialog');
+const newProjectNameInput = document.querySelector('#new-project-name-input');
+const newProjectSceneFileInput = document.querySelector('#new-project-scene-file-input');
+const newProjectSceneFileName = document.querySelector('#new-project-scene-file-name');
+const newProjectSaveLocationInput = document.querySelector('#new-project-save-location-input');
+const newProjectChooseLocationBtn = document.querySelector('#new-project-choose-location-btn');
+const newProjectCreateBtn = document.querySelector('#new-project-create-btn');
+const chatResolveDialog = document.querySelector('#chat-resolve-dialog');
+const chatResolveMessage = document.querySelector('#chat-resolve-message');
+const chatResolveNewBtn = document.querySelector('#chat-resolve-new-btn');
+const chatResolveTitleInput = document.querySelector('#chat-resolve-title-input');
+const chatResolveRenameBtn = document.querySelector('#chat-resolve-rename-btn');
 const assetReviewDialog = document.querySelector('#asset-review-dialog');
 const reviewSceneKicker = document.querySelector('#review-scene-kicker');
 const reviewSceneTitle = document.querySelector('#review-scene-title');
@@ -87,6 +101,7 @@ const reviewMediaPanel = document.querySelector('#review-media-panel');
 const reviewMediaStage = document.querySelector('#review-media-stage');
 const reviewImagePrompt = document.querySelector('#review-image-prompt');
 const reviewMotionPrompt = document.querySelector('#review-motion-prompt');
+const reviewMotionBlock = document.querySelector('#review-motion-block');
 const reviewEditImageBtn = document.querySelector('#review-edit-image-btn');
 const reviewEditMotionBtn = document.querySelector('#review-edit-motion-btn');
 const reviewRegenerateBtn = document.querySelector('#review-regenerate-btn');
@@ -157,6 +172,9 @@ let paused = false;
 let editTarget = null;
 let outputFolder = '';
 let reviewSceneId = null;
+let newProjectSceneText = '';
+let newProjectRootFolder = '';
+let pendingChatResolve = null;
 let reviewZoom = 100;
 let pixverseCapability = null;
 let pipelineLogs = [];
@@ -273,10 +291,10 @@ function queueAutoContinue(delay = 350) {
 
 function createProject(event) {
   event?.preventDefault?.();
-  const story = storyInput.value.trim();
+  const story = storyInput?.value?.trim() || '';
   const script = scriptInput.value.trim();
-  if (!story || !script) {
-    setStatus('Cần nhập đủ cốt truyện tổng và kịch bản scene.', 'error');
+  if (!script) {
+    setStatus('Cần nhập scene.', 'error');
     return;
   }
 
@@ -297,6 +315,7 @@ function createProject(event) {
     id: crypto.randomUUID(),
     name: projectNameInput.value.trim() || 'Untitled project',
     story,
+    chatContextTitle: projectNameInput.value.trim() || 'Untitled project',
     scenes,
     batchSize: clamp(Number(batchSizeInput.value) || 10, 1, 10),
     durationSec: Math.max(1, Number(durationInput.value) || 10),
@@ -309,6 +328,7 @@ function createProject(event) {
   persist();
   render();
   setStatus(`Đã parse ${scenes.length} scene. Bấm Start pipeline để tool tạo prompt và chạy workflow.`, 'ok');
+  return project;
 }
 
 function parseScenes(script) {
@@ -351,11 +371,10 @@ async function runNextBatch({ regenerate = false } = {}) {
     scene.status = 'running';
     render();
     try {
-      const aiResult = await generateWithProvider(scene);
-      scene.imagePrompt = aiResult?.imagePrompt || buildImagePrompt(scene);
-      scene.motionPrompt = aiResult?.motionPrompt || buildMotionPrompt(scene);
-      scene.status = 'waiting_review';
-      scene.reviewType = 'prompt';
+      scene.imagePrompt = scene.original || buildImagePrompt(scene);
+      scene.motionPrompt = '';
+      scene.status = 'approved';
+      scene.reviewType = '';
       scene.provider = providerSelect.value;
       scene.account = accountSelect.value;
       scene.updatedAt = new Date().toISOString();
@@ -375,9 +394,7 @@ async function runNextBatch({ regenerate = false } = {}) {
 
   setRunning(false);
   if (!paused) {
-    const firstReview = batch.find((scene) => scene.status === 'waiting_review');
-    setStatus(`Batch ${activeBatchIds[0]}-${activeBatchIds.at(-1)} đang chờ review prompt. Popup review đã mở tự động.`, 'ok');
-    if (firstReview && !shouldSkipReview('prompt')) openAssetReview(firstReview.id);
+    setStatus(`Batch ${activeBatchIds[0]}-${activeBatchIds.at(-1)} đã sẵn sàng. Tool sẽ gửi Kịch bản + Nhiệm vụ 1 + Scene trực tiếp để tạo ảnh.`, 'ok');
   }
   render();
 }
@@ -388,14 +405,33 @@ async function syncProjectSceneFolders({ repairFromDisk = false } = {}) {
   if (repairFromDisk && result?.records?.length) {
     result.records.forEach((record) => {
       const scene = project.scenes.find((item) => String(item.id) === String(record.sceneId) || String(item.sceneId) === String(record.sceneId));
-      if (!scene || !record.keyframeExists || scene.imagePath) return;
-      scene.imagePath = record.keyframePath;
-      if (['waiting_review', 'approved', 'image_generating', 'asset_review', 'queued'].includes(scene.status) && scene.reviewType !== 'video') {
-        scene.status = 'image_done';
-        scene.progressStep = 'motion';
-        scene.reviewType = '';
+      if (!scene) return;
+      if (record.keyframeExists) {
+        scene.imagePath = record.keyframePath;
+      } else {
+        scene.imagePath = '';
+        scene.imageDataUrl = '';
       }
+      if (record.videoExists) {
+        scene.videoPath = record.videoPath;
+        scene.status = 'video_done';
+        scene.progressStep = 'merge';
+        scene.reviewType = '';
+      } else {
+        scene.videoPath = '';
+        if (record.keyframeExists) {
+          scene.status = scene.motionPrompt ? 'image_done' : 'image_done';
+          scene.progressStep = 'motion';
+          scene.reviewType = '';
+        } else {
+          scene.status = scene.imagePrompt ? 'waiting_review' : 'queued';
+          scene.progressStep = scene.imagePrompt ? 'prompt' : 'queued';
+          scene.reviewType = scene.imagePrompt ? 'prompt' : '';
+        }
+      }
+      projectDirty = true;
     });
+    activeBatchIds = normalizeActiveBatchIdsForRuntime(activeBatchIds, project.scenes);
   }
   return result;
 }
@@ -619,9 +655,9 @@ async function runFullPipeline() {
       projectRuntime = { ...projectRuntime, currentStage: resumeAction.currentStage, currentSceneId: getSceneRef(scene, sceneIndex), currentBatchIndex: activeBatchIds.findIndex((id) => id === scene.id), lastAction: resumeAction.action, waitingForUserStart: false };
       scene.status = scene.imagePath ? 'video_generating' : 'image_generating';
       render();
-      const imagePrompt = scene.imagePrompt || buildImagePrompt(scene);
+      const imagePrompt = scene.imagePrompt || scene.original || buildImagePrompt(scene);
       scene.imagePrompt = imagePrompt;
-      const motionPrompt = scene.motionPrompt || (scene.imagePath ? buildMotionPrompt(scene) : '');
+      const motionPrompt = scene.motionPrompt || '';
       if (motionPrompt) scene.motionPrompt = motionPrompt;
       scene.progressStep = scene.imagePath ? 'motion' : 'image';
       render();
@@ -639,9 +675,13 @@ async function runFullPipeline() {
         accountRouterEnabled: Boolean(grokRouterEnabledToggle?.checked),
         videoConfig: getVideoProviderConfig(),
         imageProvider: getImageGenerationSettings(),
+        chatContextTitle: project.chatContextTitle ?? project.name ?? projectNameInput?.value?.trim() ?? '',
+        pendingChatRenameTitle: project.pendingChatRenameTitle || '',
+        scriptText: storyInput?.value?.trim() || project?.story || '',
+        sceneText: scene.original || '',
       });
       scene.forceRegenerateImage = false;
-      scene.imagePrompt = imagePrompt;
+      scene.imagePrompt = result.imagePromptUsed || scene.imagePrompt || imagePrompt;
       if (result.motionPrompt) {
         scene.motionPrompt = result.motionPrompt;
       }
@@ -654,6 +694,12 @@ async function runFullPipeline() {
       scene.videoPath = resultVideoPath && String(resultVideoPath).includes(sceneFolderToken) ? resultVideoPath : scene.videoPath || '';
       scene.videoProvider = result.videoProvider || videoPlatform.value;
       scene.videoStatus = result.videoStatus || '';
+      const resultLoginProvider = parseLoginRequiredError(`${result.videoError || ''}\n${result.videoStatus || ''}`, scene);
+      if (resultLoginProvider) {
+        await recoverLoginAndRetryScene(resultLoginProvider, scene, result.videoError || result.videoStatus || '');
+        i--;
+        continue;
+      }
       if (result.phase === 'video' && !result.videoPath) {
         scene.status = 'error';
         const detail = result.videoError || result.videoStatus || 'chưa có videoUrl mới để tải về';
@@ -666,8 +712,12 @@ async function runFullPipeline() {
         setStatus(`Scene ${scene.id}: ${scene.error}`, 'error');
         return;
       }
-      scene.progressStep = result.phase === 'video' ? 'motion' : 'image';
-      scene.reviewType = result.phase === 'video' ? 'video' : 'image';
+      if (project.pendingChatRenameTitle && result.phase === 'image') {
+        project.chatContextTitle = project.pendingChatRenameTitle;
+        project.pendingChatRenameTitle = '';
+      }
+      scene.progressStep = result.phase === 'video' ? 'motion' : result.phase === 'motion_prompt' ? 'motion_review' : 'image';
+      scene.reviewType = result.phase === 'video' ? 'video' : result.phase === 'motion_prompt' ? 'prompt' : 'image';
       scene.status = 'asset_review';
       scene.updatedAt = new Date().toISOString();
       persist();
@@ -689,6 +739,21 @@ async function runFullPipeline() {
       return;
     } catch (error) {
       const message = error.message || String(error);
+      const loginProvider = parseLoginRequiredError(message, scene);
+      if (loginProvider) {
+        await recoverLoginAndRetryScene(loginProvider, scene, message);
+        i--;
+        continue;
+      }
+      if (/ChatGPT.*sidebar|sidebar|conversation.*ChatGPT|Không.*ChatGPT|Không thấy chat/i.test(message)) {
+        scene.error = message;
+        scene.updatedAt = new Date().toISOString();
+        paused = true;
+        persist();
+        render();
+        openChatResolveDialog(scene, message);
+        return;
+      }
       scene.pipelineRetryCount = (scene.pipelineRetryCount || 0) + 1;
       scene.error = message;
       scene.updatedAt = new Date().toISOString();
@@ -824,6 +889,7 @@ async function waitForProviderReady(providerValue, label) {
     });
     if (state.loggedIn) {
       if (loginWaitDesc) loginWaitDesc.textContent = `${label} đã sẵn sàng. Đang tiếp tục pipeline...`;
+      if (loginWaitDialog?.open) loginWaitDialog.close();
       return state;
     }
     const reason = state.reason || state.title || state.url || 'chưa đăng nhập hoặc đang verify';
@@ -833,6 +899,37 @@ async function waitForProviderReady(providerValue, label) {
     await new Promise((resolve) => setTimeout(resolve, 3000));
   }
   throw new Error(`Đã hủy khi đang chờ ${label} login/verify.`);
+}
+
+function parseLoginRequiredError(message = '', scene = null) {
+  const text = String(message || '');
+  const explicit = text.match(/LOGIN_REQUIRED:(chatgpt|grok|pixverse)\b/i)?.[1]?.toLowerCase();
+  if (explicit) return explicit;
+  if (/ChatGPT.*(chưa|login|đăng nhập|sign in|session|verify)|chưa login.*ChatGPT/i.test(text)) return 'chatgpt';
+  if (/Grok.*(chưa|login|đăng nhập|sign in|session|verify)|grok login is required/i.test(text)) return 'grok';
+  if (/PixVerse.*(chưa|login|đăng nhập|sign in|session|verify)/i.test(text)) return 'pixverse';
+  if (/chưa đăng nhập|chưa login|session.*hết hạn|sign in|sign up|đăng nhập lại/i.test(text)) {
+    return scene?.imagePath ? getSelectedVideoPlatform().value : 'chatgpt';
+  }
+  return '';
+}
+
+async function recoverLoginAndRetryScene(providerValue, scene, message = '') {
+  const labels = { chatgpt: 'ChatGPT', grok: 'Grok', pixverse: 'PixVerse' };
+  const label = labels[providerValue] || providerValue;
+  scene.error = `${label} bị đăng xuất hoặc cần verify lại. Đang chờ đăng nhập để chạy tiếp.`;
+  scene.updatedAt = new Date().toISOString();
+  persist();
+  render();
+  setStatus(`Scene ${scene.id}: ${label} bị đăng xuất. Đăng nhập/verify xong tool sẽ chạy tiếp scene này.`, 'running');
+  await window.videoPlannerAPI?.appendAppLog?.({ source: 'renderer', kind: 'running', text: `Login recovery required for ${label} at scene ${scene.id}: ${message}` });
+  await waitForProviderReady(providerValue, label);
+  scene.error = '';
+  scene.pipelineRetryCount = 0;
+  scene.status = scene.imagePath ? 'video_generating' : 'image_generating';
+  scene.updatedAt = new Date().toISOString();
+  persist();
+  render();
 }
 
 async function startPipelineFromClick(event) {
@@ -902,8 +999,8 @@ async function autoRunRoute() {
     } else {
       activeScenes.forEach((scene) => {
         if (scene.status === 'error') {
-          scene.status = scene.imagePrompt && scene.motionPrompt ? 'waiting_review' : 'queued';
-          scene.reviewType = scene.status === 'waiting_review' ? 'prompt' : '';
+          scene.status = 'approved';
+          scene.reviewType = '';
         }
       });
     }
@@ -915,22 +1012,14 @@ async function autoRunRoute() {
     // Đã chuyển logic login lên trên
 
     webSessionStatus.textContent = `Đã login ChatGPT + ${videoPlatform.label}. Output: ${outputFolder}`;
-    const waitingPrompt = project.scenes.find((scene) => activeBatchIds.includes(scene.id) && scene.status === 'waiting_review');
-    if (waitingPrompt && !shouldSkipReview('prompt')) {
-      openAssetReview(waitingPrompt.id);
-      setStatus(`Scene ${waitingPrompt.id} đang chờ review prompt. Bấm Ổn/Next để tool tự tạo ảnh.`, 'ok');
-      return;
-    }
-    if (waitingPrompt && shouldSkipReview('prompt')) {
-      activeScenes.forEach((scene) => {
-        if (scene.status === 'waiting_review') {
-          scene.status = 'approved';
-          scene.reviewType = '';
-        }
-      });
-      persist();
-      render();
-    }
+    project.scenes.forEach((scene) => {
+      if (activeBatchIds.includes(scene.id) && scene.status === 'waiting_review') {
+        scene.status = 'approved';
+        scene.reviewType = '';
+      }
+    });
+    persist();
+    render();
     setStatus('Bước 5/5: gửi prompt, tạo ảnh/video và lưu file...', 'running');
     if (loginWaitDialog?.open) loginWaitDialog.close();
     await runFullPipeline();
@@ -1075,6 +1164,7 @@ function appendPipelineLog(text, kind = 'idle') {
 function showPipelineNotice(payload = {}) {
   const message = payload.message || 'Pipeline cần chú ý.';
   setStatus(message, payload.type === 'grok-limit' ? 'error' : 'running');
+  if (payload.type === 'chatgpt-image-retry') return;
   window.alert(message);
 }
 
@@ -1252,7 +1342,10 @@ function renderAssetReviewModal() {
       : 'Review prompt lần này. Duyệt xong bấm Chạy tự động toàn bộ để tạo ảnh, popup prompt này sẽ không hiện lại.';
   reviewOriginal.textContent = scene.original || '—';
   reviewImagePrompt.textContent = scene.imagePrompt || '—';
-  reviewMotionPrompt.textContent = scene.motionPrompt || '—';
+  const showMotionPrompt = reviewType !== 'image';
+  if (reviewMotionBlock) reviewMotionBlock.hidden = !showMotionPrompt;
+  if (reviewEditMotionBtn) reviewEditMotionBtn.hidden = !showMotionPrompt;
+  reviewMotionPrompt.textContent = showMotionPrompt ? (scene.motionPrompt || '—') : '';
   reviewStatusBadge.innerHTML = `<span class="status-badge ${scene.status}">${escapeHtml(statusLabel(scene))}</span>`;
   if (reviewMediaPanel) reviewMediaPanel.hidden = !showMedia;
   if (reviewMediaStage) {
@@ -1361,11 +1454,12 @@ function releaseReviewShortcut(event) {
 }
 
 function approveCurrentReviewScene() {
-  const scene = getCurrentReviewScene();
+  const scene = reviewSceneId ? project?.scenes?.find((item) => item.id === reviewSceneId) : getCurrentReviewScene();
   if (!scene) return;
   const reviewType = scene.status === 'waiting_review' ? 'prompt' : scene.reviewType || (scene.videoPath ? 'video' : scene.imagePath ? 'image' : 'prompt');
-  scene.status = reviewType === 'video' ? 'video_done' : reviewType === 'image' ? 'image_done' : 'approved';
-  scene.progressStep = reviewType === 'video' ? 'merge' : reviewType === 'image' ? 'motion' : 'image';
+  const isMotionPromptReview = reviewType === 'prompt' && scene.imagePath;
+  scene.status = reviewType === 'video' ? 'video_done' : reviewType === 'image' || isMotionPromptReview ? 'image_done' : 'approved';
+  scene.progressStep = reviewType === 'video' ? 'merge' : reviewType === 'image' || isMotionPromptReview ? 'motion' : 'image';
   scene.reviewType = '';
   scene.reviewedAt = new Date().toISOString();
   reviewSceneId = null;
@@ -1548,11 +1642,11 @@ const IMAGE_READY_RESUME_STATUSES = new Set(['image_done', 'image_generated', 'm
 const VIDEO_DONE_RESUME_STATUSES = new Set(['video_done', 'video_generated', 'video_ready']);
 
 function isVideoCompleteForResume(scene = {}) {
-  return Boolean(scene.videoPath) || VIDEO_DONE_RESUME_STATUSES.has(scene.status);
+  return Boolean(scene.videoPath);
 }
 
 function hasKeyframeForResume(scene = {}) {
-  return Boolean(scene.imagePath || scene.imageDataUrl) || IMAGE_READY_RESUME_STATUSES.has(scene.status) || isVideoCompleteForResume(scene);
+  return Boolean(scene.imagePath || scene.imageDataUrl) || isVideoCompleteForResume(scene);
 }
 
 function findSceneByRuntimeRef(ref, scenes = project?.scenes || []) {
@@ -1712,6 +1806,7 @@ function getProjectSessionPayload() {
     inputs: {
       storyPrompt: storyInput?.value || project?.story || '',
       scriptPrompt: scriptInput?.value || scenes.map((scene) => scene.rawSceneText).join('\n\n'),
+      chatContextTitle: project?.name || projectNameInput?.value?.trim() || '',
       promptTemplates: {
         image: { id: 'renderer-image-rules', version: '1' },
         motion: { id: 'renderer-motion-rules', version: '1' },
@@ -1868,6 +1963,7 @@ function applyProjectSessionPayload(payload = {}, filePath = '') {
   }
   if (projectNameInput) projectNameInput.value = project?.name || '';
   if (storyInput) storyInput.value = payload.inputs?.storyPrompt || project?.story || '';
+
   if (scriptInput) scriptInput.value = project?.scenes?.map((scene) => scene.original).join('\n\n') || payload.inputs?.scriptPrompt || '';
   setControlValue(batchSizeInput, project?.batchSize);
   setControlValue(durationInput, project?.durationSec);
@@ -1924,6 +2020,65 @@ async function confirmUnsavedProjectAction(actionLabel) {
   return false;
 }
 
+function openChatResolveDialog(scene, message) {
+  pendingChatResolve = { sceneId: scene?.id || null, message };
+  if (chatResolveMessage) chatResolveMessage.textContent = `Không tìm thấy đoạn chat ChatGPT tên "${project?.name || ''}". Chọn cách xử lý để tool tiếp tục.`;
+  if (chatResolveTitleInput) chatResolveTitleInput.value = '';
+  if (chatResolveDialog && !chatResolveDialog.open) chatResolveDialog.showModal();
+  setStatus('Cần chọn cách xử lý đoạn chat ChatGPT để tiếp tục pipeline.', 'error');
+}
+
+function closeChatResolveDialog() {
+  if (!chatResolveDialog) return;
+  try { chatResolveDialog.close(); } catch (_error) {}
+  chatResolveDialog.removeAttribute('open');
+}
+
+async function resolveChatAndContinue(mode) {
+  if (!pendingChatResolve) return;
+  const title = chatResolveTitleInput?.value?.trim() || '';
+  if (mode === 'rename' && !title) {
+    setStatus('Nhập tên đoạn chat cũ trước khi chọn đổi tên.', 'error');
+    chatResolveTitleInput?.focus?.();
+    return;
+  }
+  closeChatResolveDialog();
+  paused = false;
+  if (mode === 'new') {
+    const targetTitle = project?.name || projectNameInput?.value?.trim() || '';
+    project.chatContextTitle = '';
+    project.pendingChatRenameTitle = targetTitle;
+    setStatus(`Option 1: bỏ tìm chat cũ. Tool sẽ mở chat mới, gửi prompt, rồi rename thành "${targetTitle}" sau khi ChatGPT tạo /c/...`, 'running');
+    await window.videoPlannerAPI?.appendAppLog?.({ source: 'renderer', kind: 'running', text: `Chat resolve option 1: bypass old chat, pendingRenameTitle=${targetTitle}` });
+  } else {
+    const targetTitle = project?.name || projectNameInput?.value?.trim() || '';
+    project.chatContextTitle = title;
+    project.pendingChatRenameTitle = targetTitle;
+    setStatus(`Option 2: tool sẽ vào đoạn chat "${title}", rồi check/rename liên tục thành "${targetTitle}" trước khi tiếp tục pipeline.`, 'running');
+    await window.videoPlannerAPI?.appendAppLog?.({ source: 'renderer', kind: 'running', text: `Chat resolve option 2: select old chat="${title}", pendingRenameTitle=${targetTitle}` });
+  }
+  const scene = project?.scenes?.find((item) => item.id === pendingChatResolve.sceneId);
+  if (scene) {
+    scene.error = '';
+    scene.pipelineRetryCount = 0;
+    scene.status = scene.imagePath ? 'image_done' : 'approved';
+  }
+  pendingChatResolve = null;
+  markProjectDirty();
+  persist();
+  render();
+  queueAutoContinue(200);
+}
+
+function forceCloseNewProjectDialog() {
+  if (!newProjectDialog) return;
+  try { newProjectDialog.close(); } catch (_error) {}
+  newProjectDialog.removeAttribute('open');
+  newProjectDialog.classList.add('force-hidden');
+  document.body?.classList?.remove('modal-open');
+  setTimeout(() => newProjectDialog.classList.remove('force-hidden'), 300);
+}
+
 function createBlankProjectFromName() {
   const now = new Date().toISOString();
   return {
@@ -1938,17 +2093,16 @@ function createBlankProjectFromName() {
   };
 }
 
-async function createInitialProjectFileInOutputFolder() {
-  if (!outputFolder || !window.videoPlannerAPI?.createProjectSession) return null;
-  project = createBlankProjectFromName();
+async function createInitialProjectFileInOutputFolder(rootFolder = outputFolder) {
+  if (!rootFolder || !window.videoPlannerAPI?.createProjectSession) return null;
   const result = await window.videoPlannerAPI.createProjectSession({
-    folderPath: outputFolder,
+    folderPath: rootFolder,
     projectName: project.name,
     payload: getProjectSessionPayload(),
   }).catch((error) => ({ ok: false, error: error.message }));
   if (!result?.ok) {
     project = null;
-    setStatus(`Không tạo được file .grokproj: ${result?.error || 'unknown error'}`, 'error');
+    setStatus(`Không tạo được file .vdra: ${result?.error || 'unknown error'}`, 'error');
     return null;
   }
   currentProjectFilePath = result.filePath || '';
@@ -1971,28 +2125,58 @@ async function newProjectSessionFlow() {
   pipelineLogs = [];
   lastStatusText = '';
   currentProjectFilePath = '';
+  outputFolder = '';
   projectDirty = false;
   lastMissingAssetCount = 0;
+  newProjectSceneText = '';
+  newProjectRootFolder = '';
   projectRuntime = { currentStage: 'idle', currentBatchIndex: null, currentSceneId: null, lastCheckpointRef: null, lastAction: 'new_project', resumeMode: 'manual-start', waitingForUserStart: true };
   projectForm?.reset?.();
+  if (newProjectNameInput) newProjectNameInput.value = '';
+  if (newProjectSceneFileInput) newProjectSceneFileInput.value = '';
+  if (newProjectSceneFileName) newProjectSceneFileName.textContent = 'Chưa chọn file scene.';
+  if (newProjectSaveLocationInput) newProjectSaveLocationInput.value = '';
   persist();
   render();
-  setStatus('Chọn folder lưu cho project mới...', 'running');
-  await chooseOutputFolder();
-  const createdFile = outputFolder ? await createInitialProjectFileInOutputFolder() : null;
-  setStatus(createdFile?.ok
-    ? `New project ready. Đã tạo ${currentProjectFilePath.split(/[\\/]/).pop()} và folder ${outputFolder.split(/[\\/]/).pop()}.`
-    : outputFolder
-      ? 'New project ready nhưng chưa tạo được file .grokproj; bấm Save Project để lưu lại.'
-      : 'New project ready. Chưa chọn folder lưu; khi chạy pipeline tool sẽ hỏi lại.',
-    createdFile?.ok ? 'ok' : 'idle');
+  setStatus('Nhập thông tin project mới trước khi tạo file .vdra.', 'idle');
+  if (newProjectDialog && !newProjectDialog.open) newProjectDialog.showModal();
+}
+
+async function submitNewProjectDialog() {
+  const projectName = newProjectNameInput?.value?.trim() || '';
+  if (!projectName) {
+    setStatus('Cần nhập tên project trước khi tạo.', 'error');
+    newProjectNameInput?.focus?.();
+    return;
+  }
+  if (!newProjectSceneText.trim()) {
+    setStatus('Cần chọn file scene .txt trước khi tạo project.', 'error');
+    return;
+  }
+  if (!newProjectRootFolder) {
+    setStatus('Cần chọn vị trí lưu project.', 'error');
+    return;
+  }
+  forceCloseNewProjectDialog();
+  projectNameInput.value = projectName;
+  scriptInput.value = newProjectSceneText;
+  const createdProject = createProject();
+  if (!createdProject) return;
+  const createdFile = await createInitialProjectFileInOutputFolder(newProjectRootFolder);
+  if (!createdFile?.ok) {
+    setStatus('Project đã tạo scene nhưng chưa lưu được file .vdra; bấm Save Project để lưu lại.', 'error');
+    return;
+  }
+  setStatus(`Đã tạo ${currentProjectFilePath.split(/[\\/]/).pop()} và folder ${outputFolder.split(/[\\/]/).pop()}.`, 'ok');
 }
 
 async function saveProjectSessionFlow(options = {}) {
   if (!project) return false;
-  const checked = await reconcileSavedAssets();
-  await syncProjectSceneFolders({ repairFromDisk: true });
-  lastMissingAssetCount = checked.missing || 0;
+  if (!options.skipSync) {
+    await syncProjectSceneFolders({ repairFromDisk: true });
+    const checked = await reconcileSavedAssets();
+    lastMissingAssetCount = checked.missing || 0;
+  }
   const payload = getProjectSessionPayload();
   const result = currentProjectFilePath && window.videoPlannerAPI?.overwriteProjectSession
     ? await window.videoPlannerAPI.overwriteProjectSession({ filePath: currentProjectFilePath, payload })
@@ -2002,7 +2186,7 @@ async function saveProjectSessionFlow(options = {}) {
   projectDirty = false;
   persist();
   render();
-  if (!options.silent) setStatus(`Saved .grokproj${lastMissingAssetCount ? `; ${lastMissingAssetCount} missing asset path(s) cleared` : ''}.`, 'ok');
+  if (!options.silent) setStatus(`Saved .vdra${lastMissingAssetCount ? `; ${lastMissingAssetCount} missing asset path(s) cleared` : ''}.`, 'ok');
   return true;
 }
 
@@ -2014,11 +2198,12 @@ async function openProjectSessionFlow() {
   applyProjectSessionPayload(result.payload, result.filePath);
   await syncProjectSceneFolders({ repairFromDisk: true });
   const checked = await reconcileSavedAssets();
+  await syncProjectSceneFolders({ repairFromDisk: true });
   lastMissingAssetCount = checked.missing || 0;
   projectDirty = Boolean(lastMissingAssetCount);
   persist();
   render();
-  setStatus(`Opened .grokproj. ${lastMissingAssetCount ? `${lastMissingAssetCount} missing asset path(s) need regeneration. ` : ''}Press Start pipeline to continue.`, lastMissingAssetCount ? 'error' : 'ok');
+  setStatus(`Opened .vdra. ${lastMissingAssetCount ? `${lastMissingAssetCount} missing asset path(s) need regeneration. ` : ''}Press Start pipeline to continue.`, lastMissingAssetCount ? 'error' : 'ok');
 }
 
 function persist() {
@@ -2093,7 +2278,8 @@ function restore() {
       activeBatchIds = normalizeActiveBatchIdsForRuntime(saved.activeBatchIds || [], project.scenes || []);
       paused = Boolean(saved.paused);
       projectNameInput.value = project.name || projectNameInput.value;
-      storyInput.value = project.story || '';
+      if (storyInput) storyInput.value = project.story || '';
+
       scriptInput.value = project.scenes?.map((scene) => scene.original).join('\n\n') || '';
       batchSizeInput.value = project.batchSize || batchSizeInput.value;
       durationInput.value = project.durationSec || durationInput.value;
@@ -2130,6 +2316,21 @@ exportBtn.addEventListener('click', exportProject);
 chooseOutputFolderBtn.addEventListener('click', chooseOutputFolder);
 saveSessionBtn?.addEventListener('click', saveSessionForNextLaunch);
 newProjectBtn?.addEventListener('click', newProjectSessionFlow);
+newProjectSceneFileInput?.addEventListener('change', async () => {
+  const file = newProjectSceneFileInput.files?.[0];
+  if (!file) return;
+  newProjectSceneText = await file.text();
+  if (newProjectSceneFileName) newProjectSceneFileName.textContent = file.name;
+});
+newProjectChooseLocationBtn?.addEventListener('click', async () => {
+  const folder = await window.videoPlannerAPI?.chooseProjectRootFolder?.();
+  if (!folder) return;
+  newProjectRootFolder = folder;
+  if (newProjectSaveLocationInput) newProjectSaveLocationInput.value = folder;
+});
+newProjectCreateBtn?.addEventListener('click', submitNewProjectDialog);
+chatResolveNewBtn?.addEventListener('click', () => resolveChatAndContinue('new'));
+chatResolveRenameBtn?.addEventListener('click', () => resolveChatAndContinue('rename'));
 openProjectBtn?.addEventListener('click', openProjectSessionFlow);
 saveProjectBtn?.addEventListener('click', saveProjectSessionFlow);
 [projectNameInput, storyInput, scriptInput, batchSizeInput, durationInput].forEach((control) => control?.addEventListener('input', () => {
@@ -2206,6 +2407,13 @@ reviewMediaStage?.addEventListener('pointerdown', startReviewPan);
 reviewMediaStage?.addEventListener('pointermove', moveReviewPan);
 reviewMediaStage?.addEventListener('pointerup', stopReviewPan);
 reviewMediaStage?.addEventListener('pointercancel', stopReviewPan);
+document.addEventListener('keydown', (event) => {
+  if ((event.ctrlKey || event.metaKey) && String(event.key).toLowerCase() === 's') {
+    event.preventDefault();
+    event.stopPropagation();
+    saveProjectSessionFlow({ fromShortcut: true, skipSync: true }).catch((error) => setStatus(`Không lưu được project: ${error.message}`, 'error'));
+  }
+}, true);
 document.addEventListener('keydown', handleReviewShortcut);
 document.addEventListener('keyup', releaseReviewShortcut);
 saveEditBtn.addEventListener('click', saveEdit);
@@ -2254,6 +2462,10 @@ modelInput?.addEventListener('input', () => {
     persist();
   }));
 settingsSaveBtn?.addEventListener('click', saveSettingsDialog);
+openHardPromptBtn?.addEventListener('click', async () => {
+  const result = await window.videoPlannerAPI?.openHardPromptFile?.().catch((error) => ({ ok: false, error: error.message }));
+  setStatus(result?.ok ? 'Đã mở file 2 NHIỆM VỤ BẰNG PROMPT.txt.' : `Không mở được file prompt cứng: ${result?.error || 'unknown'}`, result?.ok ? 'ok' : 'error');
+});
 
 window.addEventListener('error', (event) => {
   setStatus(`Renderer lỗi: ${event.message}`, 'error');

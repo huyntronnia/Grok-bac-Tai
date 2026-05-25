@@ -5,7 +5,8 @@
   "main": "electron/main.js",
   "scripts": {
     "start": "electron .",
-    "dev": "electron ."
+    "dev": "electron .",
+    "dist": "electron-builder --win nsis --x64"
   },
   "keywords": [
     "electron",
@@ -15,8 +16,39 @@
   ],
   "author": "",
   "license": "MIT",
+  "build": {
+    "appId": "com.vidora.desktop",
+    "productName": "Vidora",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "electron/**/*",
+      "2 NHIỆM VỤ BẰNG PROMPT.txt",
+      "package.json",
+      "node_modules/**/*"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Vidora"
+    }
+  },
   "devDependencies": {
-    "electron": "^30.5.1"
+    "electron": "^30.5.1",
+    "electron-builder": "^26.8.1"
   },
   "dependencies": {
     "chrome-remote-interface": "^0.34.0",

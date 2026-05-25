@@ -842,7 +842,9 @@ tr:hover td { background: rgba(255, 255, 255, 0.025); }
 .mini.approve { border-color: rgba(52, 211, 153, 0.45); color: #d1fae5; background: rgba(52, 211, 153, 0.13); }
 .mini.muted { border-color: rgba(148, 163, 184, 0.24); color: #cbd5e1; background: rgba(148, 163, 184, 0.08); }
 
-#editor-dialog {
+#editor-dialog,
+#new-project-dialog,
+#chat-resolve-dialog {
   width: min(920px, calc(100% - 32px));
   border: 0;
   padding: 0;
@@ -856,7 +858,10 @@ tr:hover td { background: rgba(255, 255, 255, 0.025); }
   color: var(--text);
   background: transparent;
 }
+#new-project-dialog.force-hidden { display: none !important; }
 #editor-dialog::backdrop,
+#new-project-dialog::backdrop,
+#chat-resolve-dialog::backdrop,
 .settings-dialog::backdrop { background: rgba(0, 0, 0, 0.72); backdrop-filter: blur(8px); }
 .dialog-card {
   padding: 24px;

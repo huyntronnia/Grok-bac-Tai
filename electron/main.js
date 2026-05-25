@@ -20,18 +20,26 @@ const CHALLENGE_RECOVERY_LIMIT = 2;
 const challengeRecoveryAttempts = new Map();
 let chromeProcess = null;
 let showPipelineLog = false;
+const chatTitleStableChecks = new Map();
 const APP_LOG_FILE = path.join(app.getPath('userData'), 'ai-video-pipeline.log');
 const GROK_ROUTER_CHECKPOINT_FILE = path.join(app.getPath('userData'), 'grok-router-checkpoint.json');
+const HARD_PROMPT_FILE = path.resolve(__dirname, '..', '2 NHIỆM VỤ BẰNG PROMPT.txt');
 const GROK_ROUTER_ALLOWED_STATES = new Set(['available', 'active', 'cooldown', 'limited', 'login_required', 'invalid', 'disabled_by_user']);
 
 const GROKPROJ_SCHEMA_VERSION = 1;
 const SECRET_KEY_PATTERN = /(api[_-]?key|cookie|password|passwd|secret|session[_-]?token|refresh[_-]?token|bearer|authorization|localStorage|sessionStorage|browserStorage|rawBrowserStorage)/i;
 const SECRET_VALUE_PATTERN = /(bearer\s+[a-z0-9._~+/=-]{8,}|sk-[a-z0-9_-]{12,}|xox[baprs]-[a-z0-9-]{8,}|(?:api[_-]?key|cookie|password|passwd|session[_-]?token|refresh[_-]?token)\s*[:=])/i;
+
+function loginRequiredMessage(provider, detail = '') {
+  const normalized = normalizeWebProvider(provider);
+  const title = PROVIDER_META[normalized]?.title || normalized;
+  return `LOGIN_REQUIRED:${normalized}: ${title} chưa đăng nhập hoặc session đã hết hạn. Hãy đăng nhập lại trong tab ${title}${detail ? `. Chi tiết: ${detail}` : ''}`;
+}
 const EMAIL_PATTERN = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i;
 
-function ensureGrokprojPath(filePath) {
-  if (!filePath || path.extname(filePath).toLowerCase() !== '.grokproj') {
-    throw new Error('Project file must use the .grokproj extension.');
+function ensureProjectFilePath(filePath) {
+  if (!filePath || path.extname(filePath).toLowerCase() !== '.vdra') {
+    throw new Error('Project file must use the .vdra extension.');
   }
   return filePath;
 }
@@ -110,25 +118,35 @@ async function newProjectSession(event, options = {}) {
 }
 
 async function saveProjectSessionFile(_event, payload = {}) {
-  const safePayload = validateProjectPayload(sanitizeProjectValue(payload));
+  const embeddedPayload = await embedProjectAssets(payload);
+  const safePayload = validateProjectPayload(sanitizeProjectValue(embeddedPayload));
+  const safeName = sanitizeFileName(safePayload.project?.name || 'vidora-project');
   const result = await dialog.showSaveDialog({
-    title: 'Save Project Session',
-    defaultPath: `${sanitizeFileName(safePayload.project?.name || 'ai-scene-project')}.grokproj`,
-    filters: [{ name: 'Grok Project', extensions: ['grokproj'] }],
+    title: 'Save Vidora Project',
+    defaultPath: `${safeName}.vdra`,
+    filters: [{ name: 'Vidora Project', extensions: ['vdra'] }],
   });
   if (result.canceled || !result.filePath) return { ok: false, canceled: true };
-  const filePath = ensureGrokprojPath(result.filePath.toLowerCase().endsWith('.grokproj') ? result.filePath : `${result.filePath}.grokproj`);
-  await fs.writeFile(filePath, JSON.stringify(safePayload, null, 2), 'utf8');
-  return { ok: true, filePath, payload: safePayload };
+  const filePath = ensureProjectFilePath(result.filePath.toLowerCase().endsWith('.vdra') ? result.filePath : `${result.filePath}.vdra`);
+  const projectFolder = path.join(path.dirname(filePath), sanitizeFileName(path.basename(filePath, path.extname(filePath)) || safeName));
+  safePayload.runtime = { ...(safePayload.runtime || {}), outputFolder: projectFolder };
+  const finalPayload = validateProjectPayload(sanitizeProjectValue(safePayload));
+  await fs.mkdir(projectFolder, { recursive: true });
+  await fs.writeFile(filePath, JSON.stringify(finalPayload, null, 2), 'utf8');
+  return { ok: true, filePath, projectFolder, payload: finalPayload };
 }
 
 async function overwriteProjectSessionFile(_event, { filePath = '', payload = {} } = {}) {
   if (!filePath) return { ok: false, error: 'Missing project file path.' };
-  const safePayload = validateProjectPayload(sanitizeProjectValue(payload));
-  const targetPath = ensureGrokprojPath(filePath.toLowerCase().endsWith('.grokproj') ? filePath : `${filePath}.grokproj`);
-  await fs.mkdir(path.dirname(targetPath), { recursive: true });
-  await fs.writeFile(targetPath, JSON.stringify(safePayload, null, 2), 'utf8');
-  return { ok: true, filePath: targetPath, payload: safePayload };
+  const embeddedPayload = await embedProjectAssets(payload);
+  const safePayload = validateProjectPayload(sanitizeProjectValue(embeddedPayload));
+  const targetPath = ensureProjectFilePath(filePath.toLowerCase().endsWith('.vdra') ? filePath : `${filePath}.vdra`);
+  const projectFolder = path.join(path.dirname(targetPath), sanitizeFileName(path.basename(targetPath, path.extname(targetPath)) || safePayload.project?.name || 'vidora-project'));
+  safePayload.runtime = { ...(safePayload.runtime || {}), outputFolder: projectFolder };
+  const finalPayload = validateProjectPayload(sanitizeProjectValue(safePayload));
+  await fs.mkdir(projectFolder, { recursive: true });
+  await fs.writeFile(targetPath, JSON.stringify(finalPayload, null, 2), 'utf8');
+  return { ok: true, filePath: targetPath, projectFolder, payload: finalPayload };
 }
 
 async function createProjectSessionFile(_event, { folderPath = '', projectName = '', payload = {} } = {}) {
@@ -138,25 +156,69 @@ async function createProjectSessionFile(_event, { folderPath = '', projectName =
   const projectFolder = path.join(folderPath, safeName);
   safePayload.runtime = { ...(safePayload.runtime || {}), outputFolder: projectFolder };
   const validPayload = validateProjectPayload(safePayload);
-  const filePath = ensureGrokprojPath(path.join(folderPath, `${safeName}.grokproj`));
+  const filePath = ensureProjectFilePath(path.join(folderPath, `${safeName}.vdra`));
   await fs.mkdir(projectFolder, { recursive: true });
   await fs.writeFile(filePath, JSON.stringify(validPayload, null, 2), 'utf8');
   return { ok: true, filePath, projectFolder, payload: validPayload };
 }
 
 async function openProjectSessionFile() {
-  const result = await dialog.showOpenDialog({ title: 'Open Project Session', properties: ['openFile'], filters: [{ name: 'Grok Project', extensions: ['grokproj'] }] });
+  const result = await dialog.showOpenDialog({ title: 'Open Vidora Project', properties: ['openFile'], filters: [{ name: 'Vidora Project', extensions: ['vdra'] }, { name: 'Legacy Grok Project', extensions: ['grokproj'] }] });
   if (result.canceled || !result.filePaths?.[0]) return { ok: false, canceled: true };
-  const filePath = ensureGrokprojPath(result.filePaths[0]);
+  const filePath = result.filePaths[0];
   let parsed;
-  try { parsed = JSON.parse(await fs.readFile(filePath, 'utf8')); } catch (_error) { throw new Error('Invalid .grokproj: file is not valid JSON.'); }
+  try { parsed = JSON.parse(await fs.readFile(filePath, 'utf8')); } catch (_error) { throw new Error('Invalid .vdra: file is not valid JSON.'); }
   const projectFolderName = sanitizeFileName(path.basename(filePath, path.extname(filePath)) || parsed?.project?.name || 'ai-scene-project');
   const projectFolder = path.join(path.dirname(filePath), projectFolderName);
   parsed.runtime = { ...(parsed.runtime || {}), outputFolder: projectFolder };
   await fs.mkdir(projectFolder, { recursive: true });
+  await restoreEmbeddedProjectAssets(parsed, projectFolder);
   const payload = validateProjectPayload(sanitizeProjectValue(parsed));
   payload.runtime = { ...payload.runtime, outputFolder: projectFolder, autoRun: false, waitingForUserStart: true, active: false };
   return { ok: true, filePath, projectFolder, payload };
+}
+
+async function embedProjectAssets(payload = {}) {
+  const cloned = JSON.parse(JSON.stringify(payload || {}));
+  const scenes = Array.isArray(cloned.project?.scenes) ? cloned.project.scenes : [];
+  cloned.embeddedAssets = { version: 1, encoding: 'base64', scenes: [] };
+  for (const scene of scenes) {
+    const sceneId = scene.sceneId || scene.id;
+    const record = { sceneId, files: {} };
+    for (const [kind, key] of [['image', 'imagePath'], ['video', 'videoPath']]) {
+      const filePath = scene[key];
+      if (!filePath || !(await pathExists(filePath))) continue;
+      const buffer = await fs.readFile(filePath);
+      record.files[kind] = {
+        fileName: path.basename(filePath),
+        relativePath: `scene_${String(sceneId).padStart(3, '0')}/${path.basename(filePath)}`,
+        mimeType: kind === 'video' ? 'video/mp4' : `image/${path.extname(filePath).slice(1).toLowerCase() || 'png'}`,
+        sizeBytes: buffer.length,
+        data: buffer.toString('base64'),
+      };
+    }
+    if (Object.keys(record.files).length) cloned.embeddedAssets.scenes.push(record);
+  }
+  return cloned;
+}
+
+async function restoreEmbeddedProjectAssets(payload = {}, projectFolder = '') {
+  const records = Array.isArray(payload.embeddedAssets?.scenes) ? payload.embeddedAssets.scenes : [];
+  if (!records.length || !projectFolder) return;
+  const scenes = Array.isArray(payload.project?.scenes) ? payload.project.scenes : [];
+  for (const record of records) {
+    const scene = scenes.find((item) => String(item.id) === String(record.sceneId) || String(item.sceneId) === String(record.sceneId));
+    if (!scene) continue;
+    const sceneDir = path.join(projectFolder, `scene_${String(record.sceneId).padStart(3, '0')}`);
+    await fs.mkdir(sceneDir, { recursive: true });
+    for (const [kind, file] of Object.entries(record.files || {})) {
+      if (!file?.data || !file?.fileName) continue;
+      const targetPath = path.join(sceneDir, sanitizeFileName(file.fileName));
+      if (!(await pathExists(targetPath))) await fs.writeFile(targetPath, Buffer.from(file.data, 'base64'));
+      if (kind === 'image') scene.imagePath = targetPath;
+      if (kind === 'video') scene.videoPath = targetPath;
+    }
+  }
 }
 
 async function ensureProjectSceneFolders(_event, { outputFolder = '', scenes = [] } = {}) {
@@ -171,7 +233,20 @@ async function ensureProjectSceneFolders(_event, { outputFolder = '', scenes = [
     if (scene?.imagePrompt) await fs.writeFile(path.join(sceneDir, 'image_prompt.txt'), scene.imagePrompt, 'utf8');
     if (scene?.motionPrompt) await fs.writeFile(path.join(sceneDir, 'motion_prompt.txt'), scene.motionPrompt, 'utf8');
     const keyframePath = path.join(sceneDir, `scene_${String(sceneId).padStart(3, '0')}_keyframe.png`);
-    records.push({ sceneId, sceneDir, keyframePath, keyframeExists: await pathExists(keyframePath) });
+    const videoPath = path.join(sceneDir, `scene_${String(sceneId).padStart(3, '0')}_video.mp4`);
+    const files = await fs.readdir(sceneDir).catch(() => []);
+    const fallbackImage = files.find((file) => /\.(png|jpe?g|webp)$/i.test(file));
+    const fallbackVideo = files.find((file) => /\.(mp4|webm|mov)$/i.test(file));
+    const foundKeyframePath = await pathExists(keyframePath) ? keyframePath : fallbackImage ? path.join(sceneDir, fallbackImage) : keyframePath;
+    const foundVideoPath = await pathExists(videoPath) ? videoPath : fallbackVideo ? path.join(sceneDir, fallbackVideo) : videoPath;
+    records.push({
+      sceneId,
+      sceneDir,
+      keyframePath: foundKeyframePath,
+      keyframeExists: await pathExists(foundKeyframePath),
+      videoPath: foundVideoPath,
+      videoExists: await pathExists(foundVideoPath),
+    });
   }
   return { ok: true, outputFolder, records };
 }
@@ -315,13 +390,17 @@ async function resumeFromRouterCheckpoint() {
 }
 
 async function appendAppLog(_event, entry = {}) {
-  const line = JSON.stringify({
+  const record = {
     ts: new Date().toISOString(),
     source: entry.source || 'renderer',
     kind: entry.kind || 'info',
     text: entry.text || '',
     details: entry.details || null,
-  });
+  };
+  const line = JSON.stringify(record);
+  const terminalLine = `[VidoraLog][${record.source}][${record.kind}] ${record.text}${record.details ? ` ${JSON.stringify(record.details).slice(0, 2000)}` : ''}`;
+  if (record.kind === 'error') console.error(terminalLine);
+  else console.log(terminalLine);
   await fs.mkdir(path.dirname(APP_LOG_FILE), { recursive: true }).catch(() => null);
   await fs.appendFile(APP_LOG_FILE, `${line}\n`, 'utf8').catch(() => null);
   return { ok: true, path: APP_LOG_FILE };
@@ -337,6 +416,32 @@ async function notifyRenderer(type, message, details = null) {
 async function getAppLogPath() {
   await appendAppLog(null, { source: 'main', kind: 'info', text: 'Log path requested' });
   return APP_LOG_FILE;
+}
+
+async function openHardPromptFile() {
+  await fs.access(HARD_PROMPT_FILE);
+  const error = await shell.openPath(HARD_PROMPT_FILE);
+  if (error) throw new Error(error);
+  return { ok: true, filePath: HARD_PROMPT_FILE };
+}
+
+async function loadHardPromptTasks() {
+  const content = await fs.readFile(HARD_PROMPT_FILE, 'utf8');
+  const task2Index = content.search(/NHIỆM\s*VỤ\s*2\s*:/i);
+  if (task2Index < 0) return { task1: content.trim(), task2: content.trim() };
+  const task1 = content.slice(0, task2Index).trim();
+  const task2 = content.slice(task2Index).trim();
+  return { task1, task2 };
+}
+
+function buildTaskPrompt({ task = '', script = '', sceneText = '', sceneId = '' } = {}) {
+  return [
+    task,
+    '--- KỊCH BẢN TỔNG / BỐI CẢNH ---',
+    script || '(Không có kịch bản tổng riêng)',
+    `--- SCENE ${sceneId || ''} HIỆN TẠI ---`,
+    sceneText || '',
+  ].filter(Boolean).join('\n\n');
 }
 
 async function openGrokRouterFolder() {
@@ -967,6 +1072,14 @@ async function chooseOutputFolder() {
   return result.canceled ? null : result.filePaths[0];
 }
 
+async function chooseProjectRootFolder() {
+  const result = await dialog.showOpenDialog({
+    title: 'Chọn vị trí lưu project Vidora',
+    properties: ['openDirectory', 'createDirectory'],
+  });
+  return result.canceled ? null : result.filePaths[0];
+}
+
 async function checkWebLogin(_event, provider, options = {}) {
   const normalizedProvider = normalizeWebProvider(provider);
   const autoOpenSaved = Boolean(options?.autoOpenSaved && normalizedProvider === 'grok');
@@ -1037,7 +1150,7 @@ async function sendPromptViaWeb(_event, options) {
   const page = await getCdpPage(normalizedProvider, true);
   const loginState = await evaluateOnCdpPage(page, `(${detectLoginScript.toString()})(${JSON.stringify(normalizedProvider)})`);
   if (!loginState.loggedIn) {
-    throw new Error(`${PROVIDER_META[normalizedProvider].title} chưa đăng nhập trong Chrome debug. Hãy login ở cửa sổ Chrome vừa mở rồi chạy lại.`);
+    throw new Error(loginRequiredMessage(normalizedProvider, loginState.reason || loginState.url || ''));
   }
 
   const beforeCount = await evaluateOnCdpPage(page, `(${countAssistantMessagesScript.toString()})()`);
@@ -1063,16 +1176,25 @@ async function runScenePipeline(_event, options) {
     sceneId,
     imagePrompt,
     imageProvider = { method: 'web' },
+    chatContextTitle = '',
+    pendingChatRenameTitle = '',
+    scriptText = '',
+    sceneText = '',
   } = options || {};
   let motionPrompt = options.motionPrompt || '';
 
   if (!outputFolder) throw new Error('Chưa chọn folder output.');
-  if (!imagePrompt?.trim()) throw new Error('Thiếu image prompt.');
+  if (!sceneText?.trim() && !imagePrompt?.trim()) throw new Error('Thiếu scene để tạo ảnh.');
 
   const projectDir = outputFolder;
   const sceneDir = path.join(projectDir, `scene_${String(sceneId).padStart(3, '0')}`);
   await fs.mkdir(sceneDir, { recursive: true });
-  await fs.writeFile(path.join(sceneDir, 'image_prompt.txt'), imagePrompt, 'utf8');
+  const hardTasks = await loadHardPromptTasks();
+  const task1ImagePrompt = buildTaskPrompt({ task: hardTasks.task1, script: scriptText, sceneText, sceneId });
+  const task2VideoPrompt = buildTaskPrompt({ task: hardTasks.task2, script: scriptText, sceneText, sceneId });
+  const finalImagePrompt = task1ImagePrompt || imagePrompt;
+  await fs.writeFile(path.join(sceneDir, 'image_prompt.txt'), finalImagePrompt, 'utf8');
+  if (motionPrompt) await fs.writeFile(path.join(sceneDir, 'motion_prompt.txt'), motionPrompt, 'utf8');
 
   const videoProvider = normalizeVideoProvider(options.videoProvider);
   const videoAccount = options.videoAccount || '';
@@ -1100,8 +1222,8 @@ async function runScenePipeline(_event, options) {
 
   if (!imagePath) {
     const chatGptResult = imageProvider?.method === 'api'
-      ? await generateImageWithImageApi({ imagePrompt, sceneDir, sceneId, config: imageProvider })
-      : await generateImageAndMotionWithChatGPT({ imagePrompt, sceneDir, sceneId });
+      ? await generateImageWithImageApi({ imagePrompt: finalImagePrompt, sceneDir, sceneId, config: imageProvider })
+      : await generateImageAndMotionWithChatGPT({ imagePrompt: finalImagePrompt, sceneDir, sceneId, chatContextTitle, pendingChatRenameTitle });
     imagePath = chatGptResult.imagePath;
     if (chatGptResult.motionPrompt) {
       motionPrompt = chatGptResult.motionPrompt;
@@ -1114,6 +1236,7 @@ async function runScenePipeline(_event, options) {
       phase: 'image',
       imagePath,
       imageDataUrl: imagePath ? await imageFileToDataUrl(imagePath).catch(() => '') : '',
+      imagePromptUsed: finalImagePrompt,
       motionPrompt,
       videoPath: '',
       videoProvider,
@@ -1121,7 +1244,21 @@ async function runScenePipeline(_event, options) {
     };
   }
 
-  if (!motionPrompt?.trim()) throw new Error('Thiếu motion prompt để tiếp tục chạy tạo video.');
+  if (!motionPrompt?.trim()) {
+    motionPrompt = await generateMotionPromptWithChatGPT({ imagePath, prompt: task2VideoPrompt, sceneDir, sceneId, chatContextTitle });
+    await fs.writeFile(path.join(sceneDir, 'motion_prompt.txt'), motionPrompt, 'utf8');
+    return {
+      sceneDir,
+      phase: 'motion_prompt',
+      imagePath,
+      imageDataUrl: imagePath ? await imageFileToDataUrl(imagePath).catch(() => '') : '',
+      imagePromptUsed: finalImagePrompt,
+      motionPrompt,
+      videoPath: '',
+      videoProvider,
+      videoStatus: 'waiting-motion-review',
+    };
+  }
   await fs.writeFile(path.join(sceneDir, 'motion_prompt.txt'), motionPrompt, 'utf8');
 
   const checkpointFields = {
@@ -1181,6 +1318,7 @@ async function runScenePipeline(_event, options) {
     phase: 'video',
     imagePath,
     imageDataUrl: imagePath ? await imageFileToDataUrl(imagePath).catch(() => '') : '',
+    imagePromptUsed: finalImagePrompt,
     videoPath: videoResult?.videoPath || '',
     videoProvider,
     videoStatus: videoResult?.status || (videoError ? `error: ${maskRouterText(videoError.split('\n')[0])}` : 'pending-selector-or-manual-download'),
@@ -1222,12 +1360,28 @@ async function generateImageWithImageApi({ imagePrompt, sceneDir, sceneId, confi
   return { imagePath, motionPrompt: '' };
 }
 
-async function generateImageAndMotionWithChatGPT({ imagePrompt, sceneDir, sceneId }) {
+async function generateImageAndMotionWithChatGPT({ imagePrompt, sceneDir, sceneId, chatContextTitle = '', pendingChatRenameTitle = '' }) {
   const page = await getCdpPage('chatgpt', true);
   const loginState = await evaluateOnCdpPage(page, `(${detectLoginScript.toString()})('chatgpt')`);
   if (!loginState.loggedIn) {
     await page.close();
-    throw new Error(`ChatGPT chưa đăng nhập. Hãy đăng nhập ChatGPT trong Chrome debug rồi chạy lại. Chi tiết: ${loginState.reason || loginState.url || ''}`);
+    throw new Error(loginRequiredMessage('chatgpt', loginState.reason || loginState.url || ''));
+  }
+  if (pendingChatRenameTitle?.trim() && !chatContextTitle?.trim()) {
+    await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: pending chat mới, mở ChatGPT root trước khi gửi prompt. targetRename="${pendingChatRenameTitle}"` });
+    await page.Page.navigate({ url: 'https://chatgpt.com/' }).catch((error) => appendAppLog(null, { source: 'main', kind: 'error', text: `Scene ${sceneId}: navigate ChatGPT root failed: ${error.message}` }));
+    await waitForCdpLoad(page).catch(() => null);
+    await sleep(1600);
+  }
+  if (chatContextTitle?.trim()) {
+    const selectedChat = await selectChatGptConversationByTitle(page, chatContextTitle.trim());
+    await appendAppLog(null, { source: 'main', kind: selectedChat?.ok ? 'ok' : 'error', text: `ChatGPT context: ${selectedChat?.ok ? `đã mở chat "${chatContextTitle}"` : selectedChat?.error || 'không tìm thấy chat'}`, details: selectedChat });
+    if (!selectedChat?.ok) throw new Error(selectedChat?.error || `Không tìm thấy cuộc trò chuyện ChatGPT: ${chatContextTitle}`);
+    if (pendingChatRenameTitle?.trim()) {
+      await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: Option 2 đã mở chat cũ, rename ngay thành "${pendingChatRenameTitle.trim()}" trước khi gửi prompt.` });
+      const prePromptRename = await renameChatGptCurrentConversationUntilTitle(page, pendingChatRenameTitle.trim(), { sceneId, timeoutMs: 60000, waitForRecent: true }).catch((error) => ({ ok: false, error: error.message }));
+      await appendAppLog(null, { source: 'main', kind: prePromptRename?.ok ? 'ok' : 'error', text: `Scene ${sceneId}: Option 2 pre-prompt rename ${prePromptRename?.ok ? 'ok' : prePromptRename?.error || 'failed/timeout'}`, details: prePromptRename });
+    }
   }
 
   const imageInstruction = [
@@ -1240,12 +1394,37 @@ async function generateImageAndMotionWithChatGPT({ imagePrompt, sceneDir, sceneI
   await evaluateOnCdpPage(page, `(${prepareChatGptCreateImageScript.toString()})()`).catch(() => null);
   await sleep(800);
   const sentImage = await sendPromptViaCdpInput(page, imageInstruction);
+  await appendAppLog(null, { source: 'main', kind: sentImage?.ok ? 'ok' : 'error', text: `Scene ${sceneId}: ChatGPT send image prompt ${sentImage?.ok ? 'ok' : sentImage?.error || 'failed'}`, details: sentImage });
   if (!sentImage.ok) throw new Error(sentImage.error || 'Không gửi được image prompt vào ChatGPT.');
+  const earlyRenameTitle = pendingChatRenameTitle || chatContextTitle;
+  await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: earlyRenameTitle="${earlyRenameTitle || ''}"` });
+  if (earlyRenameTitle?.trim()) {
+    const renameStartedAt = Date.now();
+    let sawConversationPath = '';
+    while (Date.now() - renameStartedAt < 20000) {
+      const currentPath = await evaluateOnCdpPage(page, `location.pathname`).catch(() => '');
+      await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: ChatGPT rename poll path=${currentPath || '(empty)'}` });
+      if (String(currentPath || '').startsWith('/c/')) {
+        sawConversationPath = String(currentPath || '');
+        const recentsReady = await waitForChatGptRecentItem(page, sawConversationPath, sceneId);
+        await appendAppLog(null, { source: 'main', kind: recentsReady?.ok ? 'running' : 'error', text: `Scene ${sceneId}: Recents ready before rename: ${recentsReady?.ok ? recentsReady.text || recentsReady.mode : recentsReady?.error || 'not-ready'}`, details: recentsReady });
+        if (!recentsReady?.ok) break;
+        await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: ChatGPT conversation ready at ${sawConversationPath}, rename until title matches.` });
+        const renameResult = await renameChatGptCurrentConversationUntilTitle(page, earlyRenameTitle.trim(), { sceneId, timeoutMs: 60000, waitForRecent: false }).catch((error) => ({ ok: false, error: error.message }));
+        await appendAppLog(null, { source: 'main', kind: renameResult?.ok ? 'ok' : 'error', text: `Scene ${sceneId}: ChatGPT rename after first prompt ${renameResult?.ok ? 'ok' : renameResult?.error || 'failed/timeout'}`, details: renameResult });
+        break;
+      }
+      await sleep(1000);
+    }
+    if (!sawConversationPath) await appendAppLog(null, { source: 'main', kind: 'error', text: `Scene ${sceneId}: sau 20s vẫn chưa thấy ChatGPT URL /c/... để rename.` });
+  }
   const imagePath = path.join(sceneDir, `scene_${String(sceneId).padStart(3, '0')}_keyframe.png`);
   const imageUrl = await waitForChatGptImageOrRetry(page, beforeImages?.urls || [], imageInstruction, sceneDir, sceneId);
+  const renameTitle = pendingChatRenameTitle || chatContextTitle;
+  if (renameTitle?.trim()) await renameChatGptCurrentConversationUntilTitle(page, renameTitle.trim(), { sceneId, timeoutMs: 15000, waitForRecent: false }).catch(() => null);
   try {
     if (imageUrl && imageUrl.startsWith('chatgpt-custom-box-y')) {
-      await captureLatestImageElement(page, imagePath);
+      await captureLatestImageElement(page, imagePath, imageUrl);
     } else {
       await downloadBrowserAsset(page, imageUrl, imagePath);
     }
@@ -1258,6 +1437,79 @@ async function generateImageAndMotionWithChatGPT({ imagePrompt, sceneDir, sceneI
 
   await page.close();
   return { imagePath, motionPrompt: generatedMotionPrompt };
+}
+
+async function generateMotionPromptWithChatGPT({ imagePath, prompt, sceneDir, sceneId, chatContextTitle = '' }) {
+  const page = await getCdpPage('chatgpt', false, { bringToFront: true });
+  const loginState = await evaluateOnCdpPage(page, `(${detectLoginScript.toString()})('chatgpt')`);
+  if (!loginState.loggedIn) throw new Error(loginRequiredMessage('chatgpt', loginState.reason || loginState.url || ''));
+  if (chatContextTitle?.trim()) {
+    await selectChatGptConversationByTitle(page, chatContextTitle.trim()).catch(async (error) => {
+      await appendAppLog(null, { source: 'main', kind: 'error', text: `ChatGPT không chọn được cuộc trò chuyện "${chatContextTitle}": ${error.message}` });
+    });
+  }
+  const before = await evaluateOnCdpPage(page, `(${readLatestAssistantScript.toString()})()`).catch(() => ({ count: 0, text: '' }));
+  await uploadFileViaCdp(page, imagePath, 'chatgpt');
+  await sleep(1200);
+  const instruction = [
+    'Dựa trên ảnh keyframe vừa được upload, hãy thực hiện NHIỆM VỤ 2 để tạo MOTION PROMPT cho video.',
+    'Chỉ trả về prompt motion cuối cùng, không giải thích, không markdown thừa.',
+    prompt,
+  ].join('\n\n');
+  const sent = await sendPromptViaCdpInput(page, instruction);
+  if (!sent.ok) throw new Error(sent.error || 'Không gửi được Nhiệm vụ 2 vào ChatGPT.');
+  const startedAt = Date.now();
+  let latest = '';
+  let lastState = null;
+  while (Date.now() - startedAt < 360000) {
+    await sleep(3000);
+    const state = await evaluateOnCdpPage(page, `(${readLatestAssistantScript.toString()})()`).catch(() => null);
+    lastState = state;
+    if (!state?.text) {
+      await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: đang chờ ChatGPT trả NV2, chưa thấy assistant response mới.`, details: state });
+      continue;
+    }
+    latest = state.text.trim();
+    const freshAssistant = state.count > (before?.count || 0) || latest !== before?.text;
+    const quality = validateMotionPromptResponse(latest, { beforeText: before?.text || '', instruction, taskPrompt: prompt });
+    if (freshAssistant && !state.generating && quality.ok) break;
+    await appendAppLog(null, {
+      source: 'main',
+      kind: 'running',
+      text: `Scene ${sceneId}: chờ ChatGPT hoàn tất NV2 (${state.generating ? 'thinking' : quality.error || 'response-chưa-đủ'}).`,
+      details: { ...state, quality, textHead: latest.slice(0, 500) },
+    });
+  }
+  const finalQuality = validateMotionPromptResponse(latest, { beforeText: before?.text || '', instruction, taskPrompt: prompt });
+  if (!latest || latest === before?.text || !finalQuality.ok) {
+    await fs.writeFile(path.join(sceneDir, 'motion_prompt_wait_failed.json'), JSON.stringify({ latest, before, lastState, finalQuality }, null, 2), 'utf8').catch(() => null);
+    throw new Error(`ChatGPT chưa trả motion prompt NV2 đủ nội dung: ${finalQuality.error || 'empty/old-response'}.`);
+  }
+  await fs.writeFile(path.join(sceneDir, 'motion_prompt_from_chatgpt.txt'), latest, 'utf8');
+  await page.close().catch(() => null);
+  return latest;
+}
+
+function validateMotionPromptResponse(text = '', { beforeText = '', instruction = '', taskPrompt = '' } = {}) {
+  const value = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!value) return { ok: false, error: 'empty-response' };
+  if (value === String(beforeText || '').replace(/\s+/g, ' ').trim()) return { ok: false, error: 'same-as-before' };
+  const lower = value.toLowerCase();
+  const instructionHead = String(instruction || '').replace(/\s+/g, ' ').trim().slice(0, 120).toLowerCase();
+  const taskHead = String(taskPrompt || '').replace(/\s+/g, ' ').trim().slice(0, 120).toLowerCase();
+  if (instructionHead && lower.startsWith(instructionHead.slice(0, 80))) return { ok: false, error: 'echoed-user-instruction' };
+  if (taskHead && lower.startsWith(taskHead.slice(0, 80))) return { ok: false, error: 'echoed-task-prompt' };
+  if (/nhiệm\s*vụ\s*2\s*:|show more|đoạn đầu scene|vừa tạo/i.test(value) && value.length < 900) return { ok: false, error: 'looks-like-collapsed-user-prompt' };
+  if (value.length < 80) return { ok: false, error: 'too-short' };
+  const motionSignals = [
+    /camera|shot|lens|dolly|pan|tilt|zoom|tracking|close[-\s]?up|wide shot/i,
+    /motion|movement|move|chuyển động|máy quay|góc quay|khung hình/i,
+    /second|seconds|giây|10s|10 giây/i,
+    /light|lighting|cinematic|atmosphere|render|focus|depth/i,
+  ];
+  const score = motionSignals.reduce((total, pattern) => total + (pattern.test(value) ? 1 : 0), 0);
+  if (score < 2) return { ok: false, error: 'missing-motion-prompt-signals', score };
+  return { ok: true, score, length: value.length };
 }
 
 function normalizeVideoProvider(provider) {
@@ -1378,15 +1630,13 @@ async function generateVideoWithGenericProvider({ provider, imagePath, motionPro
   const title = PROVIDER_META[provider]?.title || provider;
   if (!loginState.loggedIn) {
     await page.close();
-    throw new Error(`${title} chưa đăng nhập. Hãy đăng nhập trong tab ${title}, xong rồi chạy lại. Chi tiết: ${loginState.reason || loginState.url || ''}`);
+    throw new Error(loginRequiredMessage(provider, loginState.reason || loginState.url || ''));
   }
 
   if (provider === 'grok') {
-    await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: dùng Grok Imagine canvas hiện tại hoặc tạo mới nếu chưa có.` });
-    const canvasState = await ensureGrokEmptyCanvas(page, sceneId, false);
-    await appendAppLog(null, { source: 'main', kind: canvasState?.ok ? 'ok' : 'error', text: `Grok canvas scene ${sceneId}: ${canvasState?.status === 'reuse-current-canvas' ? 'dùng lại canvas hiện tại' : canvasState?.ok ? 'đã vào canvas' : canvasState?.error || 'chưa vào canvas'}`, details: canvasState });
-    if (!canvasState?.ok) throw new Error(canvasState?.error || 'Không mở được Grok Empty Canvas.');
-    await clearGrokCanvasChat(page, sceneId);
+    await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: Grok dùng luồng trực tiếp trong chat/image, không vào canvas.` });
+    await page.Page.navigate({ url: 'https://grok.com/' }).catch(() => null);
+    await waitForCdpLoad(page).catch(() => null);
     await sleep(1200);
   }
 
@@ -1400,13 +1650,7 @@ async function generateVideoWithGenericProvider({ provider, imagePath, motionPro
     await evaluateOnCdpPage(page, `(${preparePixVerseComposerScript.toString()})(${JSON.stringify(config)})`);
     await sleep(800);
   } else if (provider === 'grok') {
-    const canvasState = await ensureGrokEmptyCanvas(page, sceneId, false);
-    if (!canvasState?.ok) throw new Error(canvasState?.error || 'Grok không còn ở Empty Canvas trước khi upload.');
-    if (canvasState?.status !== 'reuse-current-canvas') {
-      const restored = await restoreExistingProjectVideosToGrokCanvas(page, sceneDir, sceneId);
-      await appendAppLog(null, { source: 'main', kind: restored?.count ? 'ok' : 'running', text: `Scene ${sceneId}: restore video cũ vào Grok canvas: ${restored?.count || 0} file`, details: restored });
-    }
-    await clearGrokCanvasChat(page, sceneId);
+    await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: bỏ qua canvas, chuẩn bị upload ảnh trực tiếp vào Grok.` });
     await sleep(600);
   }
 
@@ -1419,8 +1663,7 @@ async function generateVideoWithGenericProvider({ provider, imagePath, motionPro
   await appendAppLog(null, { source: 'main', kind: 'ok', text: `Scene ${sceneId}: ${title} đã nhận ảnh upload.`, details: uploadResult });
   if (provider === 'grok') {
     const settled = await waitForGrokUploadSettled(page, sceneId);
-    await appendAppLog(null, { source: 'main', kind: settled?.ok ? 'ok' : 'running', text: `Scene ${sceneId}: Grok upload keyframe ${settled?.ok ? 'đã xong' : 'chưa xác nhận xong'}`, details: settled });
-    await clearGrokCanvasSelection(page).catch(() => null);
+    await appendAppLog(null, { source: 'main', kind: settled?.ok ? 'ok' : 'running', text: `Scene ${sceneId}: Grok upload ảnh trực tiếp ${settled?.ok ? 'đã xong' : 'chưa xác nhận xong'}`, details: settled });
   }
 
   const beforeVideos = await evaluateOnCdpPage(page, `(${collectVideoUrlsScript.toString()})()`);
@@ -1522,7 +1765,11 @@ async function evaluateOnCdpPage(client, expression) {
     userGesture: true,
   });
   if (result.exceptionDetails) {
-    throw new Error(result.exceptionDetails.text || 'CDP evaluate lỗi.');
+    const details = result.exceptionDetails;
+    const exception = details.exception || {};
+    const description = exception.description || exception.value || exception.className || details.text || 'CDP evaluate lỗi.';
+    const location = `${details.url || ''}:${details.lineNumber ?? ''}:${details.columnNumber ?? ''}`;
+    throw new Error(`${details.text || 'CDP evaluate lỗi'}: ${description}${location !== '::' ? ` @ ${location}` : ''}`);
   }
   return result.result?.value;
 }
@@ -1536,8 +1783,8 @@ function shouldRecoverFromCacheOrChallenge(state, provider) {
 async function ensureGrokEmptyCanvas(page, sceneId = '', forceNew = false) {
   await page.Page.bringToFront().catch(() => null);
   const current = await evaluateOnCdpPage(page, `({ path: location.pathname.toLowerCase(), url: location.href })`).catch(() => ({ path: '' }));
-  if (!forceNew && current?.path?.includes('/imagine/agent/') && current.path.length > '/imagine/agent/'.length) {
-    return { ok: true, isAgentCanvas: true, status: 'reuse-current-canvas', url: current.url };
+  if (current?.path?.includes('/imagine/agent/') && current.path.length > '/imagine/agent/'.length) {
+    await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: đang ở canvas Grok cũ, tool sẽ thoát ra và tạo Empty Canvas mới.`, details: current });
   }
   await page.Page.navigate({ url: 'https://grok.com/imagine/agent' }).catch(() => null);
   await waitForCdpLoad(page).catch(() => null);
@@ -1856,48 +2103,288 @@ async function waitForNewImageUrl(client, existingUrls = []) {
   throw new Error('Hết thời gian chờ ChatGPT tạo ảnh hoặc không detect được ảnh mới.');
 }
 
+async function selectChatGptConversationByTitle(client, title = '') {
+  const wanted = String(title || '').trim();
+  if (!wanted) return { ok: true, skipped: true };
+  await client.Page.bringToFront().catch(() => null);
+  for (let attempt = 1; attempt <= 5; attempt += 1) {
+    const state = await evaluateOnCdpPage(client, `(${findChatGptConversationScript.toString()})(${JSON.stringify(wanted)})`).catch((error) => ({ ok: false, error: error.message }));
+    if (state?.ok && state.box) {
+      const x = state.box.x + state.box.width / 2;
+      const y = state.box.y + state.box.height / 2;
+      await client.Input.dispatchMouseEvent({ type: 'mouseMoved', x, y, button: 'none' }).catch(() => null);
+      await client.Input.dispatchMouseEvent({ type: 'mousePressed', x, y, button: 'left', clickCount: 1 }).catch(() => null);
+      await client.Input.dispatchMouseEvent({ type: 'mouseReleased', x, y, button: 'left', clickCount: 1 }).catch(() => null);
+      await waitForCdpLoad(client).catch(() => null);
+      await sleep(1600);
+      const locationState = await evaluateOnCdpPage(client, `({ href: location.href, path: location.pathname, title: document.title })`).catch((error) => ({ error: error.message }));
+      if (String(locationState?.path || '').startsWith('/c/')) return { ...state, location: locationState };
+      await appendAppLog(null, { source: 'main', kind: 'running', text: `ChatGPT context: đã click "${wanted}" nhưng URL chưa vào /c/... (path=${locationState?.path || ''}), thử lại.`, details: locationState });
+    }
+    await sleep(600);
+  }
+  return { ok: false, error: `Không tìm thấy cuộc trò chuyện ChatGPT tên "${wanted}" trong sidebar.` };
+}
+
+async function waitForChatGptRecentItem(page, conversationPath = '', sceneId = '') {
+  const conversationId = String(conversationPath || '').match(/\/c\/([^/?#]+)/)?.[1] || '';
+  const startedAt = Date.now();
+  let last = null;
+  while (Date.now() - startedAt < 30000) {
+    last = await evaluateOnCdpPage(page, `(() => {
+      try {
+        const conversationId = ${JSON.stringify(conversationId)};
+        const nodes = Array.from(document.querySelectorAll('nav a, aside a, [role="navigation"] a, a[href*="/c/"], nav [role="link"], aside [role="link"], nav li, aside li, nav div, aside div'));
+        const candidates = nodes.map((node) => {
+          const rect = node.getBoundingClientRect ? node.getBoundingClientRect() : null;
+          const href = node.href || (node.getAttribute ? node.getAttribute('href') : '') || '';
+          const text = String(node.innerText || node.textContent || '').trim();
+          const cls = String(node.className || '');
+          const current = node.getAttribute ? (node.getAttribute('aria-current') || node.getAttribute('aria-selected') || '') : '';
+          return { href, rect, text, cls, current };
+        }).filter((item) => item.text && item.rect && item.rect.width > 40 && item.rect.height > 12 && item.rect.x < 220 && item.rect.y > 250);
+        const hrefItem = candidates.find((item) => item.href.indexOf('/c/' + conversationId) >= 0);
+        const activeItem = candidates.find((item) => /page|true|active|selected/i.test(String(item.current) + ' ' + item.cls));
+        const topItem = candidates.slice().sort((a, b) => a.rect.y - b.rect.y)[0];
+        const item = hrefItem || activeItem || null;
+        return { ok: Boolean(item), mode: hrefItem ? 'href' : activeItem ? 'active' : 'missing', text: item?.text || '', candidateCount: candidates.length, topText: topItem?.text || '', path: location.pathname };
+      } catch (error) {
+        return { ok: false, error: error && error.message ? error.message : String(error), path: location.pathname };
+      }
+    })()`).catch((error) => ({ ok: false, error: error.message }));
+    if (last?.ok) return last;
+    await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: chờ Recents render chat mới (${last?.mode || last?.error || 'missing'}), top="${last?.topText || ''}" count=${last?.candidateCount || 0}` });
+    await sleep(1000);
+  }
+  return { ok: false, error: 'Timeout waiting for current chat to appear in Recents.', last };
+}
+
+async function checkChatGptCurrentConversationTitle(page, expectedTitle = '') {
+  const wanted = String(expectedTitle || '').trim();
+  if (!wanted) return { ok: false, error: 'missing-expected-title' };
+  const state = await evaluateOnCdpPage(page, `(() => {
+    try {
+      const wanted = ${JSON.stringify(wanted)};
+      const m = location.pathname.match(/\/c\/([^/?#]+)/);
+      const id = m ? m[1] : '';
+      const norm = (value) => String(value || '').trim().replace(/\s+/g, ' ');
+      const nodes = Array.from(document.querySelectorAll('nav a, aside a, [role="navigation"] a, a[href*="/c/"], nav [role="link"], aside [role="link"], nav li, aside li, nav div, aside div'));
+      const candidates = nodes.map((node) => {
+        const rect = node.getBoundingClientRect ? node.getBoundingClientRect() : null;
+        const href = node.href || (node.getAttribute ? node.getAttribute('href') : '') || '';
+        const text = norm(node.innerText || node.textContent || '');
+        const cls = String(node.className || '');
+        const current = node.getAttribute ? (node.getAttribute('aria-current') || node.getAttribute('aria-selected') || '') : '';
+        return { href, rect, text, cls, current };
+      }).filter((item) => item.text && item.rect && item.rect.width > 40 && item.rect.height > 12 && item.rect.x < 240 && item.rect.y > 220);
+      const hrefItem = candidates.find((item) => id && item.href.indexOf('/c/' + id) >= 0);
+      const activeItem = candidates.find((item) => /page|true|active|selected/i.test(String(item.current) + ' ' + item.cls));
+      const exactItem = candidates.find((item) => norm(item.text) === norm(wanted));
+      const item = hrefItem || activeItem || exactItem || null;
+      const currentTitle = norm(item && item.text ? item.text : document.title || '');
+      const ok = norm(currentTitle) === norm(wanted) || Boolean(exactItem);
+      return { ok, currentTitle, wanted: norm(wanted), mode: hrefItem ? 'href' : activeItem ? 'active' : exactItem ? 'exact' : 'title', documentTitle: document.title, candidateCount: candidates.length, path: location.pathname };
+    } catch (error) {
+      return { ok: false, error: error && error.message ? error.message : String(error), path: location.pathname };
+    }
+  })()`).catch((error) => ({ ok: false, error: error.message }));
+  return state;
+}
+
+function getChatTitleStableKey(pathname = '', title = '') {
+  const id = String(pathname || '').match(/\/c\/([^/?#]+)/)?.[1] || String(pathname || '');
+  return `${id}::${String(title || '').trim().toLowerCase()}`;
+}
+
+function markChatTitleStable(pathname = '', title = '', ok = false) {
+  const key = getChatTitleStableKey(pathname, title);
+  const next = ok ? (chatTitleStableChecks.get(key) || 0) + 1 : 0;
+  chatTitleStableChecks.set(key, next);
+  return next;
+}
+
+function isChatTitleStable(pathname = '', title = '') {
+  return (chatTitleStableChecks.get(getChatTitleStableKey(pathname, title)) || 0) >= 3;
+}
+
+async function renameChatGptCurrentConversationUntilTitle(page, title = '', { sceneId = '', timeoutMs = 60000, waitForRecent = true } = {}) {
+  const wanted = String(title || '').trim();
+  if (!wanted) return { ok: false, error: 'missing-title' };
+  const currentPath = await evaluateOnCdpPage(page, `location.pathname`).catch(() => '');
+  if (!String(currentPath || '').startsWith('/c/')) return { ok: false, error: 'not-in-conversation', path: currentPath };
+  if (isChatTitleStable(currentPath, wanted)) return { ok: true, skipped: true, stableChecks: 3, title: wanted, path: currentPath };
+  if (waitForRecent) {
+    const recentsReady = await waitForChatGptRecentItem(page, currentPath, sceneId);
+    await appendAppLog(null, { source: 'main', kind: recentsReady?.ok ? 'running' : 'error', text: `Scene ${sceneId}: Recents ready before rename: ${recentsReady?.ok ? recentsReady.text || recentsReady.mode : recentsReady?.error || 'not-ready'}`, details: recentsReady });
+    if (!recentsReady?.ok) return { ok: false, error: recentsReady?.error || 'recents-not-ready', recentsReady };
+  }
+  const renameDeadline = Date.now() + timeoutMs;
+  let renameAttempt = 0;
+  let renameResult = null;
+  while (Date.now() < renameDeadline) {
+    const titleState = await checkChatGptCurrentConversationTitle(page, wanted).catch((error) => ({ ok: false, error: error.message }));
+    if (titleState?.ok) {
+      const stableChecks = markChatTitleStable(titleState.path || currentPath, wanted, true);
+      if (stableChecks >= 3) return { ok: true, alreadyNamed: true, title: wanted, attempts: renameAttempt, stableChecks, titleState };
+      await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: ChatGPT title đúng ${stableChecks}/3, check thêm để ổn định rồi dừng.`, details: titleState });
+      await sleep(700);
+      continue;
+    }
+    markChatTitleStable(titleState?.path || currentPath, wanted, false);
+    renameAttempt += 1;
+    await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: ChatGPT rename attempt ${renameAttempt}, current="${titleState?.currentTitle || ''}" target="${wanted}"`, details: titleState });
+    renameResult = await renameChatGptCurrentConversation(null, wanted).catch((error) => ({ ok: false, error: error.message }));
+    await appendAppLog(null, { source: 'main', kind: renameResult?.ok ? 'running' : 'error', text: `Scene ${sceneId}: ChatGPT rename attempt ${renameAttempt} ${renameResult?.ok ? 'sent' : renameResult?.error || 'failed'}`, details: renameResult });
+    await sleep(2500);
+    const verifyState = await checkChatGptCurrentConversationTitle(page, wanted).catch((error) => ({ ok: false, error: error.message }));
+    if (verifyState?.ok) {
+      const stableChecks = markChatTitleStable(verifyState.path || currentPath, wanted, true);
+      if (stableChecks >= 3) return { ok: true, title: wanted, attempts: renameAttempt, stableChecks, verifyState };
+      await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: rename đã khớp ${stableChecks}/3, verify thêm trước khi dừng.`, details: verifyState });
+      await sleep(700);
+      continue;
+    }
+    markChatTitleStable(verifyState?.path || currentPath, wanted, false);
+    await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: rename chưa khớp, retry tiếp. current="${verifyState?.currentTitle || ''}"`, details: verifyState });
+    await sleep(1500);
+  }
+  return { ok: false, error: renameResult?.error || 'rename-timeout', title: wanted, attempts: renameAttempt, lastResult: renameResult };
+}
+
+async function renameChatGptCurrentConversation(_event, title = '') {
+  const wanted = String(title || '').trim();
+  if (!wanted) return { ok: false, error: 'Missing title.' };
+  const page = await getCdpPage('chatgpt', false, { bringToFront: true });
+  const currentLocation = await evaluateOnCdpPage(page, `({ href: location.href, path: location.pathname, title: document.title })`).catch((error) => ({ error: error.message }));
+  await appendAppLog(null, { source: 'main', kind: 'running', text: `ChatGPT rename start: target="${wanted}" path=${currentLocation?.path || ''}`, details: currentLocation });
+  if (!String(currentLocation?.path || '').startsWith('/c/')) {
+    await appendAppLog(null, { source: 'main', kind: 'running', text: 'ChatGPT rename: chưa ở conversation /c/..., mở trang chat mới trước.', details: currentLocation });
+    await page.Page.navigate({ url: 'https://chatgpt.com/' }).catch((error) => appendAppLog(null, { source: 'main', kind: 'error', text: `ChatGPT navigate root failed: ${error.message}` }));
+    await waitForCdpLoad(page).catch(() => null);
+    await sleep(1800);
+    const afterNavigate = await evaluateOnCdpPage(page, `({ href: location.href, path: location.pathname, title: document.title })`).catch((error) => ({ error: error.message }));
+    await appendAppLog(null, { source: 'main', kind: 'ok', text: `ChatGPT rename: đã mở trang chat root, chờ prompt đầu tiên tạo conversation. path=${afterNavigate?.path || ''}`, details: afterNavigate });
+    return { ok: true, title: wanted, skippedRename: true, reason: 'new-chat-will-auto-title-after-first-message', location: afterNavigate };
+  }
+  var stateExpression = `(function(){var m=location.pathname.match(/\\/c\\/([^/?#]+)/);var id=m?m[1]:'';if(!id)return{ok:false,error:'missing-conversation-id'};var nodes=Array.prototype.slice.call(document.querySelectorAll('nav a, aside a, [role="navigation"] a, a[href*="/c/"], nav [role="link"], aside [role="link"], nav li, aside li, nav div, aside div'));var items=[];for(var i=0;i<nodes.length;i++){var n=nodes[i];var r=n.getBoundingClientRect?n.getBoundingClientRect():null;var h=n.href||(n.getAttribute?n.getAttribute('href'):'')||'';var t=String(n.innerText||n.textContent||'').trim();var c=String(n.className||'');var cur=n.getAttribute?(n.getAttribute('aria-current')||n.getAttribute('aria-selected')||''):'';if(t&&r&&r.width>40&&r.height>12&&r.x<220&&r.y>250)items.push({node:n,href:h,rect:r,text:t,cls:c,current:cur});}var a=null;for(var j=0;j<items.length;j++){if(items[j].href.indexOf('/c/'+id)>=0){a=items[j];break;}}if(!a){for(var k=0;k<items.length;k++){if(/page|true|active|selected/i.test(String(items[k].current)+' '+items[k].cls)){a=items[k];break;}}}if(!a){items.sort(function(x,y){return x.rect.y-y.rect.y;});a=items[0];}if(!a)return{ok:false,error:'no-recent-item',count:items.length};a.node.scrollIntoView({block:'center'});var row=a.node.closest('li, div[data-testid], div')||a.node;var rr=(row.getBoundingClientRect&&row.getBoundingClientRect())||a.rect;var box={x:Math.max(rr.x+40,Math.min(154,rr.right-18)),y:rr.y+rr.height/2};return{ok:true,text:a.text,box:box,activeBox:{x:rr.x,y:rr.y,w:rr.width,h:rr.height},mode:a.href.indexOf('/c/'+id)>=0?'href':'fallback',candidateCount:items.length};})()`;
+  var state = await evaluateOnCdpPage(page, stateExpression).catch((error) => ({ ok: false, error: error.message, expressionHead: stateExpression.slice(0, 240) }));
+  if (!state?.ok) return state;
+  await appendAppLog(null, { source: 'main', kind: 'running', text: `ChatGPT rename: selected recent item "${state.text}" mode=${state.mode || ''}`, details: state });
+  var openMenuExpression = `(function(){var id=(location.pathname.match(/\\/c\\/([^/?#]+)/)||[])[1]||'';var nodes=Array.prototype.slice.call(document.querySelectorAll('nav a, aside a, [role="navigation"] a, a[href*="/c/"], nav [role="link"], aside [role="link"], nav li, aside li, nav div, aside div'));var items=[];for(var i=0;i<nodes.length;i++){var n=nodes[i];var r=n.getBoundingClientRect?n.getBoundingClientRect():null;var h=n.href||(n.getAttribute?n.getAttribute('href'):'')||'';var t=String(n.innerText||n.textContent||'').trim();if(t&&r&&r.width>40&&r.height>12&&r.x<240&&r.y>230)items.push({node:n,href:h,text:t,rect:r});}var active=null;for(var j=0;j<items.length;j++){if(items[j].href.indexOf('/c/'+id)>=0){active=items[j];break;}}if(!active){for(var k=0;k<items.length;k++){if(items[k].text===${JSON.stringify(state.text)}){active=items[k];break;}}}if(!active)return{ok:false,error:'no-active-row-for-menu',id:id,count:items.length,first:items.slice(0,8).map(function(it){return{text:it.text,href:it.href,box:{x:it.rect.x,y:it.rect.y,w:it.rect.width,h:it.rect.height}};})};active.node.scrollIntoView({block:'center'});var row=active.node.closest('li, [data-testid], div')||active.node;var rr=(row.getBoundingClientRect&&row.getBoundingClientRect())||active.rect;var cx=Math.min(rr.right-12,156);var cy=rr.y+rr.height/2;var evs=['pointerover','mouseover','mouseenter','pointermove','mousemove'];for(var e=0;e<evs.length;e++){row.dispatchEvent(new MouseEvent(evs[e],{bubbles:true,clientX:cx,clientY:cy}));active.node.dispatchEvent(new MouseEvent(evs[e],{bubbles:true,clientX:cx,clientY:cy}));}var buttons=Array.prototype.slice.call(row.querySelectorAll('button,[role="button"]'));var btns=[];for(var b=0;b<buttons.length;b++){var br=buttons[b].getBoundingClientRect?buttons[b].getBoundingClientRect():null;var bt=String(buttons[b].innerText||buttons[b].textContent||'').trim();var ba=String(buttons[b].getAttribute?buttons[b].getAttribute('aria-label')||'':'');if(br&&br.width>4&&br.height>4)btns.push({node:buttons[b],text:bt,aria:ba,rect:br});}var menuButton=null;for(var q=0;q<btns.length;q++){if(/more|options|menu|conversation options|⋯|…/i.test(btns[q].text+' '+btns[q].aria)){menuButton=btns[q];break;}}if(!menuButton&&btns.length){btns.sort(function(a,b){return b.rect.x-a.rect.x;});menuButton=btns[0];}if(menuButton){menuButton.node.click();return{ok:true,mode:'button-click',activeText:active.text,rowBox:{x:rr.x,y:rr.y,w:rr.width,h:rr.height},clicked:{text:menuButton.text,aria:menuButton.aria,box:{x:menuButton.rect.x,y:menuButton.rect.y,w:menuButton.rect.width,h:menuButton.rect.height}},buttons:btns.slice(0,8).map(function(it){return{text:it.text,aria:it.aria,box:{x:it.rect.x,y:it.rect.y,w:it.rect.width,h:it.rect.height}};})};}var target=document.elementFromPoint(cx,cy);if(target){target.dispatchEvent(new MouseEvent('click',{bubbles:true,clientX:cx,clientY:cy}));return{ok:true,mode:'elementFromPoint-click',activeText:active.text,rowBox:{x:rr.x,y:rr.y,w:rr.width,h:rr.height},target:String(target.tagName||'')+' '+String(target.getAttribute?target.getAttribute('aria-label')||'':'')+' '+String(target.textContent||'').trim().slice(0,80),buttons:[]};}return{ok:false,error:'row-has-no-menu-button-and-no-target',row:{text:active.text,box:{x:rr.x,y:rr.y,w:rr.width,h:rr.height}},buttons:[]};})()`;
+  var openedMenu = await evaluateOnCdpPage(page, openMenuExpression).catch((error) => ({ ok: false, error: error.message, expressionHead: openMenuExpression.slice(0, 240) }));
+  await appendAppLog(null, { source: 'main', kind: openedMenu?.ok ? 'running' : 'error', text: `ChatGPT rename open menu: ${openedMenu?.ok ? openedMenu.mode || 'clicked menu button' : openedMenu?.error || 'failed'}`, details: openedMenu });
+  if (!openedMenu?.ok) return { ok: false, error: openedMenu?.error || 'Không mở được menu chat.', details: openedMenu, selectedItem: state };
+  await sleep(1800);
+  var renameMenuExpression = `(function(){var nodes=Array.prototype.slice.call(document.querySelectorAll('[role="menuitem"], [cmdk-item], button, div'));var items=[];for(var i=0;i<nodes.length;i++){var n=nodes[i];var r=n.getBoundingClientRect?n.getBoundingClientRect():null;var t=String(n.innerText||n.textContent||'').trim();if(t&&r&&r.width>20&&r.height>10)items.push({node:n,text:t,rect:r});}var rename=null;for(var j=0;j<items.length;j++){if(/^rename$/i.test(items[j].text)||/^đổi tên$/i.test(items[j].text)){rename=items[j];break;}}if(!rename){for(var k=0;k<items.length;k++){if(/(^|\\n)rename(\\n|$)|(^|\\n)đổi tên(\\n|$)/i.test(items[k].text)){var kids=Array.prototype.slice.call(items[k].node.querySelectorAll('[role="menuitem"],button,div'));for(var q=0;q<kids.length;q++){var kr=kids[q].getBoundingClientRect?kids[q].getBoundingClientRect():null;var kt=String(kids[q].innerText||kids[q].textContent||'').trim();if(kr&&(/^rename$/i.test(kt)||/^đổi tên$/i.test(kt))){rename={node:kids[q],text:kt,rect:kr};break;}}if(rename)break;}}}if(!rename)return{ok:false,error:'no-exact-rename-menuitem',items:items.slice(0,20).map(function(it){return{text:it.text,box:{x:it.rect.x,y:it.rect.y,w:it.rect.width,h:it.rect.height}};})};rename.node.dispatchEvent(new MouseEvent('pointerdown',{bubbles:true,clientX:rename.rect.x+rename.rect.width/2,clientY:rename.rect.y+rename.rect.height/2}));rename.node.dispatchEvent(new MouseEvent('mousedown',{bubbles:true,clientX:rename.rect.x+rename.rect.width/2,clientY:rename.rect.y+rename.rect.height/2}));rename.node.click();rename.node.dispatchEvent(new MouseEvent('mouseup',{bubbles:true,clientX:rename.rect.x+rename.rect.width/2,clientY:rename.rect.y+rename.rect.height/2}));return{ok:true,text:rename.text,mode:'exact-menuitem-click',box:{x:rename.rect.x,y:rename.rect.y,w:rename.rect.width,h:rename.rect.height}};})()`;
+  var menu = await evaluateOnCdpPage(page, renameMenuExpression).catch((error) => ({ ok: false, error: error.message, expressionHead: renameMenuExpression.slice(0, 240) }));
+  if (!menu?.ok) {
+    await appendAppLog(null, { source: 'main', kind: 'error', text: `ChatGPT rename menu DOM failed: ${menu?.error || 'unknown'}, bỏ qua để tránh nhập tên project vào ô prompt.`, details: menu });
+    return { ok: false, error: menu?.error || 'Không thấy menu Rename.', details: menu, selectedItem: state };
+  }
+  await appendAppLog(null, { source: 'main', kind: 'running', text: `ChatGPT rename: đã click đúng Rename, chờ input title="${wanted}"`, details: menu });
+  await sleep(1200);
+  const focusState = await evaluateOnCdpPage(page, `(() => {
+    const el = document.activeElement;
+    const text = String(el?.innerText || el?.value || el?.textContent || '').slice(0, 120);
+    const id = String(el?.id || '');
+    const tag = String(el?.tagName || '');
+    const aria = String(el?.getAttribute?.('aria-label') || '');
+    const placeholder = String(el?.getAttribute?.('placeholder') || '');
+    const modalText = String(document.querySelector('[role="dialog"], [data-radix-dialog-content]')?.innerText || '').slice(0, 300);
+    const isComposer = id === 'prompt-textarea' || /message|prompt|ask anything/i.test(aria + ' ' + placeholder);
+    const isRename = !isComposer && (/rename|đổi tên|name/i.test(aria + ' ' + placeholder + ' ' + modalText) || tag === 'INPUT' || tag === 'TEXTAREA');
+    return { tag, id, aria, placeholder, text, modalText, isComposer, isRename };
+  })()`).catch((error) => ({ error: error.message }));
+  await appendAppLog(null, { source: 'main', kind: focusState?.isRename ? 'running' : 'error', text: `ChatGPT rename focus before typing: ${focusState?.tag || ''}#${focusState?.id || ''}`, details: focusState });
+  if (!focusState?.isRename) return { ok: false, error: 'Rename input không mở; không nhập title để tránh vào composer.', focusState, selectedItem: state, menu };
+  await page.Input.dispatchKeyEvent({ type: 'keyDown', key: 'Control', code: 'ControlLeft', windowsVirtualKeyCode: 17 }).catch(() => null);
+  await page.Input.dispatchKeyEvent({ type: 'keyDown', key: 'A', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 2 }).catch(() => null);
+  await page.Input.dispatchKeyEvent({ type: 'keyUp', key: 'A', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 2 }).catch(() => null);
+  await page.Input.dispatchKeyEvent({ type: 'keyUp', key: 'Control', code: 'ControlLeft', windowsVirtualKeyCode: 17 }).catch(() => null);
+  await page.Input.insertText({ text: wanted }).catch(() => null);
+  await page.Input.dispatchKeyEvent({ type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 }).catch(() => null);
+  await page.Input.dispatchKeyEvent({ type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 }).catch(() => null);
+  await sleep(1800);
+  const verifyTitle = await evaluateOnCdpPage(page, `({ title: document.title, text: document.body.innerText.slice(0, 2000) })`).catch((error) => ({ error: error.message }));
+  const expectedTitle = wanted;
+  const verified = String(verifyTitle?.title || '').includes(expectedTitle) || String(verifyTitle?.text || '').includes(expectedTitle);
+  return { ok: verified, title: wanted, previousTitle: state.text, verified, verifyTitle };
+}
+
 async function waitForChatGptImageOrRetry(client, existingUrls = [], prompt, sceneDir, sceneId) {
   const known = new Set(existingUrls);
   const maxAttempts = 3;
+  const thinkingStallMs = 120000;
+  let lastSnapshot = null;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     const attemptStartedAt = Date.now();
     let sawGenerating = false;
     let readyTicks = 0;
+    let lastLogAt = 0;
+    const resendImagePrompt = async (reason, snapshot) => {
+      await fs.writeFile(
+        path.join(sceneDir, `scene_${String(sceneId).padStart(3, '0')}_chatgpt_image_retry_${attempt}_${reason}.json`),
+        JSON.stringify({ reason, snapshot, attempt, elapsedMs: Date.now() - attemptStartedAt }, null, 2),
+        'utf8',
+      ).catch(() => null);
+      await notifyRenderer('chatgpt-image-retry', `Scene ${sceneId}: ChatGPT ${reason === 'thinking-stall' ? 'kẹt Thinking quá lâu' : 'không trả ảnh'}, tool sẽ dừng lượt cũ và gửi lại NV1.`, { sceneId, attempt, reason });
+      if (attempt >= maxAttempts) {
+        throw new Error(`ChatGPT không trả ảnh sau ${maxAttempts} lần gửi NV1 (${reason}).`);
+      }
+      const stopped = await evaluateOnCdpPage(client, `(${clickChatGptStopGeneratingScript.toString()})()`).catch((error) => ({ ok: false, error: error.message }));
+      await appendAppLog(null, { source: 'main', kind: stopped?.ok ? 'running' : 'error', text: `Scene ${sceneId}: ChatGPT stop before retry NV1 (${reason}): ${stopped?.ok ? stopped.mode : stopped?.error || 'not-found'}`, details: stopped });
+      await sleep(1200);
+      const retryPrompt = `${prompt}\n\nLẦN GỬI LẠI ${attempt + 1}: Lần trước ChatGPT bị kẹt hoặc không trả ảnh. Bắt buộc tạo/render 1 ảnh ngay trong chat, không trả lời text.`;
+      await evaluateOnCdpPage(client, `(${prepareChatGptCreateImageScript.toString()})()`).catch(() => null);
+      await sleep(800);
+      const resent = await sendPromptViaCdpInput(client, retryPrompt);
+      if (!resent.ok) throw new Error(resent.error || 'Không gửi lại được image prompt vào ChatGPT.');
+      await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: đã gửi lại NV1 lần ${attempt + 1}/${maxAttempts} sau ${reason}.`, details: { resent } });
+    };
     while (Date.now() - attemptStartedAt < 360000) {
       await sleep(3000);
       const snapshot = await evaluateOnCdpPage(client, `(${readChatGptImageStateScript.toString()})()`);
+      lastSnapshot = snapshot;
+      if (snapshot?.loggedOut) throw new Error(loginRequiredMessage('chatgpt', snapshot.logoutReason || 'ChatGPT logged out while waiting for NV1 image'));
       const imageUrl = (snapshot?.urls || []).find((url) => !known.has(url));
+      if (imageUrl) return imageUrl;
       if (snapshot?.generating || snapshot?.preparingImage) {
         sawGenerating = true;
         readyTicks = 0;
+        if (Date.now() - lastLogAt > 15000) {
+          lastLogAt = Date.now();
+          await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: đang chờ ChatGPT hoàn tất NV1/tạo ảnh (${snapshot?.preparingImage ? 'preparing-image' : 'thinking'}).`, details: { mode: snapshot?.assistantMode, urls: snapshot?.urls?.length || 0, assistantCount: snapshot?.assistantCount || 0, elapsedMs: Date.now() - attemptStartedAt } });
+        }
+        if (!snapshot?.preparingImage && Date.now() - attemptStartedAt > thinkingStallMs) {
+          await resendImagePrompt('thinking-stall', snapshot);
+          break;
+        }
         continue;
       }
-      if (imageUrl) return imageUrl;
       const composerLooksReady = snapshot?.voiceReady;
       const textOnlyAnswer = Number(snapshot?.assistantCount || 0) > 0
         && String(snapshot?.latestAssistantText || '').length > 20
-        && !/preparing image|creating image|generating image|đang tạo ảnh/i.test(String(snapshot?.latestAssistantText || ''));
+        && !/preparing image|creating image|generating image|đang tạo ảnh|thinking/i.test(String(snapshot?.latestAssistantText || ''))
+        && !looksLikeCollapsedUserPrompt(snapshot?.latestAssistantText, 'image');
       if (composerLooksReady) readyTicks += 1;
       if (((sawGenerating && composerLooksReady && readyTicks >= 4) || textOnlyAnswer)) {
-        await fs.writeFile(
-          path.join(sceneDir, `scene_${String(sceneId).padStart(3, '0')}_chatgpt_image_retry_${attempt}.txt`),
-          JSON.stringify(snapshot, null, 2),
-          'utf8',
-        ).catch(() => null);
-        if (attempt >= maxAttempts) {
-          throw new Error('ChatGPT đã dừng/hiện nút voice nhưng chưa có ảnh sau nhiều lần gửi lại prompt.');
-        }
-        const retryPrompt = `${prompt}\n\nLẦN GỬI LẠI ${attempt + 1}: Lần trước ChatGPT không trả ảnh. Bắt buộc tạo/render 1 ảnh ngay trong chat, không trả lời text.`;
-        await evaluateOnCdpPage(client, `(${prepareChatGptCreateImageScript.toString()})()`).catch(() => null);
-        await sleep(800);
-        const resent = await sendPromptViaCdpInput(client, retryPrompt);
-        if (!resent.ok) throw new Error(resent.error || 'Không gửi lại được image prompt vào ChatGPT.');
+        await resendImagePrompt(textOnlyAnswer ? 'text-only-answer' : 'no-image-after-generating', snapshot);
         break;
       }
     }
     if (attempt >= maxAttempts) break;
   }
+  await fs.writeFile(path.join(sceneDir, `scene_${String(sceneId).padStart(3, '0')}_chatgpt_image_wait_failed.json`), JSON.stringify({ lastSnapshot, existingUrlCount: known.size }, null, 2), 'utf8').catch(() => null);
   throw new Error('Hết thời gian chờ ChatGPT tạo ảnh hoặc không detect được ảnh mới.');
+}
+
+function looksLikeCollapsedUserPrompt(text = '', kind = '') {
+  const value = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!value) return false;
+  if (/show more|show less/i.test(value) && /---\s*scene|scene\s*\d+\s*hiện tại|nhiệm\s*vụ\s*[12]/i.test(value)) return true;
+  if (kind === 'image' && /---\s*scene\s*\d+\s*hiện tại|nhiệm\s*vụ\s*1|tạo\s*1\s*ảnh|tạo ảnh/i.test(value) && !/generated image|here is|ảnh đã được tạo/i.test(value)) return true;
+  if (kind === 'motion' && /nhiệm\s*vụ\s*2|dựa trên ảnh keyframe|motion prompt/i.test(value) && /show more|show less|đoạn đầu scene/i.test(value)) return true;
+  return false;
 }
 
 async function waitForNewVideoUrl(client, existingUrls = [], options = {}) {
@@ -1912,6 +2399,7 @@ async function waitForNewVideoUrl(client, existingUrls = [], options = {}) {
     await sleep(5000);
     if (provider === 'grok') {
       const grokState = await evaluateOnCdpPage(client, `(${detectGrokGenerationProblemScript.toString()})()`).catch((error) => ({ ok: false, error: error.message }));
+      if (grokState?.kind === 'login-required') throw new Error(loginRequiredMessage('grok', grokState.reason || 'Grok logged out while generating video'));
       if (grokState?.kind === 'unable-finish' && retryCount < 3) {
         retryCount += 1;
         await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: Grok unable to finish replying, tự bấm Retry lần ${retryCount}/3.`, details: grokState });
@@ -1976,8 +2464,8 @@ async function downloadBrowserAsset(client, url, outputPath) {
   return outputPath;
 }
 
-async function captureLatestImageElement(client, outputPath) {
-  const target = await evaluateOnCdpPage(client, `(${getLatestImageBoxScript.toString()})()`);
+async function captureLatestImageElement(client, outputPath, expectedRef = '') {
+  const target = await evaluateOnCdpPage(client, `(${getLatestImageBoxScript.toString()})(${JSON.stringify(expectedRef)})`);
   if (!target?.ok) {
     throw new Error(target?.error || 'Không tìm thấy ảnh mới để chụp screenshot.');
   }
@@ -2176,8 +2664,11 @@ async function submitPixVersePrompt(client, prompt, config = {}) {
 }
 
 async function submitGrokVideoPrompt(client, prompt, config = {}) {
+  const cleanup = await evaluateOnCdpPage(client, `(${dismissGrokConnectorsScript.toString()})()`).catch((error) => ({ ok: false, error: error.message }));
+  await appendAppLog(null, { source: 'main', kind: cleanup?.ok ? 'ok' : 'running', text: `Grok cleanup connectors: ${cleanup?.actions?.join(', ') || cleanup?.error || 'checked'}`, details: cleanup });
   const forcedMode = await evaluateOnCdpPage(client, `(${forceGrokVideoModeScript.toString()})()`).catch((error) => ({ ok: false, error: error.message }));
   await appendAppLog(null, { source: 'main', kind: forcedMode?.ok ? 'ok' : 'running', text: `Grok video mode: ${forcedMode?.status || forcedMode?.error || 'checked'}`, details: forcedMode });
+  await evaluateOnCdpPage(client, `(${dismissGrokConnectorsScript.toString()})()`).catch(() => null);
   const prepared = await evaluateOnCdpPage(client, `(${prepareGrokVideoComposerScript.toString()})(${JSON.stringify(config || {})})`).catch((error) => ({ ok: false, error: error.message }));
   await appendAppLog(null, { source: 'main', kind: prepared?.ok ? 'ok' : 'running', text: `Grok config: ${prepared?.ok ? JSON.stringify(prepared.config || {}) : prepared?.error || 'không đọc được'}`, details: prepared });
   await sleep(500);
@@ -2595,7 +3086,10 @@ function collectGeneratedImageUrlsScript() {
   return { urls: [...new Set(urls)] };
 }
 
-function getLatestImageBoxScript() {
+function getLatestImageBoxScript(expectedRef = '') {
+  const expectedY = String(expectedRef || '').startsWith('chatgpt-custom-box-y')
+    ? Number(String(expectedRef).replace('chatgpt-custom-box-y', ''))
+    : null;
   const isImageNode = (node) => {
     if (node.tagName === 'IMG' || node.tagName === 'CANVAS') return true;
     const text = node.innerText || '';
@@ -2622,13 +3116,13 @@ function getLatestImageBoxScript() {
         box: { x: rect.x + window.scrollX, y: rect.y + window.scrollY, width: rect.width, height: rect.height },
       };
     })
-    // Ưu tiên các node ở xa nhất phía dưới (mới nhất)
-    .sort((a, b) => b.box.y - a.box.y);
+    // Ưu tiên đúng image box vừa detect; nếu không có thì lấy node thấp nhất (mới nhất)
+    .sort((a, b) => Number.isFinite(expectedY) ? Math.abs(a.box.y - expectedY) - Math.abs(b.box.y - expectedY) : b.box.y - a.box.y);
 
   const best = nodes[0];
   if (!best) return { ok: false, error: 'Không tìm thấy image element đủ lớn trong ChatGPT.' };
   best.node.scrollIntoView({ block: 'center' });
-  return { ok: true, src: best.src, box: best.box };
+  return { ok: true, src: best.src, expectedRef, box: best.box };
 }
 
 function collectVideoUrlsScript() {
@@ -3029,6 +3523,8 @@ function setGrokComposerTextScript(text) {
 
 function focusGrokComposerScript() {
   const selectors = [
+    'textarea[placeholder*="What do you want" i]',
+    'textarea[placeholder*="Ask" i]',
     'textarea[placeholder*="imagine" i]',
     'textarea[placeholder*="Imagine" i]',
     'textarea[placeholder*="create" i]',
@@ -3036,31 +3532,34 @@ function focusGrokComposerScript() {
     '[role="textbox"]',
     'textarea',
   ];
+  const bodyText = document.body?.innerText || '';
   const candidates = selectors
     .flatMap((selector) => [...document.querySelectorAll(selector)])
     .filter((node) => {
       const rect = node.getBoundingClientRect?.();
-      if (!rect || rect.width <= 40 || rect.height <= 16) return false;
-      // Motion prompt phải nhập ở chat composer panel phải, không nhập vào ô inline dưới image trên canvas.
-      if (rect.left < window.innerWidth * 0.58) return false;
-      if (rect.top < window.innerHeight * 0.45) return false;
+      if (!rect || rect.width <= 80 || rect.height <= 16) return false;
+      if (rect.bottom < window.innerHeight * 0.35) return false;
+      if (rect.left < window.innerWidth * 0.18 || rect.right > window.innerWidth * 0.95) return false;
       const text = (node.innerText || node.textContent || node.value || '').trim();
       if (text.length > 1200) return false;
+      const all = `${node.getAttribute?.('placeholder') || ''} ${node.getAttribute?.('aria-label') || ''} ${text}`;
+      if (/connect|connector|gmail|google drive|notion|vercel/i.test(all)) return false;
       return true;
     })
     .map((node) => ({ node, rect: node.getBoundingClientRect(), label: `${node.getAttribute?.('placeholder') || ''} ${node.getAttribute?.('aria-label') || ''} ${node.textContent || ''}` }))
     .sort((a, b) => {
-      const aInput = /message|ask|prompt|type|imagine|describe|create/i.test(a.label) ? 1 : 0;
-      const bInput = /message|ask|prompt|type|imagine|describe|create/i.test(b.label) ? 1 : 0;
+      const aInput = /what do you want|message|ask|prompt|type|imagine|describe|create/i.test(a.label) ? 1 : 0;
+      const bInput = /what do you want|message|ask|prompt|type|imagine|describe|create/i.test(b.label) ? 1 : 0;
       if (aInput !== bInput) return bInput - aInput;
       return b.rect.bottom - a.rect.bottom;
     });
   const input = candidates[0]?.node;
-  if (!input) return { ok: false, error: 'Không tìm thấy composer Grok để focus.' };
+  if (!input) return { ok: false, error: 'Không tìm thấy composer Grok để focus.', bodyHead: bodyText.slice(0, 800) };
   input.scrollIntoView({ block: 'center', inline: 'center' });
   input.focus();
   input.click();
-  return { ok: true };
+  const rect = input.getBoundingClientRect();
+  return { ok: true, box: { x: rect.x, y: rect.y, w: rect.width, h: rect.height }, label: `${input.getAttribute?.('placeholder') || ''} ${input.getAttribute?.('aria-label') || ''}`.trim() };
 }
 
 function labelGrokCanvasScript(label) {
@@ -3265,14 +3764,49 @@ function clickGrokComposerAreaScript() {
   return { ok: true, tag: target.tagName, text: String(target.textContent || target.value || '').slice(0, 80) };
 }
 
+function dismissGrokConnectorsScript() {
+  const actions = [];
+  const textOf = (node) => `${node.textContent || ''} ${node.getAttribute?.('aria-label') || ''} ${node.title || ''}`.trim();
+  const visible = (node) => {
+    const rect = node.getBoundingClientRect?.();
+    return rect && rect.width > 8 && rect.height > 8 && rect.bottom > 0 && rect.right > 0;
+  };
+  for (const node of [...document.querySelectorAll('[role="dialog"], [data-radix-dialog-content]')]) {
+    if (/gmail|connector|connect/i.test(textOf(node))) {
+      const close = [...node.querySelectorAll('button, [role="button"]')].find((button) => /close|back|dismiss|×|←/i.test(textOf(button)));
+      if (close) {
+        close.click();
+        actions.push('close-connector-dialog');
+      } else {
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true }));
+        actions.push('escape-connector-dialog');
+      }
+    }
+  }
+  const buttons = [...document.querySelectorAll('button, [role="button"]')].filter(visible);
+  const dismiss = buttons.find((button) => /^dismiss$/i.test(textOf(button)));
+  if (dismiss) {
+    dismiss.click();
+    actions.push('dismiss-connectors-banner');
+  }
+  return { ok: true, actions, bodyHasConnectors: /Connectors are now available|New Connector|Gmail/i.test(document.body?.innerText || '') };
+}
+
 function forceGrokVideoModeScript() {
   const textOf = (node) => `${node.textContent || ''} ${node.getAttribute?.('aria-label') || ''} ${node.title || ''}`.trim();
   const visible = (node) => {
     const rect = node.getBoundingClientRect?.();
     return rect && rect.width > 8 && rect.height > 8 && rect.bottom > 0 && rect.right > 0;
   };
-  const nodes = [...document.querySelectorAll('button, [role="tab"], [role="button"], label, div, span')].filter(visible);
-  const motionTab = nodes.find((node) => /(^|\s)(Motion|Video)(\s|$)/i.test(textOf(node)) && !/Image|Photo|Ảnh/i.test(textOf(node)));
+  const nodes = [...document.querySelectorAll('button, [role="tab"], [role="button"], label, div, span')]
+    .filter(visible)
+    .filter((node) => !/connect|connector|gmail|google drive|notion|vercel/i.test(textOf(node)));
+  const motionTab = nodes.find((node) => {
+    const rect = node.getBoundingClientRect?.();
+    const text = textOf(node);
+    if (!rect || rect.top > window.innerHeight * 0.75) return false;
+    return /(^|\s)(Motion|Video)(\s|$)/i.test(text) && !/Image|Photo|Ảnh/i.test(text);
+  });
   if (!motionTab) return { ok: false, status: 'video-mode-button-not-found', buttons: nodes.map(textOf).filter(Boolean).slice(0, 80) };
   motionTab.scrollIntoView({ block: 'center', inline: 'center' });
   motionTab.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }));
@@ -3330,9 +3864,12 @@ function detectGrokGenerationProblemScript() {
   const unable = /Grok was unable to finish replying|unable to finish replying|couldn'?t finish|Something went wrong|try again/i.test(tail);
   const contentPolicy = /content policy|blocked by content policy|triggered moderation|cannot generate or retry|I cannot generate|adjust the prompt significantly|chặn.*content|vi phạm.*chính sách/i.test(tail);
   const limit = /Video generation hiện đang gặp giới hạn|generation.*limit|rate limit|too many requests|limit được reset|quota|usage limit|come back later|try again later/i.test(tail);
+  const loginRequired = /(^|\n)\s*(Log in|Sign in|Sign up|Đăng nhập|Get started)\s*($|\n)|continue with google|sign up for free/i.test(bodyText)
+    && !/SuperGrok|Imagine|Private|What do you want to know\?|Grok can make mistakes/i.test(bodyText);
   return {
     ok: true,
-    kind: contentPolicy ? 'content-policy' : limit ? 'limit' : unable || retry ? 'unable-finish' : '',
+    kind: loginRequired ? 'login-required' : contentPolicy ? 'content-policy' : limit ? 'limit' : unable || retry ? 'unable-finish' : '',
+    reason: loginRequired ? 'Grok page is showing login/sign-up controls.' : '',
     hasRetry: Boolean(retry),
     retryBox: retry?.rect ? { x: retry.rect.x, y: retry.rect.y, width: retry.rect.width, height: retry.rect.height } : null,
     retryText: retry?.text || '',
@@ -3450,27 +3987,87 @@ function clickPixVerseCreateScript() {
 }
 
 function readLatestAssistantScript() {
+  const bodyTail = String(document.body?.innerText || '').slice(-4000);
   const stopButton = [...document.querySelectorAll('button')].some((button) => /stop|dừng|generating/i.test(`${button.textContent || ''} ${button.getAttribute('aria-label') || ''}`));
-  const nodes = [...document.querySelectorAll('[data-message-author-role="assistant"], article, .message, [class*="response"], [class*="markdown"]')]
+  const thinking = /Thinking|Thinking about your request|Đang suy nghĩ|Generating|Creating/i.test(bodyTail);
+  const roleNodes = [...document.querySelectorAll('[data-message-author-role="assistant"]')]
     .filter((node) => (node.innerText || '').trim().length > 20);
+  const fallbackNodes = [...document.querySelectorAll('article, .message, [class*="response"], [class*="markdown"]')]
+    .filter((node) => {
+      if (node.closest?.('[data-message-author-role="user"]')) return false;
+      if (node.querySelector?.('[data-message-author-role="user"]')) return false;
+      const text = (node.innerText || '').trim();
+      if (text.length <= 20) return false;
+      if (/^NHIỆM\s*VỤ\s*2\s*:|^Dựa trên ảnh keyframe|Show more/i.test(text)) return false;
+      return true;
+    });
+  const nodes = roleNodes.length ? roleNodes : fallbackNodes;
   const last = nodes.at(-1);
   return {
     count: nodes.length,
     text: last ? last.innerText.trim() : '',
-    generating: stopButton,
+    generating: stopButton || thinking,
+    mode: roleNodes.length ? 'assistant-role' : 'fallback-non-user',
   };
+}
+
+function clickChatGptStopGeneratingScript() {
+  const buttons = [...document.querySelectorAll('button, [role="button"]')]
+    .map((node) => {
+      const rect = node.getBoundingClientRect?.();
+      const text = `${node.textContent || ''} ${node.getAttribute?.('aria-label') || ''} ${node.title || ''}`.trim();
+      return { node, rect, text, html: String(node.innerHTML || '').slice(0, 500) };
+    })
+    .filter((item) => item.rect && item.rect.width > 8 && item.rect.height > 8);
+  const stop = buttons.find((item) => {
+    const nearComposer = item.rect.left > window.innerWidth * 0.65 && item.rect.top > window.innerHeight * 0.65;
+    return nearComposer && (/stop|cancel|dừng/i.test(item.text) || /rect|square|stop/i.test(item.html));
+  }) || buttons.find((item) => /stop generating|stop|dừng/i.test(item.text));
+  if (!stop) return { ok: false, error: 'stop-button-not-found', buttonCount: buttons.length };
+  stop.node.scrollIntoView({ block: 'center', inline: 'center' });
+  stop.node.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, clientX: stop.rect.x + stop.rect.width / 2, clientY: stop.rect.y + stop.rect.height / 2 }));
+  stop.node.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: stop.rect.x + stop.rect.width / 2, clientY: stop.rect.y + stop.rect.height / 2 }));
+  stop.node.click();
+  stop.node.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: stop.rect.x + stop.rect.width / 2, clientY: stop.rect.y + stop.rect.height / 2 }));
+  return { ok: true, mode: 'clicked-stop', text: stop.text, box: { x: stop.rect.x, y: stop.rect.y, width: stop.rect.width, height: stop.rect.height } };
+}
+
+function findChatGptConversationScript(title = '') {
+  const wanted = String(title || '').trim().toLowerCase();
+  if (!wanted) return { ok: true, skipped: true };
+  const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  const candidates = [...document.querySelectorAll('nav a, aside a, [role="navigation"] a, a[href*="/c/"], button')]
+    .map((node) => {
+      const text = normalize(node.innerText || node.textContent || node.getAttribute('aria-label') || node.title || '');
+      const rect = node.getBoundingClientRect?.();
+      return { node, text, rect };
+    })
+    .filter((item) => item.text && item.rect && item.rect.width > 20 && item.rect.height > 10)
+    .filter((item) => item.text === wanted || item.text.includes(wanted) || wanted.includes(item.text));
+  const best = candidates[0];
+  if (!best) return { ok: false, error: `Không thấy chat "${title}"`, sample: [...document.querySelectorAll('nav a, aside a, a[href*="/c/"]')].slice(0, 20).map((node) => (node.innerText || node.textContent || '').trim()).filter(Boolean) };
+  best.node.scrollIntoView({ block: 'center' });
+  const rect = best.node.getBoundingClientRect();
+  return { ok: true, title: best.text, box: { x: rect.x, y: rect.y, width: rect.width, height: rect.height } };
 }
 
 function readChatGptImageStateScript() {
   const bodyText = document.body?.innerText || '';
+  const bodyTail = bodyText.slice(-4000);
   const buttonText = [...document.querySelectorAll('button')]
     .map((button) => `${button.textContent || ''} ${button.getAttribute('aria-label') || ''} ${button.title || ''}`.trim())
     .filter(Boolean)
     .join(' | ');
-  const generating = /stop|dừng|generating/i.test(buttonText);
+  const thinking = /Thinking|Thinking about your request|Đang suy nghĩ|Generating|Creating/i.test(bodyTail);
+  const generating = /stop|dừng|generating/i.test(buttonText) || thinking;
   const preparingImage = /preparing image|creating image|generating image|đang tạo ảnh|đang chuẩn bị ảnh/i.test(bodyText);
   const voiceReady = /voice|mic|microphone|record|dictate/i.test(buttonText);
-  const urls = [...document.querySelectorAll('img, picture source')]
+  const loggedOut = /(^|\n)\s*(sign in|log in|đăng nhập|sign up)\s*($|\n)|sign up to keep chatting|continue with google/i.test(bodyText)
+    && !/ChatGPT can make mistakes|Share|Ask anything/i.test(bodyText.slice(-3000));
+  const mediaRoots = [...document.querySelectorAll('[data-message-author-role="assistant"], article, .message, [class*="response"]')]
+    .filter((node) => node.querySelector?.('img, picture source, canvas') || /Generated image/i.test(node.innerText || ''));
+  const mediaRoot = mediaRoots.at(-1) || document;
+  const urls = [...mediaRoot.querySelectorAll('img, picture source')]
     .filter((node) => {
       const rect = node.getBoundingClientRect?.();
       if (!rect || rect.width < 180 || rect.height < 120) return false;
@@ -3480,7 +4077,7 @@ function readChatGptImageStateScript() {
     .map((node) => node.currentSrc || node.src || node.getAttribute('srcset') || node.getAttribute('src') || '')
     .filter((url) => /^https?:|^blob:|^data:image\//i.test(url));
 
-  const customBoxes = [...document.querySelectorAll('div, button, canvas')]
+  const customBoxes = [...mediaRoot.querySelectorAll('div, button, canvas')]
     .filter((node) => {
       const rect = node.getBoundingClientRect?.();
       if (!rect || rect.width < 180 || rect.height < 120 || rect.width > window.innerWidth * 0.9) return false;
@@ -3490,17 +4087,30 @@ function readChatGptImageStateScript() {
     .map((node) => `chatgpt-custom-box-y${Math.round(node.getBoundingClientRect().y)}`);
 
   urls.push(...customBoxes);
-  const assistantNodes = [...document.querySelectorAll('[data-message-author-role="assistant"], article, .message, [class*="response"], [class*="markdown"]')]
+  const roleAssistantNodes = [...document.querySelectorAll('[data-message-author-role="assistant"]')]
     .filter((node) => (node.innerText || '').trim().length > 20);
+  const fallbackAssistantNodes = [...document.querySelectorAll('article, .message, [class*="response"], [class*="markdown"]')]
+    .filter((node) => {
+      if (node.closest?.('[data-message-author-role="user"]')) return false;
+      if (node.querySelector?.('[data-message-author-role="user"]')) return false;
+      const text = (node.innerText || '').trim();
+      if (text.length <= 20) return false;
+      if (/^NHIỆM\s*VỤ\s*1\s*:|^NHIỆM\s*VỤ\s*2\s*:|^---\s*SCENE|^Dựa trên ảnh keyframe|Show more|Show less/i.test(text)) return false;
+      return true;
+    });
+  const assistantNodes = roleAssistantNodes.length ? roleAssistantNodes : fallbackAssistantNodes;
   const latestAssistantText = assistantNodes.at(-1)?.innerText?.trim() || '';
   return {
     generating,
     preparingImage,
+    loggedOut,
+    logoutReason: loggedOut ? 'ChatGPT page is showing sign-in/sign-up while waiting for image.' : '',
     voiceReady,
     buttonText,
     urls,
     assistantCount: assistantNodes.length,
     latestAssistantText,
+    assistantMode: roleAssistantNodes.length ? 'assistant-role' : 'fallback-non-user',
   };
 }
 
@@ -3531,6 +4141,7 @@ function sanitizeFileName(value) {
 app.whenReady().then(() => {
   ipcMain.handle('app:append-log', appendAppLog);
   ipcMain.handle('app:get-log-path', getAppLogPath);
+  ipcMain.handle('prompt:open-hard-file', openHardPromptFile);
   ipcMain.handle('router:open-grok-folder', openGrokRouterFolder);
   ipcMain.handle('router:get-status', getGrokRouterStatus);
   ipcMain.handle('router:list-accounts-safe', listGrokAccountsSafe);
@@ -3543,6 +4154,7 @@ app.whenReady().then(() => {
   ipcMain.handle('browser:send-prompt', sendPromptViaWeb);
   ipcMain.handle('pipeline:run-scene', runScenePipeline);
   ipcMain.handle('output:choose-folder', chooseOutputFolder);
+  ipcMain.handle('project:choose-root-folder', chooseProjectRootFolder);
   ipcMain.handle('folder:choose', chooseFolder);
   ipcMain.handle('folder:scan', scanFolder);
   ipcMain.handle('video:extract-last-frame', extractLastFrame);
@@ -3553,6 +4165,7 @@ app.whenReady().then(() => {
   ipcMain.handle('frame:get-previous', getPreviousFrame);
   ipcMain.handle('ai:split-prompt', splitPromptWithAI);
   ipcMain.handle('ai:generate-scene-prompts', generateScenePrompts);
+  ipcMain.handle('chatgpt:rename-current-chat', renameChatGptCurrentConversation);
   ipcMain.handle('project:export', exportProject);
   ipcMain.handle('project:new-session', newProjectSession);
   ipcMain.handle('project:save-session-file', saveProjectSessionFile);

@@ -50,29 +50,21 @@
         <label for="project-name">Tên project</label>
         <input id="project-name" value="Video live action viral" />
 
-        <label for="story-input">Cốt truyện tổng / global story context</label>
-        <div class="file-import-row">
-          <label class="file-import-btn" for="story-file-input">Add story .txt</label>
-          <input id="story-file-input" type="file" accept=".txt,text/plain" />
-          <span id="story-file-name">Chưa chọn file story.</span>
-        </div>
-        <textarea id="story-input" rows="8"
-          placeholder="Dán toàn bộ cốt truyện, character bible, visual style, continuity rules..."></textarea>
+        <input id="story-file-input" type="file" accept=".txt,text/plain" hidden />
+        <span id="story-file-name" hidden></span>
+        <textarea id="story-input" hidden></textarea>
 
-        <label for="script-input">Kịch bản nhiều scene</label>
+        <label for="script-input">Scene</label>
         <div class="file-import-row">
           <label class="file-import-btn" for="script-file-input">Add scene .txt</label>
           <input id="script-file-input" type="file" accept=".txt,text/plain" />
           <span id="script-file-name">Chưa chọn file scene.</span>
         </div>
-        <textarea id="script-input" rows="12"
-          placeholder="Dán scene theo format SCENE 1..., Scene 2..., hoặc mỗi đoạn là một scene..."></textarea>
+        <textarea id="script-input" rows="18"
+          placeholder="Dán hoặc sửa từng scene ở đây. Có thể dùng format SCENE 1..., Scene 2..., hoặc mỗi đoạn là một scene..."></textarea>
 
+        <input id="batch-size" type="hidden" value="10" />
         <div class="form-row">
-          <div>
-            <label for="batch-size">Batch size</label>
-            <input id="batch-size" type="number" min="1" max="10" value="10" />
-          </div>
           <div>
             <label for="duration-sec">Thời lượng/scene</label>
             <input id="duration-sec" type="number" min="1" value="10" />
@@ -93,78 +85,23 @@
         <div id="quick-actions-slot"></div>
       </section>
 
-      <section class="panel router-panel" aria-labelledby="router-title">
+      <section class="panel router-panel" aria-labelledby="router-title" hidden>
         <div class="panel-head split">
           <div>
-            <h2 id="router-title">2. Provider Router</h2>
-            <p>Đổi account GPT/Grok, lỗi quota thì pause và resume từ scene lỗi.</p>
+            <h2 id="router-title">Provider Router</h2>
+            <p>Provider controls removed. The simplified flow uses the default local/web automation settings.</p>
           </div>
           <span id="run-state" class="state-pill idle">Idle</span>
         </div>
 
-        <div class="form-row">
-          <div>
-            <label for="provider-select">Provider</label>
-            <select id="provider-select">
-              <option value="ninerouter">9Router local proxy</option>
-              <option value="openai">GPT / OpenAI compatible</option>
-              <option value="gemini">Google Gemini</option>
-              <option value="anthropic">Claude</option>
-              <option value="openrouter">OpenRouter</option>
-              <option value="grok">Grok account</option>
-            </select>
-          </div>
-          <div>
-            <label for="account-select">Account</label>
-            <select id="account-select">
-              <option>Account 1</option>
-              <option>Account 2</option>
-              <option>Account 3</option>
-              <option>Fallback Account</option>
-            </select>
-          </div>
-        </div>
-
-        <label for="model-input">Model</label>
-        <input id="model-input" value="cx/gpt-5.5" />
-
-        <label for="api-key-input">API key / token</label>
-        <input id="api-key-input" type="password"
-          placeholder="Dùng local trên máy; 9Router có thể để token proxy nếu cần" />
-
-        <div class="grok-account-router-card" aria-labelledby="grok-account-router-title">
-          <div class="config-head">
-            <div>
-              <span class="preview-label">Grok Account Router</span>
-              <h3 id="grok-account-router-title">Acc Grok cho batch chính</h3>
-            </div>
-            <span id="grok-router-state" class="energy-pill">Sandbox linked</span>
-          </div>
-          <p>
-            Phần này dùng cho tài khoản Grok chạy video/motion trong pipeline, tách riêng với 9Router/API key tạo
-            prompt.
-          </p>
-          <label class="inline-toggle" for="grok-router-enabled-toggle">
-            <input id="grok-router-enabled-toggle" type="checkbox" />
-            <span>Bật router Grok an toàn</span>
-          </label>
-          <div class="config-grid wide-config-grid">
-            <label>Active Grok account
-              <select id="grok-account-select"></select>
-            </label>
-            <label>Routing policy
-              <input id="grok-routing-policy-select" value="round_robin" readonly />
-            </label>
-          </div>
-          <div id="grok-account-list" class="grok-account-list" aria-live="polite"></div>
-          <div id="grok-router-message" class="router-safe-message">Router off: single-account Grok pipeline is active.
-          </div>
-          <div class="router-link-row">
-            <code id="grok-router-folder">dev_sandbox_grok_account_router</code>
-            <button id="grok-router-resume-btn" class="mini" type="button">Resume checkpoint</button>
-            <button id="open-grok-router-folder-btn" class="mini" type="button">Mở folder router</button>
-          </div>
-        </div>
+        <select id="provider-select" hidden>
+          <option value="ninerouter">9Router local proxy</option>
+        </select>
+        <select id="account-select" hidden>
+          <option>Account 1</option>
+        </select>
+        <input id="model-input" value="cx/gpt-5.5" hidden />
+        <input id="api-key-input" type="password" hidden />
 
         <div class="router-actions">
           <button id="run-batch-btn" class="ghost primary manual-only" type="button" hidden>Run batch kế tiếp</button>
@@ -342,6 +279,79 @@
     </form>
   </dialog>
 
+  <dialog id="chat-recovery-dialog">
+    <form method="dialog" class="dialog-card">
+      <div class="panel-head split">
+        <div>
+          <h2>Không tìm thấy chat ChatGPT</h2>
+          <p>Chọn cách để tool tiếp tục đúng đoạn chat/bối cảnh cho project này.</p>
+        </div>
+        <button class="icon-btn" value="cancel" type="submit">×</button>
+      </div>
+      <p id="chat-recovery-message" class="settings-help">Tool không tìm thấy đoạn chat trùng tên project.</p>
+      <div class="settings-section">
+        <h3>Cách 1</h3>
+        <p class="settings-help">Tool mở chat mới và làm việc trên chat mới cho project hiện tại.</p>
+        <button id="chat-recovery-new-btn" class="ghost primary" type="button">Tạo chat mới theo tên project</button>
+      </div>
+      <div class="settings-section">
+        <h3>Cách 2</h3>
+        <p class="settings-help">Nhập tên đoạn chat cũ bạn đã dùng để tạo scene, tool sẽ vào chat đó và dùng cho project này.</p>
+        <label for="chat-recovery-title-input">Tên đoạn chat đã dùng</label>
+        <input id="chat-recovery-title-input" placeholder="Dán/chọn đúng tên chat trong sidebar ChatGPT" />
+        <button id="chat-recovery-existing-btn" class="ghost success" type="button">Dùng chat này</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="new-project-dialog">
+    <form method="dialog" class="dialog-card">
+      <div class="panel-head split">
+        <div>
+          <h2>Tạo project mới</h2>
+          <p>Nhập thông tin cơ bản trước khi Vidora tạo file .vdra và folder project.</p>
+        </div>
+        <button class="icon-btn" value="cancel" type="submit">×</button>
+      </div>
+      <label for="new-project-name-input">Tên project</label>
+      <input id="new-project-name-input" placeholder="Ví dụ: Video live action viral" />
+      <label for="new-project-scene-file-input">File scene .txt</label>
+      <div class="file-import-row">
+        <label class="file-import-btn" for="new-project-scene-file-input">Chọn scene .txt</label>
+        <input id="new-project-scene-file-input" type="file" accept=".txt,text/plain" />
+        <span id="new-project-scene-file-name">Chưa chọn file scene.</span>
+      </div>
+      <label for="new-project-save-location-input">Vị trí lưu</label>
+      <div class="file-import-row">
+        <input id="new-project-save-location-input" readonly placeholder="Chưa chọn folder lưu" />
+        <button id="new-project-choose-location-btn" class="ghost" type="button">Chọn vị trí lưu</button>
+      </div>
+      <div class="dialog-actions">
+        <button id="new-project-create-btn" class="ghost primary" value="default" type="button">Tạo project</button>
+        <button class="ghost" value="cancel" type="submit">Hủy</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="chat-resolve-dialog">
+    <form method="dialog" class="dialog-card">
+      <div class="panel-head split">
+        <div>
+          <h2>Không tìm thấy đoạn chat ChatGPT</h2>
+          <p id="chat-resolve-message">Tool không tìm thấy đoạn chat trùng tên project.</p>
+        </div>
+        <button class="icon-btn" value="cancel" type="submit">×</button>
+      </div>
+      <div class="settings-section">
+        <h3>Cách xử lý</h3>
+        <button id="chat-resolve-new-btn" class="ghost primary" type="button">Tool tự tạo đoạn chat mới và đặt tên theo project</button>
+        <label for="chat-resolve-title-input">Hoặc nhập tên đoạn chat đã dùng</label>
+        <input id="chat-resolve-title-input" placeholder="Tên đoạn chat cũ trong ChatGPT" />
+        <button id="chat-resolve-rename-btn" class="ghost" type="button">Vào đoạn chat này và đặt tên lại theo project</button>
+      </div>
+    </form>
+  </dialog>
+
   <dialog id="asset-review-dialog" class="asset-review-dialog">
     <form method="dialog" class="asset-review-card">
       <div class="asset-review-header">
@@ -375,8 +385,10 @@
         <section class="asset-review-prompts prompt-review-panel prompt-review-main">
           <h3>Image prompt</h3>
           <div id="review-image-prompt" class="review-text-box prompt-box-large">—</div>
-          <h3>Motion prompt</h3>
-          <div id="review-motion-prompt" class="review-text-box prompt-box-large">—</div>
+          <div id="review-motion-block">
+            <h3>Motion prompt</h3>
+            <div id="review-motion-prompt" class="review-text-box prompt-box-large">—</div>
+          </div>
         </section>
 
         <aside class="asset-review-actions">
@@ -446,33 +458,9 @@
       </section>
 
       <section class="settings-section">
-        <h3>Image generation</h3>
-        <div class="settings-grid image-settings-grid">
-          <label>Image method
-            <select id="image-generation-method-select">
-              <option value="web">ChatGPT web như cũ</option>
-              <option value="api">9Router Image API</option>
-            </select>
-          </label>
-          <label>Endpoint
-            <input id="image-api-endpoint-input" value="http://localhost:20128/v1/images/generations" />
-          </label>
-          <label>Model
-            <select id="image-api-model-select">
-              <option value="cx/gpt-5.5-image">cx/gpt-5.5-image</option>
-              <option value="cx/gpt-5.4-image">cx/gpt-5.4-image</option>
-              <option value="cx/gpt-5.3-image">cx/gpt-5.3-image</option>
-              <option value="cx/gpt-5.2-image">cx/gpt-5.2-image</option>
-            </select>
-          </label>
-          <label>Size
-            <input id="image-api-size-input" value="1024x1024" />
-          </label>
-          <label class="settings-field-wide">API key
-            <input id="image-api-key-input" type="password" placeholder="Nhập Bearer token / API key 9Router" />
-          </label>
-        </div>
-        <p class="settings-help">API key chỉ lưu local trong app. Nếu chọn API, tool gọi endpoint images/generations và lưu ảnh PNG vào scene.</p>
+        <h3>Prompt cứng</h3>
+        <p class="settings-help">Mở file 2 NHIỆM VỤ BẰNG PROMPT.txt được đóng kèm trong app để xem/chỉnh prompt nền.</p>
+        <button id="open-hard-prompt-btn" class="ghost" type="button">Mở 2 NHIỆM VỤ BẰNG PROMPT.txt</button>
       </section>
 
       <section class="settings-section">

@@ -3,6 +3,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('videoPlannerAPI', {
   appendAppLog: (entry) => ipcRenderer.invoke('app:append-log', entry),
   getAppLogPath: () => ipcRenderer.invoke('app:get-log-path'),
+  openHardPromptFile: () => ipcRenderer.invoke('prompt:open-hard-file'),
   openGrokRouterFolder: () => ipcRenderer.invoke('router:open-grok-folder'),
   getGrokRouterStatus: () => ipcRenderer.invoke('router:get-status'),
   listGrokAccountsSafe: () => ipcRenderer.invoke('router:list-accounts-safe'),
@@ -31,8 +32,10 @@ contextBridge.exposeInMainWorld('videoPlannerAPI', {
   saveProjectSession: (payload) => ipcRenderer.invoke('project:save-session-file', payload),
   overwriteProjectSession: (options) => ipcRenderer.invoke('project:overwrite-session-file', options),
   createProjectSession: (options) => ipcRenderer.invoke('project:create-session-file', options),
+  chooseProjectRootFolder: () => ipcRenderer.invoke('project:choose-root-folder'),
   ensureProjectSceneFolders: (options) => ipcRenderer.invoke('project:ensure-scene-folders', options),
   openProjectSession: () => ipcRenderer.invoke('project:open-session-file'),
+  renameChatGptCurrentChat: (title) => ipcRenderer.invoke('chatgpt:rename-current-chat', title),
   onProjectMenuCommand: (callback) => {
     const allowed = new Set(['new', 'open', 'save', 'settings']);
     const listener = (_event, command) => {
