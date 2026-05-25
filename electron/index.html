@@ -464,6 +464,46 @@
       </section>
 
       <section class="settings-section">
+        <h3>Account ChatGPT / Grok</h3>
+        <p class="settings-help">Account được mã hóa bằng Electron safeStorage trên máy này. Tool chỉ tự điền login, không bypass 2FA/Cloudflare và không ghi password vào log/project.</p>
+        <div class="settings-grid credential-grid">
+          <label>
+            Provider
+            <select id="web-account-provider-select">
+              <option value="chatgpt">ChatGPT</option>
+              <option value="grok">Grok</option>
+            </select>
+          </label>
+          <label>
+            Nhãn
+            <input id="web-account-label-input" placeholder="Acc chính / Acc phụ" />
+          </label>
+          <label>
+            Email
+            <input id="web-account-email-input" type="email" autocomplete="username" placeholder="name@example.com" />
+          </label>
+          <label class="settings-field-wide">
+            Password
+            <input id="web-account-password-input" type="password" autocomplete="current-password" placeholder="Chỉ lưu mã hóa local" />
+          </label>
+        </div>
+        <div class="dialog-actions compact-actions">
+          <button id="web-account-save-btn" class="ghost primary" type="button">Lưu account mã hóa</button>
+          <button id="web-account-refresh-btn" class="ghost" type="button">Refresh danh sách</button>
+        </div>
+        <div class="credential-lists">
+          <div>
+            <strong>ChatGPT</strong>
+            <div id="web-chatgpt-account-list" class="credential-account-list"></div>
+          </div>
+          <div>
+            <strong>Grok</strong>
+            <div id="web-grok-account-list" class="credential-account-list"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="settings-section">
         <h3>Review viewer shortcuts</h3>
         <ul class="settings-shortcuts">
           <li><kbd>Ctrl</kbd> + <kbd>+</kbd>/<kbd>-</kbd> zoom ảnh/video review</li>
@@ -475,6 +515,39 @@
       <div class="dialog-actions">
         <button id="settings-save-btn" class="ghost primary" value="default" type="button">Lưu settings</button>
         <button class="ghost" value="cancel" type="submit">Đóng</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="account-required-dialog">
+    <form method="dialog" class="dialog-card">
+      <div class="panel-head split">
+        <div>
+          <span class="preview-label">Account required</span>
+          <h2 id="account-required-title">Cần account để đăng nhập tự động</h2>
+          <p id="account-required-desc">Nhập account để tool mã hóa local rồi tiếp tục pipeline.</p>
+        </div>
+        <button class="icon-btn" value="cancel" type="submit">×</button>
+      </div>
+      <input id="account-required-provider" type="hidden" />
+      <div class="settings-grid">
+        <label>
+          Nhãn
+          <input id="account-required-label-input" placeholder="Acc dự phòng" />
+        </label>
+        <label>
+          Email
+          <input id="account-required-email-input" type="email" autocomplete="username" />
+        </label>
+        <label class="settings-field-wide">
+          Password
+          <input id="account-required-password-input" type="password" autocomplete="current-password" />
+        </label>
+      </div>
+      <p class="settings-help">Password chỉ gửi qua IPC nội bộ để main process mã hóa bằng safeStorage, không lưu vào project và không hiện trong log.</p>
+      <div class="dialog-actions">
+        <button id="account-required-save-btn" class="ghost primary" type="button">Lưu và tiếp tục</button>
+        <button class="ghost" value="cancel" type="submit">Hủy</button>
       </div>
     </form>
   </dialog>

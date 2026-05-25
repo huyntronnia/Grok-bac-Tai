@@ -1,9 +1,10 @@
 const { execFileSync, spawn } = require('child_process');
-const { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, Menu, shell } = require('electron');
+const { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, Menu, shell, safeStorage } = require('electron');
 const CDP = require('chrome-remote-interface');
 const ffmpegPath = require('ffmpeg-static');
 const fs = require('fs/promises');
 const path = require('path');
+const crypto = require('crypto');
 
 const VIDEO_EXTENSIONS = new Set(['.mp4', '.mov', '.mkv', '.webm', '.avi', '.m4v']);
 const webWindows = new Map();
@@ -23,6 +24,7 @@ let showPipelineLog = false;
 const chatTitleStableChecks = new Map();
 const APP_LOG_FILE = path.join(app.getPath('userData'), 'ai-video-pipeline.log');
 const GROK_ROUTER_CHECKPOINT_FILE = path.join(app.getPath('userData'), 'grok-router-checkpoint.json');
+const WEB_ACCOUNT_STORE_FILE = path.join(app.getPath('userData'), 'web-provider-accounts.secure.json');
 const HARD_PROMPT_FILE = path.resolve(__dirname, '..', '2 NHIỆM VỤ BẰNG PROMPT.txt');
 const GROK_ROUTER_ALLOWED_STATES = new Set(['available', 'active', 'cooldown', 'limited', 'login_required', 'invalid', 'disabled_by_user']);
 
@@ -271,6 +273,159 @@ function maskRouterText(value = '') {
     .replace(/[A-Z0-9._%+-]+@([A-Z0-9.-]+\.[A-Z]{2,})/gi, '***@$1')
     .replace(/(bearer\s+)[a-z0-9._-]+/gi, '$1[redacted]')
     .replace(/(password|cookie|session[_-]?token|refresh[_-]?token|api[_-]?key)\s*[:=]\s*[^\s,;]+/gi, '$1=[redacted]');
+}
+
+function normalizeCredentialProvider(provider) {
+  return provider === 'grok' ? 'grok' : 'chatgpt';
+}
+
+function maskEmail(email = '') {
+  const value = String(email || '').trim();
+  const [name, domain] = value.split('@');
+  if (!name || !domain) return value ? '***' : '';
+  return `${name.slice(0, 2)}***@${domain}`;
+}
+
+function ensureCredentialEncryptionAvailable() {
+  if (!safeStorage?.isEncryptionAvailable?.()) {
+    throw new Error('Máy này chưa có Electron safeStorage khả dụng; không lưu account nếu không mã hóa được.');
+  }
+}
+
+async function readWebAccountStore({ includeSecrets = false } = {}) {
+  if (!(await pathExists(WEB_ACCOUNT_STORE_FILE))) return { version: 1, accounts: [] };
+  ensureCredentialEncryptionAvailable();
+  const raw = JSON.parse(await fs.readFile(WEB_ACCOUNT_STORE_FILE, 'utf8'));
+  const encrypted = Buffer.from(String(raw.data || ''), 'base64');
+  const payload = JSON.parse(safeStorage.decryptString(encrypted) || '{}');
+  const accounts = Array.isArray(payload.accounts) ? payload.accounts : [];
+  return {
+    version: 1,
+    accounts: accounts.map((account) => includeSecrets ? account : {
+      id: account.id,
+      provider: normalizeCredentialProvider(account.provider),
+      label: account.label || '',
+      email: account.email || '',
+      state: account.state || 'available',
+      selected: Boolean(account.selected),
+      lastUsedAt: account.lastUsedAt || '',
+      updatedAt: account.updatedAt || '',
+    }),
+  };
+}
+
+async function writeWebAccountStore(store = {}) {
+  ensureCredentialEncryptionAvailable();
+  const payload = {
+    version: 1,
+    accounts: Array.isArray(store.accounts) ? store.accounts : [],
+  };
+  const encrypted = safeStorage.encryptString(JSON.stringify(payload));
+  await fs.mkdir(path.dirname(WEB_ACCOUNT_STORE_FILE), { recursive: true });
+  await fs.writeFile(WEB_ACCOUNT_STORE_FILE, JSON.stringify({ version: 1, encrypted: true, data: encrypted.toString('base64') }, null, 2), 'utf8');
+}
+
+function safeWebAccount(account = {}) {
+  return {
+    id: account.id,
+    provider: normalizeCredentialProvider(account.provider),
+    label: maskRouterText(account.label || account.email || ''),
+    maskedEmail: maskEmail(account.email || ''),
+    state: account.state || 'available',
+    selected: Boolean(account.selected),
+    lastUsedAt: account.lastUsedAt || '',
+    updatedAt: account.updatedAt || '',
+  };
+}
+
+async function listWebAccountsSafe(_event, provider = '') {
+  const normalized = provider ? normalizeCredentialProvider(provider) : '';
+  const store = await readWebAccountStore();
+  const accounts = store.accounts
+    .filter((account) => !normalized || normalizeCredentialProvider(account.provider) === normalized)
+    .map(safeWebAccount);
+  return { ok: true, encryptionAvailable: Boolean(safeStorage?.isEncryptionAvailable?.()), accounts };
+}
+
+async function saveWebAccount(_event, input = {}) {
+  const provider = normalizeCredentialProvider(input.provider);
+  const email = String(input.email || '').trim().toLowerCase();
+  const password = String(input.password || '');
+  const label = String(input.label || '').trim();
+  if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return { ok: false, error: 'Email account không hợp lệ.' };
+  if (!password) return { ok: false, error: 'Password không được để trống.' };
+  const store = await readWebAccountStore({ includeSecrets: true });
+  const existing = store.accounts.find((account) => normalizeCredentialProvider(account.provider) === provider && String(account.email || '').toLowerCase() === email);
+  const now = new Date().toISOString();
+  if (existing) {
+    existing.label = label || existing.label || email;
+    existing.password = password;
+    existing.state = 'available';
+    existing.updatedAt = now;
+  } else {
+    store.accounts.push({
+      id: crypto.randomUUID(),
+      provider,
+      label: label || email,
+      email,
+      password,
+      state: 'available',
+      selected: !store.accounts.some((account) => normalizeCredentialProvider(account.provider) === provider && account.selected),
+      createdAt: now,
+      updatedAt: now,
+      lastUsedAt: '',
+    });
+  }
+  await writeWebAccountStore(store);
+  await appendAppLog(null, { source: 'main', kind: 'ok', text: `Đã lưu account ${provider}: ${maskEmail(email)} (encrypted safeStorage).` });
+  return listWebAccountsSafe(null, provider);
+}
+
+async function deleteWebAccount(_event, accountId = '') {
+  const id = String(accountId || '').trim();
+  const store = await readWebAccountStore({ includeSecrets: true });
+  const removed = store.accounts.find((account) => account.id === id);
+  store.accounts = store.accounts.filter((account) => account.id !== id);
+  if (removed?.selected) {
+    const next = store.accounts.find((account) => normalizeCredentialProvider(account.provider) === normalizeCredentialProvider(removed.provider) && !['limited', 'login_required', 'disabled'].includes(account.state));
+    if (next) next.selected = true;
+  }
+  await writeWebAccountStore(store);
+  return listWebAccountsSafe(null, removed?.provider || '');
+}
+
+async function markWebAccountState(provider = '', accountId = '', state = 'available') {
+  const normalized = normalizeCredentialProvider(provider);
+  const store = await readWebAccountStore({ includeSecrets: true });
+  const account = store.accounts.find((item) => item.id === accountId && normalizeCredentialProvider(item.provider) === normalized)
+    || store.accounts.find((item) => item.selected && normalizeCredentialProvider(item.provider) === normalized);
+  if (!account) return null;
+  account.state = state;
+  account.updatedAt = new Date().toISOString();
+  await writeWebAccountStore(store);
+  return account;
+}
+
+async function pickWebAccount(provider = '', { rotate = false } = {}) {
+  const normalized = normalizeCredentialProvider(provider);
+  const store = await readWebAccountStore({ includeSecrets: true });
+  const providerAccounts = store.accounts.filter((account) => normalizeCredentialProvider(account.provider) === normalized);
+  if (!providerAccounts.length) return { account: null, store };
+  const usable = providerAccounts.filter((account) => !['limited', 'login_required', 'disabled'].includes(account.state));
+  if (!usable.length) return { account: null, store };
+  let account = usable.find((item) => item.selected) || usable[0];
+  if (rotate && usable.length > 1) {
+    const currentIndex = usable.findIndex((item) => item.id === account.id);
+    account = usable[(currentIndex + 1) % usable.length];
+  }
+  providerAccounts.forEach((item) => {
+    item.selected = item.id === account.id;
+    if (item.selected && item.state !== 'limited') item.state = 'active';
+    else if (item.state === 'active') item.state = 'available';
+  });
+  account.lastUsedAt = new Date().toISOString();
+  await writeWebAccountStore(store);
+  return { account, store };
 }
 
 function getSafeGrokAccounts() {
@@ -1118,6 +1273,16 @@ async function checkWebLogin(_event, provider, options = {}) {
     state = await evaluateOnCdpPage(page, `(${detectLoginScript.toString()})(${JSON.stringify(normalizedProvider)})`).catch((error) => ({ loggedIn: false, reason: error.message }));
     state.cacheRecovery = recovery;
   }
+  if (!state.loggedIn && ['chatgpt', 'grok'].includes(normalizedProvider)) {
+    const autoLogin = await tryAutoLoginWithStoredAccount(page, normalizedProvider, { reason: 'check-login' }).catch((error) => ({ ok: false, error: error.message }));
+    state.autoLogin = autoLogin;
+    if (autoLogin?.ok) {
+      state = await evaluateOnCdpPage(page, `(${detectLoginScript.toString()})(${JSON.stringify(normalizedProvider)})`).catch((error) => ({ loggedIn: false, reason: error.message }));
+      state.autoLogin = autoLogin;
+    } else if (autoLogin?.noStoredAccount) {
+      state.noStoredAccount = true;
+    }
+  }
   await appendAppLog(null, { source: 'main', kind: state.loggedIn ? 'ok' : 'error', text: `Login check ${normalizedProvider}: ${state.loggedIn ? 'logged in' : 'not logged in'} (${state.reason || state.title || state.url || ''})`, details: state });
   const capability = ['grok', 'pixverse'].includes(normalizedProvider)
     ? await evaluateOnCdpPage(page, `(${detectVideoCapabilityScript.toString()})(${JSON.stringify(normalizedProvider)})`).catch((error) => ({ ok: false, error: error.message }))
@@ -1127,6 +1292,61 @@ async function checkWebLogin(_event, provider, options = {}) {
   }
   await page.close().catch(() => null);
   return { ...state, capability, autoOpenSaved, cdp: true, port: CHROME_DEBUG_PORT, profilePath: CHROME_USER_DATA_DIR };
+}
+
+async function clearProviderSession(page, provider) {
+  const normalized = normalizeCredentialProvider(provider);
+  const origin = new URL(PROVIDER_META[normalized].url).origin;
+  await page.Storage?.clearDataForOrigin?.({ origin, storageTypes: 'cookies,local_storage,session_storage,indexeddb,cache_storage' }).catch(() => null);
+  await page.Network?.clearBrowserCache?.().catch(() => null);
+  return { ok: true, origin };
+}
+
+async function tryAutoLoginWithStoredAccount(page, provider, { rotate = false, reason = '', sceneId = '' } = {}) {
+  const normalized = normalizeCredentialProvider(provider);
+  const { account } = await pickWebAccount(normalized, { rotate });
+  if (!account) return { ok: false, noStoredAccount: true, provider: normalized };
+  if (rotate) await clearProviderSession(page, normalized).catch(() => null);
+  const meta = PROVIDER_META[normalized];
+  await page.Page.bringToFront().catch(() => null);
+  await page.Page.navigate({ url: meta.url }).catch(() => null);
+  await waitForCdpLoad(page).catch(() => null);
+  await sleep(1200);
+  let lastFill = null;
+  for (let attempt = 1; attempt <= 5; attempt += 1) {
+    const state = await evaluateOnCdpPage(page, `(${detectLoginScript.toString()})(${JSON.stringify(normalized)})`).catch((error) => ({ loggedIn: false, reason: error.message }));
+    if (state?.loggedIn) {
+      await markWebAccountState(normalized, account.id, 'active');
+      return { ok: true, provider: normalized, accountId: account.id, maskedEmail: maskEmail(account.email), attempt, reason };
+    }
+    lastFill = await evaluateOnCdpPage(page, `(${fillProviderLoginScript.toString()})(${JSON.stringify(normalized)}, ${JSON.stringify(account.email)}, ${JSON.stringify(account.password)})`).catch((error) => ({ ok: false, error: error.message }));
+    await appendAppLog(null, {
+      source: 'main',
+      kind: lastFill?.ok ? 'running' : 'error',
+      text: `Auto-login ${normalized} ${maskEmail(account.email)} attempt ${attempt}/5: ${lastFill?.mode || lastFill?.error || 'waiting'}`,
+      details: { provider: normalized, accountId: account.id, maskedEmail: maskEmail(account.email), mode: lastFill?.mode || '', clicked: lastFill?.clicked || '', needsUserAction: lastFill?.needsUserAction || false, sceneId },
+    });
+    await sleep(lastFill?.submitted || lastFill?.clicked ? 3200 : 1800);
+  }
+  const finalState = await evaluateOnCdpPage(page, `(${detectLoginScript.toString()})(${JSON.stringify(normalized)})`).catch((error) => ({ loggedIn: false, reason: error.message }));
+  if (finalState?.loggedIn) {
+    await markWebAccountState(normalized, account.id, 'active');
+    return { ok: true, provider: normalized, accountId: account.id, maskedEmail: maskEmail(account.email), reason };
+  }
+  await markWebAccountState(normalized, account.id, 'login_required');
+  return { ok: false, provider: normalized, accountId: account.id, maskedEmail: maskEmail(account.email), requiresUserAction: true, lastFill, finalReason: finalState.reason || finalState.url || '' };
+}
+
+async function rollProviderAccount(page, provider, sceneId = '', reason = 'limit') {
+  const normalized = normalizeCredentialProvider(provider);
+  await markWebAccountState(normalized, '', reason === 'login' ? 'login_required' : 'limited').catch(() => null);
+  const result = await tryAutoLoginWithStoredAccount(page, normalized, { rotate: true, reason, sceneId }).catch((error) => ({ ok: false, error: error.message }));
+  await notifyRenderer('provider-account-roll', result?.ok
+    ? `Scene ${sceneId}: ${PROVIDER_META[normalized].title} bị ${reason}, đã roll sang account ${result.maskedEmail}.`
+    : `Scene ${sceneId}: ${PROVIDER_META[normalized].title} bị ${reason} nhưng chưa roll được account.`, result);
+  if (result?.ok) return result;
+  if (result?.noStoredAccount) throw new Error(`CREDENTIAL_REQUIRED:${normalized}: Chưa có account ${PROVIDER_META[normalized].title} để tự login/roll.`);
+  return result;
 }
 
 async function sendPromptViaWeb(_event, options) {
@@ -1221,43 +1441,29 @@ async function runScenePipeline(_event, options) {
   }
 
   if (!imagePath) {
+    console.log(`[PIPELINE][Scene ${sceneId}] START NV1 ChatGPT image`);
+    await appendAppLog(null, { source: 'main', kind: 'running', text: `PIPELINE Scene ${sceneId}: gửi scene + NV1 cho ChatGPT để tạo ảnh.` });
     const chatGptResult = imageProvider?.method === 'api'
       ? await generateImageWithImageApi({ imagePrompt: finalImagePrompt, sceneDir, sceneId, config: imageProvider })
-      : await generateImageAndMotionWithChatGPT({ imagePrompt: finalImagePrompt, sceneDir, sceneId, chatContextTitle, pendingChatRenameTitle });
+      : await generateImageAndMotionWithChatGPT({ imagePrompt: finalImagePrompt, sceneDir, sceneId, chatContextTitle, pendingChatRenameTitle: '' });
     imagePath = chatGptResult.imagePath;
+    console.log(`[PIPELINE][Scene ${sceneId}] SAVED image: ${imagePath}`);
+    await appendAppLog(null, { source: 'main', kind: 'ok', text: `PIPELINE Scene ${sceneId}: đã lưu ảnh keyframe: ${path.basename(imagePath || '')}` });
     if (chatGptResult.motionPrompt) {
       motionPrompt = chatGptResult.motionPrompt;
     }
     if (motionPrompt) {
       await fs.writeFile(path.join(sceneDir, 'motion_prompt.txt'), motionPrompt, 'utf8');
     }
-    return {
-      sceneDir,
-      phase: 'image',
-      imagePath,
-      imageDataUrl: imagePath ? await imageFileToDataUrl(imagePath).catch(() => '') : '',
-      imagePromptUsed: finalImagePrompt,
-      motionPrompt,
-      videoPath: '',
-      videoProvider,
-      videoStatus: 'waiting-image-review',
-    };
   }
 
   if (!motionPrompt?.trim()) {
-    motionPrompt = await generateMotionPromptWithChatGPT({ imagePath, prompt: task2VideoPrompt, sceneDir, sceneId, chatContextTitle });
+    console.log(`[PIPELINE][Scene ${sceneId}] START NV2 ChatGPT motion prompt`);
+    await appendAppLog(null, { source: 'main', kind: 'running', text: `PIPELINE Scene ${sceneId}: gửi ảnh keyframe + NV2 cho ChatGPT để lấy motion prompt.` });
+    motionPrompt = await generateMotionPromptWithChatGPT({ imagePath, prompt: task2VideoPrompt, sceneDir, sceneId, chatContextTitle: '' });
     await fs.writeFile(path.join(sceneDir, 'motion_prompt.txt'), motionPrompt, 'utf8');
-    return {
-      sceneDir,
-      phase: 'motion_prompt',
-      imagePath,
-      imageDataUrl: imagePath ? await imageFileToDataUrl(imagePath).catch(() => '') : '',
-      imagePromptUsed: finalImagePrompt,
-      motionPrompt,
-      videoPath: '',
-      videoProvider,
-      videoStatus: 'waiting-motion-review',
-    };
+    console.log(`[PIPELINE][Scene ${sceneId}] SAVED motion prompt: ${path.join(sceneDir, 'motion_prompt.txt')}`);
+    await appendAppLog(null, { source: 'main', kind: 'ok', text: `PIPELINE Scene ${sceneId}: đã lưu motion_prompt.txt.` });
   }
   await fs.writeFile(path.join(sceneDir, 'motion_prompt.txt'), motionPrompt, 'utf8');
 
@@ -1364,24 +1570,22 @@ async function generateImageAndMotionWithChatGPT({ imagePrompt, sceneDir, sceneI
   const page = await getCdpPage('chatgpt', true);
   const loginState = await evaluateOnCdpPage(page, `(${detectLoginScript.toString()})('chatgpt')`);
   if (!loginState.loggedIn) {
-    await page.close();
-    throw new Error(loginRequiredMessage('chatgpt', loginState.reason || loginState.url || ''));
-  }
-  if (pendingChatRenameTitle?.trim() && !chatContextTitle?.trim()) {
-    await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: pending chat mới, mở ChatGPT root trước khi gửi prompt. targetRename="${pendingChatRenameTitle}"` });
-    await page.Page.navigate({ url: 'https://chatgpt.com/' }).catch((error) => appendAppLog(null, { source: 'main', kind: 'error', text: `Scene ${sceneId}: navigate ChatGPT root failed: ${error.message}` }));
-    await waitForCdpLoad(page).catch(() => null);
-    await sleep(1600);
+    const autoLogin = await tryAutoLoginWithStoredAccount(page, 'chatgpt', { reason: 'image-pipeline', sceneId }).catch((error) => ({ ok: false, error: error.message }));
+    const retryLoginState = autoLogin?.ok
+      ? await evaluateOnCdpPage(page, `(${detectLoginScript.toString()})('chatgpt')`).catch(() => ({ loggedIn: false }))
+      : { loggedIn: false };
+    if (!retryLoginState.loggedIn) {
+      await page.close();
+      if (autoLogin?.noStoredAccount) throw new Error(`CREDENTIAL_REQUIRED:chatgpt: Chưa có account ChatGPT để tự login.`);
+      throw new Error(loginRequiredMessage('chatgpt', loginState.reason || loginState.url || autoLogin?.finalReason || ''));
+    }
   }
   if (chatContextTitle?.trim()) {
     const selectedChat = await selectChatGptConversationByTitle(page, chatContextTitle.trim());
-    await appendAppLog(null, { source: 'main', kind: selectedChat?.ok ? 'ok' : 'error', text: `ChatGPT context: ${selectedChat?.ok ? `đã mở chat "${chatContextTitle}"` : selectedChat?.error || 'không tìm thấy chat'}`, details: selectedChat });
-    if (!selectedChat?.ok) throw new Error(selectedChat?.error || `Không tìm thấy cuộc trò chuyện ChatGPT: ${chatContextTitle}`);
-    if (pendingChatRenameTitle?.trim()) {
-      await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: Option 2 đã mở chat cũ, rename ngay thành "${pendingChatRenameTitle.trim()}" trước khi gửi prompt.` });
-      const prePromptRename = await renameChatGptCurrentConversationUntilTitle(page, pendingChatRenameTitle.trim(), { sceneId, timeoutMs: 60000, waitForRecent: true }).catch((error) => ({ ok: false, error: error.message }));
-      await appendAppLog(null, { source: 'main', kind: prePromptRename?.ok ? 'ok' : 'error', text: `Scene ${sceneId}: Option 2 pre-prompt rename ${prePromptRename?.ok ? 'ok' : prePromptRename?.error || 'failed/timeout'}`, details: prePromptRename });
-    }
+    await appendAppLog(null, { source: 'main', kind: selectedChat?.ok ? 'ok' : 'error', text: `PIPELINE Scene ${sceneId}: ${selectedChat?.ok ? `đã mở đoạn chat \"${chatContextTitle}\"` : selectedChat?.error || 'không tìm thấy đoạn chat theo tên'}`, details: selectedChat });
+    if (!selectedChat?.ok) throw new Error(selectedChat?.error || `Không tìm thấy đoạn chat ChatGPT: ${chatContextTitle}`);
+  } else {
+    await appendAppLog(null, { source: 'main', kind: 'running', text: `PIPELINE Scene ${sceneId}: không có tên đoạn chat, dùng ChatGPT tab hiện tại.` });
   }
 
   const imageInstruction = [
@@ -1389,45 +1593,21 @@ async function generateImageAndMotionWithChatGPT({ imagePrompt, sceneDir, sceneI
     imagePrompt,
   ].join('\n\n');
   const beforeImages = await evaluateOnCdpPage(page, `(${collectGeneratedImageUrlsScript.toString()})()`);
-  const restoredFrames = await restoreProjectKeyframesToChatGPT(page, sceneDir, sceneId);
-  await appendAppLog(null, { source: 'main', kind: restoredFrames?.count ? 'ok' : 'running', text: `Scene ${sceneId}: đã add keyframe scene trước vào ChatGPT: ${restoredFrames?.count || 0} ảnh`, details: restoredFrames });
+  const restoredFrames = { ok: true, count: 0, skipped: true, reason: 'NV1 không upload keyframe cũ' };
+  await appendAppLog(null, { source: 'main', kind: 'running', text: `PIPELINE Scene ${sceneId}: bỏ qua add keyframe cũ, chỉ gửi scene + NV1.`, details: restoredFrames });
   await evaluateOnCdpPage(page, `(${prepareChatGptCreateImageScript.toString()})()`).catch(() => null);
   await sleep(800);
   const sentImage = await sendPromptViaCdpInput(page, imageInstruction);
   await appendAppLog(null, { source: 'main', kind: sentImage?.ok ? 'ok' : 'error', text: `Scene ${sceneId}: ChatGPT send image prompt ${sentImage?.ok ? 'ok' : sentImage?.error || 'failed'}`, details: sentImage });
   if (!sentImage.ok) throw new Error(sentImage.error || 'Không gửi được image prompt vào ChatGPT.');
-  const earlyRenameTitle = pendingChatRenameTitle || chatContextTitle;
-  await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: earlyRenameTitle="${earlyRenameTitle || ''}"` });
-  if (earlyRenameTitle?.trim()) {
-    const renameStartedAt = Date.now();
-    let sawConversationPath = '';
-    while (Date.now() - renameStartedAt < 20000) {
-      const currentPath = await evaluateOnCdpPage(page, `location.pathname`).catch(() => '');
-      await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: ChatGPT rename poll path=${currentPath || '(empty)'}` });
-      if (String(currentPath || '').startsWith('/c/')) {
-        sawConversationPath = String(currentPath || '');
-        const recentsReady = await waitForChatGptRecentItem(page, sawConversationPath, sceneId);
-        await appendAppLog(null, { source: 'main', kind: recentsReady?.ok ? 'running' : 'error', text: `Scene ${sceneId}: Recents ready before rename: ${recentsReady?.ok ? recentsReady.text || recentsReady.mode : recentsReady?.error || 'not-ready'}`, details: recentsReady });
-        if (!recentsReady?.ok) break;
-        await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: ChatGPT conversation ready at ${sawConversationPath}, rename until title matches.` });
-        const renameResult = await renameChatGptCurrentConversationUntilTitle(page, earlyRenameTitle.trim(), { sceneId, timeoutMs: 60000, waitForRecent: false }).catch((error) => ({ ok: false, error: error.message }));
-        await appendAppLog(null, { source: 'main', kind: renameResult?.ok ? 'ok' : 'error', text: `Scene ${sceneId}: ChatGPT rename after first prompt ${renameResult?.ok ? 'ok' : renameResult?.error || 'failed/timeout'}`, details: renameResult });
-        break;
-      }
-      await sleep(1000);
-    }
-    if (!sawConversationPath) await appendAppLog(null, { source: 'main', kind: 'error', text: `Scene ${sceneId}: sau 20s vẫn chưa thấy ChatGPT URL /c/... để rename.` });
-  }
   const imagePath = path.join(sceneDir, `scene_${String(sceneId).padStart(3, '0')}_keyframe.png`);
   const imageUrl = await waitForChatGptImageOrRetry(page, beforeImages?.urls || [], imageInstruction, sceneDir, sceneId);
-  const renameTitle = pendingChatRenameTitle || chatContextTitle;
-  if (renameTitle?.trim()) await renameChatGptCurrentConversationUntilTitle(page, renameTitle.trim(), { sceneId, timeoutMs: 15000, waitForRecent: false }).catch(() => null);
+
   try {
-    if (imageUrl && imageUrl.startsWith('chatgpt-custom-box-y')) {
-      await captureLatestImageElement(page, imagePath, imageUrl);
-    } else {
-      await downloadBrowserAsset(page, imageUrl, imagePath);
+    if (!imageUrl || String(imageUrl).startsWith('chatgpt-custom-box-y')) {
+      throw new Error('ChatGPT chưa trả URL ảnh thật; không crop placeholder/canvas.');
     }
+    await downloadBrowserAsset(page, imageUrl, imagePath);
   } catch (error) {
     await fs.writeFile(path.join(sceneDir, 'image_url_download_error.txt'), error.stack || error.message, 'utf8');
     throw new Error(`Đã thấy ảnh ChatGPT nhưng tải file lỗi: ${error.message}`);
@@ -1442,7 +1622,16 @@ async function generateImageAndMotionWithChatGPT({ imagePrompt, sceneDir, sceneI
 async function generateMotionPromptWithChatGPT({ imagePath, prompt, sceneDir, sceneId, chatContextTitle = '' }) {
   const page = await getCdpPage('chatgpt', false, { bringToFront: true });
   const loginState = await evaluateOnCdpPage(page, `(${detectLoginScript.toString()})('chatgpt')`);
-  if (!loginState.loggedIn) throw new Error(loginRequiredMessage('chatgpt', loginState.reason || loginState.url || ''));
+  if (!loginState.loggedIn) {
+    const autoLogin = await tryAutoLoginWithStoredAccount(page, 'chatgpt', { reason: 'motion-prompt', sceneId }).catch((error) => ({ ok: false, error: error.message }));
+    const retryLoginState = autoLogin?.ok
+      ? await evaluateOnCdpPage(page, `(${detectLoginScript.toString()})('chatgpt')`).catch(() => ({ loggedIn: false }))
+      : { loggedIn: false };
+    if (!retryLoginState.loggedIn) {
+      if (autoLogin?.noStoredAccount) throw new Error(`CREDENTIAL_REQUIRED:chatgpt: Chưa có account ChatGPT để tự login.`);
+      throw new Error(loginRequiredMessage('chatgpt', loginState.reason || loginState.url || autoLogin?.finalReason || ''));
+    }
+  }
   if (chatContextTitle?.trim()) {
     await selectChatGptConversationByTitle(page, chatContextTitle.trim()).catch(async (error) => {
       await appendAppLog(null, { source: 'main', kind: 'error', text: `ChatGPT không chọn được cuộc trò chuyện "${chatContextTitle}": ${error.message}` });
@@ -1461,18 +1650,48 @@ async function generateMotionPromptWithChatGPT({ imagePath, prompt, sceneDir, sc
   const startedAt = Date.now();
   let latest = '';
   let lastState = null;
+  let recoveredOnce = 0;
+  const retryMotionPrompt = async (reason, state) => {
+    if (recoveredOnce >= 3) return false;
+    recoveredOnce += 1;
+    await fs.writeFile(path.join(sceneDir, `scene_${String(sceneId).padStart(3, '0')}_chatgpt_motion_recovery_${recoveredOnce}_${reason}.json`), JSON.stringify({ reason, state, elapsedMs: Date.now() - startedAt }, null, 2), 'utf8').catch(() => null);
+    await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: NV2 bị kẹt (${reason}), retry ${recoveredOnce}/3: F5 → Stop → F5 → upload lại ảnh → gửi lại NV2.` });
+    await page.Page.reload({ ignoreCache: true }).catch(() => null);
+    await waitForCdpLoad(page).catch(() => null);
+    await sleep(1800);
+    const stopped = await evaluateOnCdpPage(page, `(${clickChatGptStopGeneratingScript.toString()})()`).catch((error) => ({ ok: false, error: error.message }));
+    await appendAppLog(null, { source: 'main', kind: stopped?.ok ? 'ok' : 'running', text: `Scene ${sceneId}: NV2 recovery Stop: ${stopped?.ok ? stopped.mode || 'ok' : stopped?.error || 'không thấy Stop'}`, details: stopped });
+    await sleep(800);
+    await page.Page.reload({ ignoreCache: true }).catch(() => null);
+    await waitForCdpLoad(page).catch(() => null);
+    await sleep(2200);
+    const uploadAgain = await uploadFileViaCdp(page, imagePath, 'chatgpt').catch((error) => ({ ok: false, error: error.message }));
+    await appendAppLog(null, { source: 'main', kind: uploadAgain?.ok ? 'ok' : 'error', text: `Scene ${sceneId}: NV2 recovery upload lại keyframe: ${uploadAgain?.ok ? 'ok' : uploadAgain?.error || 'failed'}`, details: uploadAgain });
+    if (!uploadAgain?.ok) throw new Error(uploadAgain?.error || 'Không upload lại được keyframe trước khi retry NV2.');
+    await sleep(1000);
+    const beforeRetry = await evaluateOnCdpPage(page, `(${readLatestAssistantScript.toString()})()`).catch(() => ({ count: 0, text: '' }));
+    const resent = await sendPromptViaCdpInput(page, instruction);
+    if (!resent?.ok) throw new Error(resent?.error || 'Không gửi lại Nhiệm vụ 2 sau recovery.');
+    await appendAppLog(null, { source: 'main', kind: 'ok', text: `Scene ${sceneId}: đã gửi lại NV2 sau recovery ${recoveredOnce}/3.`, details: { resent, beforeRetry } });
+    return true;
+  };
+
   while (Date.now() - startedAt < 360000) {
     await sleep(3000);
     const state = await evaluateOnCdpPage(page, `(${readLatestAssistantScript.toString()})()`).catch(() => null);
     lastState = state;
     if (!state?.text) {
       await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: đang chờ ChatGPT trả NV2, chưa thấy assistant response mới.`, details: state });
+      if (Date.now() - startedAt > 25000 && await retryMotionPrompt('no-assistant-after-send', state)) continue;
       continue;
     }
     latest = state.text.trim();
     const freshAssistant = state.count > (before?.count || 0) || latest !== before?.text;
     const quality = validateMotionPromptResponse(latest, { beforeText: before?.text || '', instruction, taskPrompt: prompt });
-    if (freshAssistant && !state.generating && quality.ok) break;
+    const composerDone = state.voiceReady && !state.stopButton && !state.generating;
+    if (freshAssistant && composerDone && quality.ok) break;
+    if (freshAssistant && !state.generating && state.voiceReady && !quality.ok && Date.now() - startedAt > 25000 && await retryMotionPrompt(quality.error || 'bad-response-idle', state)) continue;
+    if (!freshAssistant && !state.generating && Date.now() - startedAt > 25000 && await retryMotionPrompt('stuck-after-user-message', state)) continue;
     await appendAppLog(null, {
       source: 'main',
       kind: 'running',
@@ -1499,8 +1718,9 @@ function validateMotionPromptResponse(text = '', { beforeText = '', instruction 
   const taskHead = String(taskPrompt || '').replace(/\s+/g, ' ').trim().slice(0, 120).toLowerCase();
   if (instructionHead && lower.startsWith(instructionHead.slice(0, 80))) return { ok: false, error: 'echoed-user-instruction' };
   if (taskHead && lower.startsWith(taskHead.slice(0, 80))) return { ok: false, error: 'echoed-task-prompt' };
+  if (/^thought\s+for\s+\d+/i.test(value) || /^edit$/i.test(value) || /\bThought\s+for\s+\d+[^\n]*(\n|\s)*Edit\b/i.test(String(text || ''))) return { ok: false, error: 'thinking-summary-not-final' };
   if (/nhiệm\s*vụ\s*2\s*:|show more|đoạn đầu scene|vừa tạo/i.test(value) && value.length < 900) return { ok: false, error: 'looks-like-collapsed-user-prompt' };
-  if (value.length < 80) return { ok: false, error: 'too-short' };
+  if (value.length < 180) return { ok: false, error: 'too-short' };
   const motionSignals = [
     /camera|shot|lens|dolly|pan|tilt|zoom|tracking|close[-\s]?up|wide shot/i,
     /motion|movement|move|chuyển động|máy quay|góc quay|khung hình/i,
@@ -1619,6 +1839,15 @@ async function detectLoginWithRetry(page, provider, sceneId = '') {
       lastState = { ...lastState, cacheRecovery: recovery };
       if (recovery?.ok) continue;
     }
+    if (['chatgpt', 'grok'].includes(provider)) {
+      const autoLogin = await tryAutoLoginWithStoredAccount(page, provider, { reason: `scene-login-attempt-${attempt}`, sceneId }).catch((error) => ({ ok: false, error: error.message }));
+      lastState = { ...lastState, autoLogin };
+      if (autoLogin?.ok) {
+        lastState = await evaluateOnCdpPage(page, `(${detectLoginScript.toString()})(${JSON.stringify(provider)})`).catch((error) => ({ loggedIn: false, reason: error.message, autoLogin }));
+        if (lastState?.loggedIn) return lastState;
+      }
+      if (autoLogin?.noStoredAccount) break;
+    }
     await sleep(attempt === 1 ? 2500 : 4000);
   }
   return lastState;
@@ -1630,14 +1859,15 @@ async function generateVideoWithGenericProvider({ provider, imagePath, motionPro
   const title = PROVIDER_META[provider]?.title || provider;
   if (!loginState.loggedIn) {
     await page.close();
+    if (loginState?.autoLogin?.noStoredAccount) throw new Error(`CREDENTIAL_REQUIRED:${provider}: Chưa có account ${title} để tự login.`);
     throw new Error(loginRequiredMessage(provider, loginState.reason || loginState.url || ''));
   }
 
   if (provider === 'grok') {
-    await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: Grok dùng luồng trực tiếp trong chat/image, không vào canvas.` });
-    await page.Page.navigate({ url: 'https://grok.com/' }).catch(() => null);
+    await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: Grok chuẩn bị vào Imagine/Image trước khi upload ảnh.` });
+    await page.Page.navigate({ url: 'https://grok.com/imagine' }).catch(() => null);
     await waitForCdpLoad(page).catch(() => null);
-    await sleep(1200);
+    await sleep(1600);
   }
 
   const capability = await evaluateOnCdpPage(page, `(${detectVideoCapabilityScript.toString()})(${JSON.stringify(provider)})`);
@@ -1650,8 +1880,10 @@ async function generateVideoWithGenericProvider({ provider, imagePath, motionPro
     await evaluateOnCdpPage(page, `(${preparePixVerseComposerScript.toString()})(${JSON.stringify(config)})`);
     await sleep(800);
   } else if (provider === 'grok') {
-    await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: bỏ qua canvas, chuẩn bị upload ảnh trực tiếp vào Grok.` });
-    await sleep(600);
+    const prepared = await evaluateOnCdpPage(page, `(${prepareGrokVideoComposerScript.toString()})(${JSON.stringify(config || {})})`).catch((error) => ({ ok: false, error: error.message }));
+    await appendAppLog(null, { source: 'main', kind: prepared?.ok ? 'ok' : 'error', text: `Scene ${sceneId}: Grok Image mode/canvas prepare: ${prepared?.status || prepared?.error || 'checked'}`, details: prepared });
+    if (!prepared?.ok) throw new Error(prepared?.error || prepared?.status || 'Không vào được Grok Image/Empty Canvas.');
+    await sleep(800);
   }
 
   await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: bắt đầu upload ảnh vào ${title}.`, details: { imagePath } });
@@ -2207,12 +2439,12 @@ function isChatTitleStable(pathname = '', title = '') {
   return (chatTitleStableChecks.get(getChatTitleStableKey(pathname, title)) || 0) >= 3;
 }
 
-async function renameChatGptCurrentConversationUntilTitle(page, title = '', { sceneId = '', timeoutMs = 60000, waitForRecent = true } = {}) {
+async function renameChatGptCurrentConversationUntilTitle(page, title = '', { sceneId = '', timeoutMs = 60000, waitForRecent = true, maxAttempts = 2, stableTarget = 2 } = {}) {
   const wanted = String(title || '').trim();
   if (!wanted) return { ok: false, error: 'missing-title' };
   const currentPath = await evaluateOnCdpPage(page, `location.pathname`).catch(() => '');
   if (!String(currentPath || '').startsWith('/c/')) return { ok: false, error: 'not-in-conversation', path: currentPath };
-  if (isChatTitleStable(currentPath, wanted)) return { ok: true, skipped: true, stableChecks: 3, title: wanted, path: currentPath };
+  if (isChatTitleStable(currentPath, wanted)) return { ok: true, skipped: true, stableChecks: stableTarget, title: wanted, path: currentPath };
   if (waitForRecent) {
     const recentsReady = await waitForChatGptRecentItem(page, currentPath, sceneId);
     await appendAppLog(null, { source: 'main', kind: recentsReady?.ok ? 'running' : 'error', text: `Scene ${sceneId}: Recents ready before rename: ${recentsReady?.ok ? recentsReady.text || recentsReady.mode : recentsReady?.error || 'not-ready'}`, details: recentsReady });
@@ -2221,34 +2453,35 @@ async function renameChatGptCurrentConversationUntilTitle(page, title = '', { sc
   const renameDeadline = Date.now() + timeoutMs;
   let renameAttempt = 0;
   let renameResult = null;
-  while (Date.now() < renameDeadline) {
+  while (Date.now() < renameDeadline && renameAttempt < maxAttempts) {
     const titleState = await checkChatGptCurrentConversationTitle(page, wanted).catch((error) => ({ ok: false, error: error.message }));
     if (titleState?.ok) {
       const stableChecks = markChatTitleStable(titleState.path || currentPath, wanted, true);
-      if (stableChecks >= 3) return { ok: true, alreadyNamed: true, title: wanted, attempts: renameAttempt, stableChecks, titleState };
-      await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: ChatGPT title đúng ${stableChecks}/3, check thêm để ổn định rồi dừng.`, details: titleState });
-      await sleep(700);
+      if (stableChecks >= stableTarget) return { ok: true, alreadyNamed: true, title: wanted, attempts: renameAttempt, stableChecks, titleState };
+      await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: ChatGPT title đúng ${stableChecks}/${stableTarget}, check thêm tối đa ${stableTarget} lần rồi dừng.`, details: titleState });
+      await sleep(500);
       continue;
     }
     markChatTitleStable(titleState?.path || currentPath, wanted, false);
     renameAttempt += 1;
-    await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: ChatGPT rename attempt ${renameAttempt}, current="${titleState?.currentTitle || ''}" target="${wanted}"`, details: titleState });
+    await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: ChatGPT rename attempt ${renameAttempt}/${maxAttempts}, current="${titleState?.currentTitle || ''}" target="${wanted}"`, details: titleState });
     renameResult = await renameChatGptCurrentConversation(null, wanted).catch((error) => ({ ok: false, error: error.message }));
-    await appendAppLog(null, { source: 'main', kind: renameResult?.ok ? 'running' : 'error', text: `Scene ${sceneId}: ChatGPT rename attempt ${renameAttempt} ${renameResult?.ok ? 'sent' : renameResult?.error || 'failed'}`, details: renameResult });
-    await sleep(2500);
+    await appendAppLog(null, { source: 'main', kind: renameResult?.ok ? 'running' : 'error', text: `Scene ${sceneId}: ChatGPT rename attempt ${renameAttempt}/${maxAttempts} ${renameResult?.ok ? 'sent' : renameResult?.error || 'failed'}`, details: renameResult });
+    await sleep(1800);
     const verifyState = await checkChatGptCurrentConversationTitle(page, wanted).catch((error) => ({ ok: false, error: error.message }));
     if (verifyState?.ok) {
       const stableChecks = markChatTitleStable(verifyState.path || currentPath, wanted, true);
-      if (stableChecks >= 3) return { ok: true, title: wanted, attempts: renameAttempt, stableChecks, verifyState };
-      await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: rename đã khớp ${stableChecks}/3, verify thêm trước khi dừng.`, details: verifyState });
-      await sleep(700);
+      if (stableChecks >= stableTarget) return { ok: true, title: wanted, attempts: renameAttempt, stableChecks, verifyState };
+      await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: rename đã khớp ${stableChecks}/${stableTarget}, verify thêm ngắn rồi dừng.`, details: verifyState });
+      await sleep(500);
       continue;
     }
     markChatTitleStable(verifyState?.path || currentPath, wanted, false);
+    if (renameAttempt >= maxAttempts) break;
     await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: rename chưa khớp, retry tiếp. current="${verifyState?.currentTitle || ''}"`, details: verifyState });
-    await sleep(1500);
+    await sleep(1000);
   }
-  return { ok: false, error: renameResult?.error || 'rename-timeout', title: wanted, attempts: renameAttempt, lastResult: renameResult };
+  return { ok: false, error: renameResult?.error || 'rename-max-attempts-or-timeout', title: wanted, attempts: renameAttempt, maxAttempts, lastResult: renameResult };
 }
 
 async function renameChatGptCurrentConversation(_event, title = '') {
@@ -2331,8 +2564,11 @@ async function waitForChatGptImageOrRetry(client, existingUrls = [], prompt, sce
       if (attempt >= maxAttempts) {
         throw new Error(`ChatGPT không trả ảnh sau ${maxAttempts} lần gửi NV1 (${reason}).`);
       }
+      await page.Page.reload({ ignoreCache: true }).catch(() => null);
+      await waitForCdpLoad(page).catch(() => null);
+      await sleep(1800);
       const stopped = await evaluateOnCdpPage(client, `(${clickChatGptStopGeneratingScript.toString()})()`).catch((error) => ({ ok: false, error: error.message }));
-      await appendAppLog(null, { source: 'main', kind: stopped?.ok ? 'running' : 'error', text: `Scene ${sceneId}: ChatGPT stop before retry NV1 (${reason}): ${stopped?.ok ? stopped.mode : stopped?.error || 'not-found'}`, details: stopped });
+      await appendAppLog(null, { source: 'main', kind: stopped?.ok ? 'running' : 'error', text: `Scene ${sceneId}: ChatGPT F5 → stop trước retry NV1 (${reason}): ${stopped?.ok ? stopped.mode : stopped?.error || 'not-found'}`, details: stopped });
       await sleep(1200);
       const retryPrompt = `${prompt}\n\nLẦN GỬI LẠI ${attempt + 1}: Lần trước ChatGPT bị kẹt hoặc không trả ảnh. Bắt buộc tạo/render 1 ảnh ngay trong chat, không trả lời text.`;
       await evaluateOnCdpPage(client, `(${prepareChatGptCreateImageScript.toString()})()`).catch(() => null);
@@ -2347,7 +2583,19 @@ async function waitForChatGptImageOrRetry(client, existingUrls = [], prompt, sce
       lastSnapshot = snapshot;
       if (snapshot?.loggedOut) throw new Error(loginRequiredMessage('chatgpt', snapshot.logoutReason || 'ChatGPT logged out while waiting for NV1 image'));
       const imageUrl = (snapshot?.urls || []).find((url) => !known.has(url));
-      if (imageUrl) return imageUrl;
+      const composerLooksReady = snapshot?.voiceReady && !snapshot?.stopButton && !snapshot?.generating && !snapshot?.preparingImage;
+      if (composerLooksReady) readyTicks += 1;
+      else readyTicks = 0;
+      if (imageUrl) {
+        if (readyTicks >= 3) {
+          await appendAppLog(null, { source: 'main', kind: 'ok', text: `Scene ${sceneId}: thấy ảnh mới và ChatGPT đã idle ổn định (${readyTicks} ticks), bắt đầu lưu ảnh.`, details: { imageUrl, readyTicks, voiceReady: snapshot?.voiceReady, stopButton: snapshot?.stopButton } });
+          return imageUrl;
+        }
+        if (Date.now() - lastLogAt > 8000) {
+          lastLogAt = Date.now();
+          await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: đã thấy preview/URL ảnh nhưng ChatGPT chưa idle đủ, chưa lưu/chụp.`, details: { readyTicks, voiceReady: snapshot?.voiceReady, stopButton: snapshot?.stopButton, generating: snapshot?.generating, preparingImage: snapshot?.preparingImage, urlCount: snapshot?.urls?.length || 0 } });
+        }
+      }
       if (snapshot?.generating || snapshot?.preparingImage) {
         sawGenerating = true;
         readyTicks = 0;
@@ -2361,13 +2609,21 @@ async function waitForChatGptImageOrRetry(client, existingUrls = [], prompt, sce
         }
         continue;
       }
-      const composerLooksReady = snapshot?.voiceReady;
+      const composerReadyForRetry = snapshot?.voiceReady;
       const textOnlyAnswer = Number(snapshot?.assistantCount || 0) > 0
         && String(snapshot?.latestAssistantText || '').length > 20
         && !/preparing image|creating image|generating image|đang tạo ảnh|thinking/i.test(String(snapshot?.latestAssistantText || ''))
         && !looksLikeCollapsedUserPrompt(snapshot?.latestAssistantText, 'image');
-      if (composerLooksReady) readyTicks += 1;
-      if (((sawGenerating && composerLooksReady && readyTicks >= 4) || textOnlyAnswer)) {
+      if (textOnlyAnswer && isChatGptLimitText(snapshot?.latestAssistantText)) {
+        const rolled = await rollProviderAccount(client, 'chatgpt', sceneId, 'limit').catch((error) => ({ ok: false, error: error.message }));
+        if (rolled?.ok) {
+          await resendImagePrompt('account-limit-roll', snapshot);
+          break;
+        }
+        throw new Error(rolled?.error || 'ChatGPT bị limit nhưng không roll được account.');
+      }
+      if (composerReadyForRetry) readyTicks += 1;
+      if (((sawGenerating && composerReadyForRetry && readyTicks >= 4) || textOnlyAnswer)) {
         await resendImagePrompt(textOnlyAnswer ? 'text-only-answer' : 'no-image-after-generating', snapshot);
         break;
       }
@@ -2385,6 +2641,10 @@ function looksLikeCollapsedUserPrompt(text = '', kind = '') {
   if (kind === 'image' && /---\s*scene\s*\d+\s*hiện tại|nhiệm\s*vụ\s*1|tạo\s*1\s*ảnh|tạo ảnh/i.test(value) && !/generated image|here is|ảnh đã được tạo/i.test(value)) return true;
   if (kind === 'motion' && /nhiệm\s*vụ\s*2|dựa trên ảnh keyframe|motion prompt/i.test(value) && /show more|show less|đoạn đầu scene/i.test(value)) return true;
   return false;
+}
+
+function isChatGptLimitText(text = '') {
+  return /limit|usage cap|rate limit|too many requests|try again later|come back later|you'?ve reached|quota|giới hạn|hạn mức|quá nhiều yêu cầu/i.test(String(text || ''));
 }
 
 async function waitForNewVideoUrl(client, existingUrls = [], options = {}) {
@@ -2422,6 +2682,17 @@ async function waitForNewVideoUrl(client, existingUrls = [], options = {}) {
         throw new Error('Grok chặn content policy sau 3 lần tự sửa prompt/đổi canvas. Cần sửa scene/prompt thủ công.');
       }
       if (grokState?.kind === 'limit') {
+        const rolled = await rollProviderAccount(client, 'grok', sceneId, 'limit').catch((error) => ({ ok: false, error: error.message }));
+        if (rolled?.ok) {
+          retryCount += 1;
+          await appendAppLog(null, { source: 'main', kind: 'ok', text: `Scene ${sceneId}: Grok limit, đã roll account sang ${rolled.maskedEmail}.`, details: { sceneId, accountId: rolled.accountId, maskedEmail: rolled.maskedEmail } });
+          if (options.sceneDir && options.imagePath && options.motionPrompt) {
+            const recovered = await recoverGrokCanvasAfterLimit(client, options).catch((error) => ({ ok: false, error: error.message }));
+            await appendAppLog(null, { source: 'main', kind: recovered?.ok ? 'ok' : 'error', text: `Scene ${sceneId}: gửi lại Grok sau roll account: ${recovered?.ok ? 'ok' : recovered?.error}`, details: recovered });
+          }
+          await sleep(10000);
+          continue;
+        }
         if (!notifiedLimit) {
           notifiedLimit = true;
           await notifyRenderer('grok-limit', `Scene ${sceneId}: Grok báo limit trong canvas hiện tại. Tool sẽ tạo canvas mới, restore keyframe/video scene trước rồi gửi lại.`, grokState);
@@ -2669,7 +2940,7 @@ async function submitGrokVideoPrompt(client, prompt, config = {}) {
   const forcedMode = await evaluateOnCdpPage(client, `(${forceGrokVideoModeScript.toString()})()`).catch((error) => ({ ok: false, error: error.message }));
   await appendAppLog(null, { source: 'main', kind: forcedMode?.ok ? 'ok' : 'running', text: `Grok video mode: ${forcedMode?.status || forcedMode?.error || 'checked'}`, details: forcedMode });
   await evaluateOnCdpPage(client, `(${dismissGrokConnectorsScript.toString()})()`).catch(() => null);
-  const prepared = await evaluateOnCdpPage(client, `(${prepareGrokVideoComposerScript.toString()})(${JSON.stringify(config || {})})`).catch((error) => ({ ok: false, error: error.message }));
+  const prepared = { ok: true, skipped: true, status: 'already-prepared-before-upload' };
   await appendAppLog(null, { source: 'main', kind: prepared?.ok ? 'ok' : 'running', text: `Grok config: ${prepared?.ok ? JSON.stringify(prepared.config || {}) : prepared?.error || 'không đọc được'}`, details: prepared });
   await sleep(500);
   const focused = await evaluateOnCdpPage(client, `(${focusGrokComposerScript.toString()})()`);
@@ -2751,6 +3022,65 @@ function downloadAssetInPageScript(url) {
       reader.readAsDataURL(blob);
     }))
     .catch((error) => ({ ok: false, error: error.message }));
+}
+
+function fillProviderLoginScript(provider, email, password) {
+  const textOf = (node) => `${node.textContent || ''} ${node.getAttribute?.('aria-label') || ''} ${node.title || ''}`.trim();
+  const visible = (node) => {
+    const rect = node.getBoundingClientRect?.();
+    const style = window.getComputedStyle?.(node);
+    return rect && rect.width > 4 && rect.height > 4 && rect.bottom > 0 && rect.right > 0 && style?.visibility !== 'hidden' && style?.display !== 'none';
+  };
+  const setValue = (node, value) => {
+    node.scrollIntoView({ block: 'center', inline: 'center' });
+    node.focus?.();
+    node.click?.();
+    const proto = Object.getPrototypeOf(node);
+    const descriptor = Object.getOwnPropertyDescriptor(proto, 'value') || Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+    if (descriptor?.set) descriptor.set.call(node, value);
+    else node.value = value;
+    node.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: value }));
+    node.dispatchEvent(new Event('change', { bubbles: true }));
+  };
+  const clickButton = (pattern) => {
+    const buttons = [...document.querySelectorAll('button, [role="button"], input[type="submit"], a')]
+      .filter(visible)
+      .map((node) => ({ node, text: textOf(node), rect: node.getBoundingClientRect?.() }));
+    const target = buttons.find((item) => pattern.test(item.text)) || buttons.find((item) => item.node.type === 'submit');
+    if (!target) return '';
+    target.node.scrollIntoView({ block: 'center', inline: 'center' });
+    target.node.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }));
+    target.node.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    target.node.click();
+    target.node.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+    return target.text || 'submit';
+  };
+  const body = document.body?.innerText || '';
+  const hasAuthInput = [...document.querySelectorAll('input')]
+    .filter(visible)
+    .some((node) => /email|username|password/i.test(`${node.type} ${node.name} ${node.id} ${node.autocomplete} ${node.placeholder} ${node.getAttribute?.('aria-label') || ''}`));
+  const loginButton = hasAuthInput ? '' : clickButton(/^(log in|sign in|đăng nhập|get started|continue)$/i);
+  if (loginButton) {
+    return { ok: true, mode: 'clicked-login-entry', clicked: loginButton };
+  }
+  const emailInput = [...document.querySelectorAll('input')]
+    .filter(visible)
+    .find((node) => /email|username/i.test(`${node.type} ${node.name} ${node.id} ${node.autocomplete} ${node.placeholder} ${node.getAttribute?.('aria-label') || ''}`));
+  if (emailInput && !String(emailInput.value || '').includes(String(email || '').slice(0, 4))) {
+    setValue(emailInput, email);
+    const clicked = clickButton(/continue|next|tiếp tục|submit|log in|sign in|đăng nhập/i);
+    return { ok: true, mode: 'filled-email', submitted: Boolean(clicked), clicked };
+  }
+  const passwordInput = [...document.querySelectorAll('input[type="password"], input[autocomplete="current-password"]')].filter(visible)[0];
+  if (passwordInput) {
+    setValue(passwordInput, password);
+    const clicked = clickButton(/continue|next|log in|sign in|đăng nhập|submit/i);
+    return { ok: true, mode: 'filled-password', submitted: Boolean(clicked), clicked };
+  }
+  if (/two-factor|2fa|verification code|verify your identity|captcha|cloudflare|passkey|authenticator/i.test(body)) {
+    return { ok: false, mode: 'needs-user-verification', needsUserAction: true };
+  }
+  return { ok: false, mode: 'login-form-not-found', url: location.href, provider };
 }
 
 function detectLoginScript(provider) {
@@ -3400,31 +3730,41 @@ async function prepareGrokVideoComposerScript(config = {}) {
     target.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
     return true;
   };
-  const buttons = [...document.querySelectorAll('button, [role="button"], a, label, div, span')].filter(visible);
-  const videoTab = buttons.find((node) => /(^|\s)(Video|Motion)(\s|$)/i.test(textOf(node)) && !/Image|Photo/i.test(textOf(node)));
-  clickNode(videoTab);
-  await sleep(350);
-  const path = location.pathname.toLowerCase();
-  const isAgentCanvas = path.includes('/imagine/agent/') && path.length > '/imagine/agent/'.length;
-  if (isAgentCanvas) return { ok: true, isAgentCanvas: true, status: 'already-canvas-video-mode', url: location.href };
+  const findClickable = (pattern) => {
+    const nodes = [...document.querySelectorAll('button, [role="button"], a, label, div, span')].filter(visible);
+    return nodes.find((node) => pattern.test(textOf(node)))?.closest?.('button, [role="button"], a, label') || nodes.find((node) => pattern.test(textOf(node)));
+  };
 
-  const emptyCanvasTextNode = buttons.find((node) => /(^|\s)Empty\s*Canvas(\s|$)/i.test(textOf(node)));
-  const emptyCanvas = emptyCanvasTextNode?.closest?.('button, [role="button"], a, label') || emptyCanvasTextNode;
+  let path = location.pathname.toLowerCase();
+  if (!path.includes('/imagine')) {
+    const imagine = findClickable(/(^|\s)Imagine(\s|$)|Image/i);
+    if (imagine) clickNode(imagine);
+    await sleep(800);
+    path = location.pathname.toLowerCase();
+  }
+
+  const imageTab = findClickable(/(^|\s)(Image|Images|Ảnh)(\s|$)/i);
+  clickNode(imageTab);
+  await sleep(500);
+
+  path = location.pathname.toLowerCase();
+  const isAgentCanvas = path.includes('/imagine/agent/') && path.length > '/imagine/agent/'.length;
+  if (isAgentCanvas) return { ok: true, isAgentCanvas: true, status: 'already-canvas-image-mode', url: location.href };
+
+  const emptyCanvas = findClickable(/(^|\s)Empty\s*Canvas(\s|$)|Create\s*from\s*scratch|Blank\s*canvas/i);
   if (!emptyCanvas) {
     const bodyText = document.body?.innerText || '';
-    const hasGallery = /Select|Featured Templates|Discover|Upload Images|Create Worlds|Historical Stories/i.test(bodyText);
-    if (hasGallery || path === '/imagine/agent' || path === '/imagine/agent/') {
-      return { ok: false, isAgentCanvas: false, status: 'agent-gallery-no-empty-canvas', url: location.href, buttons: buttons.map((b) => textOf(b)).filter(Boolean).slice(0, 80) };
-    }
-    return { ok: false, isAgentCanvas: false, status: 'empty-canvas-button-not-found', url: location.href, buttons: buttons.map((b) => textOf(b)).filter(Boolean).slice(0, 80) };
+    return { ok: false, isAgentCanvas: false, status: 'empty-canvas-button-not-found-after-image', url: location.href, bodyHead: bodyText.slice(0, 1000) };
   }
   clickNode(emptyCanvas);
   const started = Date.now();
-  while (Date.now() - started < 5000) {
-    await sleep(250);
+  while (Date.now() - started < 8000) {
+    await sleep(300);
     const nowPath = location.pathname.toLowerCase();
     if (nowPath.includes('/imagine/agent/') && nowPath.length > '/imagine/agent/'.length) {
-      return { ok: true, isAgentCanvas: true, emptyCanvasClicked: true, status: 'clicked-empty-canvas', url: location.href };
+      const imageModeAgain = findClickable(/(^|\s)(Image|Images|Ảnh)(\s|$)/i);
+      clickNode(imageModeAgain);
+      return { ok: true, isAgentCanvas: true, emptyCanvasClicked: true, status: 'clicked-empty-canvas-image-mode', url: location.href };
     }
   }
   const rect = emptyCanvas.getBoundingClientRect?.();
@@ -3988,8 +4328,18 @@ function clickPixVerseCreateScript() {
 
 function readLatestAssistantScript() {
   const bodyTail = String(document.body?.innerText || '').slice(-4000);
-  const stopButton = [...document.querySelectorAll('button')].some((button) => /stop|dừng|generating/i.test(`${button.textContent || ''} ${button.getAttribute('aria-label') || ''}`));
-  const thinking = /Thinking|Thinking about your request|Đang suy nghĩ|Generating|Creating/i.test(bodyTail);
+  const buttons = [...document.querySelectorAll('button, [role="button"]')]
+    .map((node) => {
+      const rect = node.getBoundingClientRect?.();
+      const text = `${node.textContent || ''} ${node.getAttribute?.('aria-label') || ''} ${node.title || ''}`.trim();
+      const html = String(node.innerHTML || '').slice(0, 1000);
+      return { node, rect, text, html };
+    })
+    .filter((item) => item.rect && item.rect.width > 8 && item.rect.height > 8);
+  const composerButtons = buttons.filter((item) => item.rect.top > window.innerHeight * 0.72 && item.rect.left > window.innerWidth * 0.55);
+  const stopButton = composerButtons.some((item) => /stop|cancel|dừng/i.test(item.text) || /<rect|data-icon=["']stop|stop-circle|square/i.test(item.html));
+  const voiceReady = composerButtons.some((item) => /voice|mic|microphone|record|dictate/i.test(item.text) || /waveform|audio|voice|mic/i.test(item.html));
+  const thinkingText = /Thinking about your request|Đang suy nghĩ|Generating|Creating/i.test(bodyTail);
   const roleNodes = [...document.querySelectorAll('[data-message-author-role="assistant"]')]
     .filter((node) => (node.innerText || '').trim().length > 20);
   const fallbackNodes = [...document.querySelectorAll('article, .message, [class*="response"], [class*="markdown"]')]
@@ -4006,7 +4356,10 @@ function readLatestAssistantScript() {
   return {
     count: nodes.length,
     text: last ? last.innerText.trim() : '',
-    generating: stopButton || thinking,
+    generating: stopButton || (thinkingText && !voiceReady),
+    stopButton,
+    voiceReady,
+    composerButtonCount: composerButtons.length,
     mode: roleNodes.length ? 'assistant-role' : 'fallback-non-user',
   };
 }
@@ -4054,14 +4407,21 @@ function findChatGptConversationScript(title = '') {
 function readChatGptImageStateScript() {
   const bodyText = document.body?.innerText || '';
   const bodyTail = bodyText.slice(-4000);
-  const buttonText = [...document.querySelectorAll('button')]
-    .map((button) => `${button.textContent || ''} ${button.getAttribute('aria-label') || ''} ${button.title || ''}`.trim())
-    .filter(Boolean)
-    .join(' | ');
-  const thinking = /Thinking|Thinking about your request|Đang suy nghĩ|Generating|Creating/i.test(bodyTail);
-  const generating = /stop|dừng|generating/i.test(buttonText) || thinking;
+  const buttons = [...document.querySelectorAll('button, [role="button"]')]
+    .map((button) => {
+      const rect = button.getBoundingClientRect?.();
+      const text = `${button.textContent || ''} ${button.getAttribute?.('aria-label') || ''} ${button.title || ''}`.trim();
+      const html = String(button.innerHTML || '').slice(0, 1000);
+      return { button, rect, text, html };
+    })
+    .filter((item) => item.rect && item.rect.width > 8 && item.rect.height > 8);
+  const composerButtons = buttons.filter((item) => item.rect.top > window.innerHeight * 0.72 && item.rect.left > window.innerWidth * 0.55);
+  const buttonText = buttons.map((item) => item.text).filter(Boolean).join(' | ');
+  const stopButton = composerButtons.some((item) => /stop|cancel|dừng/i.test(item.text) || /<rect|data-icon=["']stop|stop-circle|square/i.test(item.html));
+  const voiceReady = composerButtons.some((item) => /voice|mic|microphone|record|dictate/i.test(item.text) || /waveform|audio|voice|mic/i.test(item.html));
+  const thinkingText = /Thinking about your request|Đang suy nghĩ|Generating|Creating/i.test(bodyTail);
+  const generating = stopButton || (thinkingText && !voiceReady);
   const preparingImage = /preparing image|creating image|generating image|đang tạo ảnh|đang chuẩn bị ảnh/i.test(bodyText);
-  const voiceReady = /voice|mic|microphone|record|dictate/i.test(buttonText);
   const loggedOut = /(^|\n)\s*(sign in|log in|đăng nhập|sign up)\s*($|\n)|sign up to keep chatting|continue with google/i.test(bodyText)
     && !/ChatGPT can make mistakes|Share|Ask anything/i.test(bodyText.slice(-3000));
   const mediaRoots = [...document.querySelectorAll('[data-message-author-role="assistant"], article, .message, [class*="response"]')]
@@ -4077,14 +4437,7 @@ function readChatGptImageStateScript() {
     .map((node) => node.currentSrc || node.src || node.getAttribute('srcset') || node.getAttribute('src') || '')
     .filter((url) => /^https?:|^blob:|^data:image\//i.test(url));
 
-  const customBoxes = [...mediaRoot.querySelectorAll('div, button, canvas')]
-    .filter((node) => {
-      const rect = node.getBoundingClientRect?.();
-      if (!rect || rect.width < 180 || rect.height < 120 || rect.width > window.innerWidth * 0.9) return false;
-      const text = node.innerText || '';
-      return /Generated image/i.test(text) || node.tagName === 'CANVAS';
-    })
-    .map((node) => `chatgpt-custom-box-y${Math.round(node.getBoundingClientRect().y)}`);
+  const customBoxes = [];
 
   urls.push(...customBoxes);
   const roleAssistantNodes = [...document.querySelectorAll('[data-message-author-role="assistant"]')]
@@ -4102,10 +4455,12 @@ function readChatGptImageStateScript() {
   const latestAssistantText = assistantNodes.at(-1)?.innerText?.trim() || '';
   return {
     generating,
+    stopButton,
     preparingImage,
     loggedOut,
     logoutReason: loggedOut ? 'ChatGPT page is showing sign-in/sign-up while waiting for image.' : '',
     voiceReady,
+    composerButtonCount: composerButtons.length,
     buttonText,
     urls,
     assistantCount: assistantNodes.length,
@@ -4148,6 +4503,9 @@ app.whenReady().then(() => {
   ipcMain.handle('router:select-account', selectGrokAccount);
   ipcMain.handle('router:set-enabled', setAccountRouterEnabled);
   ipcMain.handle('router:resume-checkpoint', resumeFromRouterCheckpoint);
+  ipcMain.handle('accounts:list-safe', listWebAccountsSafe);
+  ipcMain.handle('accounts:save', saveWebAccount);
+  ipcMain.handle('accounts:delete', deleteWebAccount);
   ipcMain.handle('view:get-pipeline-log-visible', getPipelineLogVisibility);
   ipcMain.handle('browser:open-login', openWebLogin);
   ipcMain.handle('browser:check-login', checkWebLogin);

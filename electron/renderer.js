@@ -722,7 +722,7 @@ async function runFullPipeline() {
       scene.updatedAt = new Date().toISOString();
       persist();
       render();
-      if (shouldSkipReview(scene.reviewType)) {
+      if (shouldSkipReview(scene.reviewType) || isRunning || !paused) {
         scene.status = scene.reviewType === 'video' ? 'video_done' : 'image_done';
         scene.progressStep = scene.reviewType === 'video' ? 'merge' : 'motion';
         scene.reviewType = '';

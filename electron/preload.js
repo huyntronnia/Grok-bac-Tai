@@ -10,6 +10,9 @@ contextBridge.exposeInMainWorld('videoPlannerAPI', {
   selectGrokAccount: (accountId) => ipcRenderer.invoke('router:select-account', accountId),
   setAccountRouterEnabled: (enabled) => ipcRenderer.invoke('router:set-enabled', enabled),
   resumeFromRouterCheckpoint: () => ipcRenderer.invoke('router:resume-checkpoint'),
+  listWebAccountsSafe: (provider) => ipcRenderer.invoke('accounts:list-safe', provider),
+  saveWebAccount: (account) => ipcRenderer.invoke('accounts:save', account),
+  deleteWebAccount: (accountId) => ipcRenderer.invoke('accounts:delete', accountId),
   getPipelineLogVisible: () => ipcRenderer.invoke('view:get-pipeline-log-visible'),
   onPipelineLogVisible: (callback) => {
     const listener = (_event, visible) => callback(Boolean(visible));

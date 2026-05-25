@@ -1,0 +1,127 @@
+{
+  "schemaVersion": 1,
+  "appVersion": "electron-phase2",
+  "savedAt": "2026-05-21T17:04:41.576Z",
+  "project": {
+    "id": "a37b1558-46c4-47e0-bf0c-604ab7e02f35",
+    "name": "Video live action viral",
+    "story": "",
+    "scenes": [],
+    "batchSize": 10,
+    "durationSec": 10,
+    "createdAt": "2026-05-21T17:04:41.574Z",
+    "updatedAt": "2026-05-21T17:04:41.576Z",
+    "description": "",
+    "finalTimeline": []
+  },
+  "inputs": {
+    "storyPrompt": "",
+    "scriptPrompt": "",
+    "chatContextTitle": "Video live action viral",
+    "promptTemplates": {
+      "image": {
+        "id": "renderer-image-rules",
+        "version": "1"
+      },
+      "motion": {
+        "id": "renderer-motion-rules",
+        "version": "1"
+      },
+      "story": {
+        "id": "renderer-story-rules",
+        "version": "1"
+      }
+    },
+    "batchPromptRefs": []
+  },
+  "config": {
+    "scriptProvider": "ninerouter",
+    "imageProvider": "ninerouter",
+    "videoProvider": "grok",
+    "imageGeneration": {
+      "method": "web",
+      "endpoint": "http://localhost:20128/v1/images/generations",
+      "model": "cx/gpt-5.5-image",
+      "size": "1024x1024"
+    },
+    "selectedModels": {
+      "script": "cx/gpt-5.5",
+      "image": "ninerouter",
+      "video": "grok"
+    },
+    "selectedLabels": {
+      "provider": "9Router local proxy",
+      "account": "Account 1",
+      "model": "cx/gpt-5.5"
+    },
+    "batchSize": 10,
+    "sceneDurationSeconds": 10,
+    "outputLanguage": "Vietnamese",
+    "stylePreset": "current-renderer-settings"
+  },
+  "router": {
+    "accountRouterEnabled": false,
+    "selectedGrokAccountId": null,
+    "routingPolicy": "round_robin",
+    "selectedLabels": {
+      "provider": "Grok",
+      "model": "Grok",
+      "account": ""
+    },
+    "status": {
+      "selectedAccountState": "available",
+      "routerState": ""
+    }
+  },
+  "runtime": {
+    "currentStage": "batch_complete",
+    "currentBatchIndex": null,
+    "currentSceneId": null,
+    "activeBatchIds": [],
+    "paused": false,
+    "lastCheckpointRef": null,
+    "lastAction": "batch_complete",
+    "resumeMode": "manual-start",
+    "lastErrorClassification": null,
+    "waitingForUserStart": true,
+    "imageGeneration": {
+      "method": "web",
+      "endpoint": "http://localhost:20128/v1/images/generations",
+      "model": "cx/gpt-5.5-image",
+      "size": "1024x1024"
+    },
+    "outputFolder": "D:\\Grok\\Video-live-action-viral",
+    "videoPlatform": "grok",
+    "reviewSettings": {
+      "skipAll": false,
+      "skipPrompt": false,
+      "skipImage": false,
+      "skipVideo": false
+    },
+    "skipReview": false,
+    "pixverse": {
+      "resolution": "360P",
+      "ratio": "16:9",
+      "duration": "5",
+      "model": "PixVerse V6",
+      "preview": false,
+      "audio": true
+    },
+    "grokRouter": {
+      "enabled": false,
+      "account": "grok-default-profile",
+      "routingPolicy": "round_robin",
+      "sandboxFolder": "dev_sandbox_grok_account_router"
+    },
+    "activePreviewTimeline": [],
+    "autoRun": false,
+    "active": false
+  },
+  "assets": {
+    "images": [],
+    "videos": [],
+    "finalOutputs": []
+  },
+  "previewTimeline": [],
+  "extensions": {}
+}

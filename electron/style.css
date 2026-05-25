@@ -883,6 +883,14 @@ tr:hover td { background: rgba(255, 255, 255, 0.025); }
 .image-settings-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .settings-grid label { margin: 0; }
 .settings-field-wide { grid-column: 1 / -1; }
+.credential-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.compact-actions { margin-top: 12px; }
+.credential-lists { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 14px; }
+.credential-lists strong { display: block; margin-bottom: 8px; color: #dbeafe; }
+.credential-account-list { display: grid; gap: 8px; }
+.credential-account-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; border: 1px solid rgba(148, 163, 184, 0.24); border-radius: 8px; background: rgba(15, 23, 42, 0.72); color: #dbeafe; font-size: 12px; }
+.credential-account-row span { color: var(--muted); }
+.credential-account-row button { padding: 7px 10px; }
 .settings-toggle { margin: 0; align-items: center; }
 .settings-help { margin: 12px 0 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
 .settings-shortcuts { margin: 0; padding-left: 18px; color: #dbeafe; line-height: 1.8; }
