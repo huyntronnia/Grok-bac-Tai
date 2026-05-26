@@ -1453,9 +1453,17 @@ async function runScenePipeline(_event, options) {
   if (!imagePath) {
     console.log(`[PIPELINE][Scene ${sceneId}] START NV1 ChatGPT image`);
     await appendAppLog(null, { source: 'main', kind: 'running', text: `PIPELINE Scene ${sceneId}: gửi scene + NV1 cho ChatGPT để tạo ảnh.` });
+    const recentKeyframes = [];
+    for (let previousId = Number(sceneId) - 1; previousId >= 1 && recentKeyframes.length < 3; previousId -= 1) {
+      const previousPath = path.join(projectDir, `scene_${String(previousId).padStart(3, '0')}`, `scene_${String(previousId).padStart(3, '0')}_keyframe.png`);
+      if (await pathExists(previousPath)) recentKeyframes.push(previousPath);
+    }
+    if (recentKeyframes.length) {
+      await appendAppLog(null, { source: 'main', kind: 'running', text: `PIPELINE Scene ${sceneId}: gửi kèm ${recentKeyframes.length} ảnh key gần nhất cho ChatGPT đồng bộ.`, details: { recentKeyframes: recentKeyframes.map((item) => path.basename(item)) } });
+    }
     const chatGptResult = imageProvider?.method === 'api'
       ? await generateImageWithImageApi({ imagePrompt: finalImagePrompt, sceneDir, sceneId, config: imageProvider })
-      : await generateImageAndMotionWithChatGPT({ imagePrompt: finalImagePrompt, sceneDir, sceneId, chatContextTitle, pendingChatRenameTitle: '' });
+      : await generateImageAndMotionWithChatGPT({ imagePrompt: finalImagePrompt, sceneDir, sceneId, chatContextTitle, pendingChatRenameTitle: '', referenceImagePaths: recentKeyframes });
     imagePath = chatGptResult.imagePath;
     console.log(`[PIPELINE][Scene ${sceneId}] SAVED image: ${imagePath}`);
     await appendAppLog(null, { source: 'main', kind: 'ok', text: `PIPELINE Scene ${sceneId}: đã lưu ảnh keyframe: ${path.basename(imagePath || '')}` });
@@ -1581,7 +1589,7 @@ async function generateImageWithImageApi({ imagePrompt, sceneDir, sceneId, confi
   return { imagePath, motionPrompt: '' };
 }
 
-async function generateImageAndMotionWithChatGPT({ imagePrompt, sceneDir, sceneId, chatContextTitle = '', pendingChatRenameTitle = '' }) {
+async function generateImageAndMotionWithChatGPT({ imagePrompt, sceneDir, sceneId, chatContextTitle = '', pendingChatRenameTitle = '', referenceImagePaths = [] }) {
   const page = await getCdpPage('chatgpt', true);
   const loginState = await evaluateOnCdpPage(page, `(${detectLoginScript.toString()})('chatgpt')`);
   if (!loginState.loggedIn) {
@@ -1608,8 +1616,26 @@ async function generateImageAndMotionWithChatGPT({ imagePrompt, sceneDir, sceneI
     imagePrompt,
   ].join('\n\n');
   const beforeImages = await evaluateOnCdpPage(page, `(${collectGeneratedImageUrlsScript.toString()})()`);
-  const restoredFrames = { ok: true, count: 0, skipped: true, reason: 'NV1 không upload keyframe cũ' };
-  await appendAppLog(null, { source: 'main', kind: 'running', text: `PIPELINE Scene ${sceneId}: bỏ qua add keyframe cũ, chỉ gửi scene + NV1.`, details: restoredFrames });
+  const refsToUpload = (referenceImagePaths || []).slice(0, 3);
+  const restoredFrames = { ok: true, count: 0, uploaded: [], errors: [] };
+  if (refsToUpload.length) {
+    await evaluateOnCdpPage(page, `(${prepareChatGptCreateImageScript.toString()})()`).catch(() => null);
+    await sleep(800);
+    for (const refPath of refsToUpload) {
+      const uploaded = await uploadFileViaCdp(page, refPath, 'chatgpt').catch((error) => ({ ok: false, error: error.message }));
+      if (uploaded?.ok) {
+        restoredFrames.count += 1;
+        restoredFrames.uploaded.push(path.basename(refPath));
+      } else {
+        restoredFrames.errors.push({ file: path.basename(refPath), error: uploaded?.error || 'upload-failed' });
+      }
+      await sleep(900);
+    }
+  } else {
+    restoredFrames.skipped = true;
+    restoredFrames.reason = 'Không có keyframe cũ để gửi kèm NV1';
+  }
+  await appendAppLog(null, { source: 'main', kind: restoredFrames.count ? 'ok' : 'running', text: `PIPELINE Scene ${sceneId}: gửi kèm ảnh key gần nhất vào ChatGPT: ${restoredFrames.count}/${refsToUpload.length}.`, details: restoredFrames });
   await evaluateOnCdpPage(page, `(${prepareChatGptCreateImageScript.toString()})()`).catch(() => null);
   await sleep(800);
   const sentImage = await sendPromptViaCdpInput(page, imageInstruction);
@@ -1619,10 +1645,14 @@ async function generateImageAndMotionWithChatGPT({ imagePrompt, sceneDir, sceneI
   const imageUrl = await waitForChatGptImageOrRetry(page, beforeImages?.urls || [], imageInstruction, sceneDir, sceneId);
 
   try {
-    if (!imageUrl || String(imageUrl).startsWith('chatgpt-custom-box-y')) {
+    if (!imageUrl) {
       throw new Error('ChatGPT chưa trả URL ảnh thật; không crop placeholder/canvas.');
     }
-    await downloadBrowserAsset(page, imageUrl, imagePath);
+    if (String(imageUrl).startsWith('chatgpt-custom-box-y')) {
+      await captureLatestImageElement(page, imagePath, imageUrl);
+    } else {
+      await downloadBrowserAsset(page, imageUrl, imagePath);
+    }
   } catch (error) {
     await fs.writeFile(path.join(sceneDir, 'image_url_download_error.txt'), error.stack || error.message, 'utf8');
     throw new Error(`Đã thấy ảnh ChatGPT nhưng tải file lỗi: ${error.message}`);
@@ -4568,9 +4598,24 @@ function readChatGptImageStateScript() {
     .map((node) => node.currentSrc || node.src || node.getAttribute('srcset') || node.getAttribute('src') || '')
     .filter((url) => /^https?:|^blob:|^data:image\//i.test(url));
 
-  const customBoxes = [];
+  const visibleImageBoxes = [...mediaRoot.querySelectorAll('img, canvas, button, div')]
+    .map((node) => {
+      const rect = node.getBoundingClientRect?.();
+      const style = window.getComputedStyle?.(node);
+      const text = node.innerText || '';
+      const label = `${node.alt || ''} ${node.getAttribute?.('aria-label') || ''} ${node.className || ''}`;
+      const isMedia = node.tagName === 'IMG'
+        || node.tagName === 'CANVAS'
+        || (/Edit|Generated image/i.test(text) && node.querySelector?.('button'))
+        || (style?.backgroundImage && style.backgroundImage !== 'none' && !style.backgroundImage.includes('gradient'));
+      return rect && isMedia && rect.width >= 180 && rect.height >= 120 && !/avatar|profile|logo|icon|emoji/i.test(label)
+        ? { y: Math.round(rect.y + window.scrollY), w: Math.round(rect.width), h: Math.round(rect.height), tag: node.tagName }
+        : null;
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.y - a.y);
+  if (!urls.length && visibleImageBoxes.length) urls.push(`chatgpt-custom-box-y${visibleImageBoxes[0].y}`);
 
-  urls.push(...customBoxes);
   const roleAssistantNodes = [...document.querySelectorAll('[data-message-author-role="assistant"]')]
     .filter((node) => (node.innerText || '').trim().length > 20);
   const fallbackAssistantNodes = [...document.querySelectorAll('article, .message, [class*="response"], [class*="markdown"]')]
