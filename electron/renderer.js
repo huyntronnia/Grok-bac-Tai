@@ -198,6 +198,16 @@ let projectRuntime = {
   waitingForUserStart: true,
 };
 
+function normalizeSceneDuration(value) {
+  const numeric = Number(value);
+  return numeric <= 6 ? 6 : 10;
+}
+
+function applySceneDurationValue(value) {
+  if (durationInput) durationInput.value = String(normalizeSceneDuration(value));
+  return normalizeSceneDuration(durationInput?.value || value);
+}
+
 function getReviewSettings() {
   const skipAll = Boolean(skipReviewToggle?.checked);
   return {
@@ -318,7 +328,7 @@ function createProject(event) {
     chatContextTitle: projectNameInput.value.trim() || 'Untitled project',
     scenes,
     batchSize: clamp(Number(batchSizeInput.value) || 10, 1, 10),
-    durationSec: Math.max(1, Number(durationInput.value) || 10),
+    durationSec: applySceneDurationValue(durationInput.value),
     createdAt: new Date().toISOString(),
   };
   activeBatchIds = [];
@@ -813,7 +823,10 @@ function getVideoProviderConfig() {
       previewMode: Boolean(pixversePreviewToggle?.checked),
       audio: Boolean(pixverseAudioToggle?.checked),
     },
-    grok: {},
+    grok: {
+      resolution: '720p',
+      duration: String(normalizeSceneDuration(project?.durationSec || durationInput?.value || 10)),
+    },
   };
 }
 
@@ -1750,7 +1763,7 @@ function getPreviewTimeline() {
     sceneNumber: scene.id,
     videoPath: scene.videoPath,
     keyframePath: scene.imagePath || '',
-    durationSeconds: Number(project?.durationSec) || Number(durationInput?.value) || 0,
+    durationSeconds: normalizeSceneDuration(project?.durationSec || durationInput?.value || 10),
     name: `scene_${String(scene.id || index + 1).padStart(3, '0')}`,
   }));
 }
@@ -1833,7 +1846,7 @@ function getProjectSessionPayload() {
         model: modelInput?.value || '',
       },
       batchSize: Number(batchSizeInput?.value) || project?.batchSize || 10,
-      sceneDurationSeconds: Number(durationInput?.value) || project?.durationSec || 10,
+      sceneDurationSeconds: normalizeSceneDuration(durationInput?.value || project?.durationSec || 10),
       outputLanguage: 'Vietnamese',
       stylePreset: 'current-renderer-settings',
     },
@@ -1901,7 +1914,7 @@ function normalizeProjectSessionForRenderer(payload = {}) {
     story: sourceProject.story || payload.inputs?.storyPrompt || '',
     scenes,
     batchSize: sourceProject.batchSize || payload.config?.batchSize || 10,
-    durationSec: sourceProject.durationSec || payload.config?.sceneDurationSeconds || 10,
+    durationSec: normalizeSceneDuration(sourceProject.durationSec || payload.config?.sceneDurationSeconds || 10),
     finalVideoPath: sourceProject.finalVideoPath || payload.assets?.finalOutputs?.[0]?.path || '',
     finalTimeline: Array.isArray(payload.previewTimeline) && payload.previewTimeline.length
       ? payload.previewTimeline
@@ -1966,7 +1979,7 @@ function applyProjectSessionPayload(payload = {}, filePath = '') {
 
   if (scriptInput) scriptInput.value = project?.scenes?.map((scene) => scene.original).join('\n\n') || payload.inputs?.scriptPrompt || '';
   setControlValue(batchSizeInput, project?.batchSize);
-  setControlValue(durationInput, project?.durationSec);
+  applySceneDurationValue(project?.durationSec || 10);
   setControlValue(providerSelect, payload.config?.scriptProvider);
   setControlValue(accountSelect, payload.config?.selectedLabels?.account);
   setControlValue(modelInput, payload.config?.selectedModels?.script || payload.config?.selectedLabels?.model);
@@ -2087,7 +2100,7 @@ function createBlankProjectFromName() {
     story: storyInput?.value?.trim() || '',
     scenes: [],
     batchSize: clamp(Number(batchSizeInput?.value) || 10, 1, 10),
-    durationSec: Math.max(1, Number(durationInput?.value) || 10),
+    durationSec: applySceneDurationValue(durationInput?.value || 10),
     createdAt: now,
     updatedAt: now,
   };
@@ -2282,7 +2295,7 @@ function restore() {
 
       scriptInput.value = project.scenes?.map((scene) => scene.original).join('\n\n') || '';
       batchSizeInput.value = project.batchSize || batchSizeInput.value;
-      durationInput.value = project.durationSec || durationInput.value;
+      applySceneDurationValue(project.durationSec || durationInput.value || 10);
       if (grokRouterEnabledToggle) grokRouterEnabledToggle.checked = Boolean(saved.grokRouter?.enabled);
       if (saved.grokRouter?.account && grokAccountSelect) grokAccountSelect.value = saved.grokRouter.account;
       if (grokRoutingPolicySelect) grokRoutingPolicySelect.value = 'round_robin';

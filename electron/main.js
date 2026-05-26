@@ -16,7 +16,7 @@ const PROVIDER_META = {
 const WEB_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 const CHROME_DEBUG_PORT = 9223;
 const CHROME_CDP_HOST = `http://127.0.0.1:${CHROME_DEBUG_PORT}`;
-const CHROME_USER_DATA_DIR = path.resolve(__dirname, '..', '.chrome-cdp-profile');
+const CHROME_USER_DATA_DIR = path.join(app.getPath('userData'), 'chrome-cdp-profile');
 const CHALLENGE_RECOVERY_LIMIT = 2;
 const challengeRecoveryAttempts = new Map();
 let chromeProcess = null;
@@ -25,7 +25,10 @@ const chatTitleStableChecks = new Map();
 const APP_LOG_FILE = path.join(app.getPath('userData'), 'ai-video-pipeline.log');
 const GROK_ROUTER_CHECKPOINT_FILE = path.join(app.getPath('userData'), 'grok-router-checkpoint.json');
 const WEB_ACCOUNT_STORE_FILE = path.join(app.getPath('userData'), 'web-provider-accounts.secure.json');
-const HARD_PROMPT_FILE = path.resolve(__dirname, '..', '2 NHIỆM VỤ BẰNG PROMPT.txt');
+const HARD_PROMPT_FILE_NAME = '2 NHIỆM VỤ BẰNG PROMPT.txt';
+const HARD_PROMPT_FILE = app.isPackaged
+  ? path.join(process.resourcesPath, HARD_PROMPT_FILE_NAME)
+  : path.resolve(__dirname, '..', HARD_PROMPT_FILE_NAME);
 const GROK_ROUTER_ALLOWED_STATES = new Set(['available', 'active', 'cooldown', 'limited', 'login_required', 'invalid', 'disabled_by_user']);
 
 const GROKPROJ_SCHEMA_VERSION = 1;
@@ -1414,7 +1417,14 @@ async function runScenePipeline(_event, options) {
   const task2VideoPrompt = buildTaskPrompt({ task: hardTasks.task2, script: scriptText, sceneText, sceneId });
   const finalImagePrompt = task1ImagePrompt || imagePrompt;
   await fs.writeFile(path.join(sceneDir, 'image_prompt.txt'), finalImagePrompt, 'utf8');
-  if (motionPrompt) await fs.writeFile(path.join(sceneDir, 'motion_prompt.txt'), motionPrompt, 'utf8');
+  const existingMotionPromptPath = path.join(sceneDir, 'motion_prompt.txt');
+  if (!motionPrompt?.trim() && !options.forceRegenerateMotionPrompt && await pathExists(existingMotionPromptPath)) {
+    motionPrompt = await fs.readFile(existingMotionPromptPath, 'utf8').then((value) => value.trim()).catch(() => '');
+    if (motionPrompt) {
+      await appendAppLog(null, { source: 'main', kind: 'ok', text: `Scene ${sceneId}: đã có motion_prompt.txt, bỏ qua ChatGPT NV2 và gửi thẳng Grok.` });
+    }
+  }
+  if (motionPrompt) await fs.writeFile(existingMotionPromptPath, motionPrompt, 'utf8');
 
   const videoProvider = normalizeVideoProvider(options.videoProvider);
   const videoAccount = options.videoAccount || '';
@@ -1455,6 +1465,11 @@ async function runScenePipeline(_event, options) {
     if (motionPrompt) {
       await fs.writeFile(path.join(sceneDir, 'motion_prompt.txt'), motionPrompt, 'utf8');
     }
+  }
+
+  if (!motionPrompt?.trim() && !options.forceRegenerateMotionPrompt && await pathExists(existingMotionPromptPath)) {
+    motionPrompt = await fs.readFile(existingMotionPromptPath, 'utf8').then((value) => value.trim()).catch(() => '');
+    if (motionPrompt) await appendAppLog(null, { source: 'main', kind: 'ok', text: `Scene ${sceneId}: dùng motion_prompt.txt có sẵn, không gửi ChatGPT NV2.` });
   }
 
   if (!motionPrompt?.trim()) {
@@ -1638,7 +1653,9 @@ async function generateMotionPromptWithChatGPT({ imagePath, prompt, sceneDir, sc
     });
   }
   const before = await evaluateOnCdpPage(page, `(${readLatestAssistantScript.toString()})()`).catch(() => ({ count: 0, text: '' }));
-  await uploadFileViaCdp(page, imagePath, 'chatgpt');
+  const uploadedForNv2 = await uploadFileViaCdp(page, imagePath, 'chatgpt');
+  if (!uploadedForNv2?.ok) throw new Error(uploadedForNv2?.error || 'Không upload được ảnh keyframe vào ChatGPT trước khi gửi NV2.');
+  await appendAppLog(null, { source: 'main', kind: 'ok', text: `Scene ${sceneId}: ChatGPT đã nhận ảnh keyframe trước NV2.`, details: uploadedForNv2 });
   await sleep(1200);
   const instruction = [
     'Dựa trên ảnh keyframe vừa được upload, hãy thực hiện NHIỆM VỤ 2 để tạo MOTION PROMPT cho video.',
@@ -1666,9 +1683,9 @@ async function generateMotionPromptWithChatGPT({ imagePath, prompt, sceneDir, sc
     await waitForCdpLoad(page).catch(() => null);
     await sleep(2200);
     const uploadAgain = await uploadFileViaCdp(page, imagePath, 'chatgpt').catch((error) => ({ ok: false, error: error.message }));
-    await appendAppLog(null, { source: 'main', kind: uploadAgain?.ok ? 'ok' : 'error', text: `Scene ${sceneId}: NV2 recovery upload lại keyframe: ${uploadAgain?.ok ? 'ok' : uploadAgain?.error || 'failed'}`, details: uploadAgain });
+    await appendAppLog(null, { source: 'main', kind: uploadAgain?.ok ? 'ok' : 'error', text: `Scene ${sceneId}: NV2 recovery upload lại keyframe: ${uploadAgain?.ok ? 'ChatGPT đã nhận ảnh' : uploadAgain?.error || 'failed'}`, details: uploadAgain });
     if (!uploadAgain?.ok) throw new Error(uploadAgain?.error || 'Không upload lại được keyframe trước khi retry NV2.');
-    await sleep(1000);
+    await sleep(1500);
     const beforeRetry = await evaluateOnCdpPage(page, `(${readLatestAssistantScript.toString()})()`).catch(() => ({ count: 0, text: '' }));
     const resent = await sendPromptViaCdpInput(page, instruction);
     if (!resent?.ok) throw new Error(resent?.error || 'Không gửi lại Nhiệm vụ 2 sau recovery.');
@@ -1868,6 +1885,14 @@ async function generateVideoWithGenericProvider({ provider, imagePath, motionPro
     await page.Page.navigate({ url: 'https://grok.com/imagine' }).catch(() => null);
     await waitForCdpLoad(page).catch(() => null);
     await sleep(1600);
+    const templateState = await evaluateOnCdpPage(page, `({ url: location.href, path: location.pathname })`).catch(() => null);
+    if (/\/imagine\/templates\//i.test(String(templateState?.path || templateState?.url || ''))) {
+      await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: đang ở Grok template URL, ép quay lại /imagine để tránh upload vào popup template.`, details: templateState });
+      await page.Page.navigate({ url: 'https://grok.com/imagine' }).catch(() => null);
+      await waitForCdpLoad(page).catch(() => null);
+      await sleep(1200);
+    }
+    await closeGrokTemplateModal(page, sceneId).catch((error) => appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: thử tắt template modal lỗi nhẹ: ${error.message}` }));
   }
 
   const capability = await evaluateOnCdpPage(page, `(${detectVideoCapabilityScript.toString()})(${JSON.stringify(provider)})`);
@@ -1883,6 +1908,14 @@ async function generateVideoWithGenericProvider({ provider, imagePath, motionPro
     const prepared = await evaluateOnCdpPage(page, `(${prepareGrokVideoComposerScript.toString()})(${JSON.stringify(config || {})})`).catch((error) => ({ ok: false, error: error.message }));
     await appendAppLog(null, { source: 'main', kind: prepared?.ok ? 'ok' : 'error', text: `Scene ${sceneId}: Grok Image mode/canvas prepare: ${prepared?.status || prepared?.error || 'checked'}`, details: prepared });
     if (!prepared?.ok) throw new Error(prepared?.error || prepared?.status || 'Không vào được Grok Image/Empty Canvas.');
+    const afterPrepareState = await evaluateOnCdpPage(page, `({ url: location.href, path: location.pathname })`).catch(() => null);
+    if (/\/imagine\/templates\//i.test(String(afterPrepareState?.path || afterPrepareState?.url || ''))) {
+      await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: Grok prepare mở nhầm template, quay lại /imagine trước khi paste ảnh.`, details: afterPrepareState });
+      await page.Page.navigate({ url: 'https://grok.com/imagine' }).catch(() => null);
+      await waitForCdpLoad(page).catch(() => null);
+      await sleep(1200);
+    }
+    await closeGrokTemplateModal(page, sceneId).catch(() => null);
     await sleep(800);
   }
 
@@ -2206,20 +2239,37 @@ async function confirmGrokVideoGenerationIfAsked(page, sceneId = '') {
 async function sendGrokConfirmationText(page, text) {
   const focused = await evaluateOnCdpPage(page, `(${focusGrokComposerScript.toString()})()`);
   if (!focused?.ok) return { ok: false, error: focused?.error || 'Không focus được ô xác nhận Grok.' };
-  await page.Input.insertText({ text });
-  await sleep(600);
-  const clicked = await evaluateOnCdpPage(page, `(${clickGrokGenerateScript.toString()})()`);
-  if (clicked?.ok && clicked.box) {
-    const x = clicked.box.x + clicked.box.width / 2;
-    const y = clicked.box.y + clicked.box.height / 2;
-    await page.Input.dispatchMouseEvent({ type: 'mouseMoved', x, y, button: 'none' }).catch(() => null);
-    await page.Input.dispatchMouseEvent({ type: 'mousePressed', x, y, button: 'left', clickCount: 1 }).catch(() => null);
-    await page.Input.dispatchMouseEvent({ type: 'mouseReleased', x, y, button: 'left', clickCount: 1 }).catch(() => null);
-    return { ok: true, clicked };
+  let ready = null;
+  for (let waitAttempt = 1; waitAttempt <= 20; waitAttempt += 1) {
+    ready = await evaluateOnCdpPage(page, `(() => {
+      const buttons = [...document.querySelectorAll('button, [role="button"]')].map((node) => {
+        const rect = node.getBoundingClientRect?.();
+        const label = String((node.textContent || '') + ' ' + (node.getAttribute?.('aria-label') || '') + ' ' + (node.title || '')).trim();
+        const disabled = !!node.disabled || node.getAttribute?.('aria-disabled') === 'true' || node.dataset?.disabled === 'true';
+        return rect ? { label, disabled, x: rect.x, y: rect.y, w: rect.width, h: rect.height, html: String(node.innerHTML || '').slice(0, 300) } : null;
+      }).filter(Boolean).filter((b) => b.w >= 24 && b.h >= 24 && b.x > window.innerWidth * 0.72 && b.y > window.innerHeight * 0.68);
+      const send = buttons.find((b) => !b.disabled && b.x > window.innerWidth * 0.78 && b.y > window.innerHeight * 0.76 && !/Image|Video|480p|720p|1080p|6s|10s|Agent|Original/i.test(b.label));
+      return { ok: !!send, send, buttons };
+    })()`).catch((error) => ({ ok: false, error: error.message }));
+    if (ready?.ok) break;
+    await sleep(750);
   }
-  await page.Input.dispatchKeyEvent({ type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 }).catch(() => null);
-  await page.Input.dispatchKeyEvent({ type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 }).catch(() => null);
-  return { ok: true, mode: 'enter-fallback', clicked };
+  await appendAppLog(null, { source: 'main', kind: ready?.ok ? 'running' : 'error', text: `Grok confirm: trạng thái nút send trước Enter ${ready?.ok ? 'READY' : 'NOT READY'}.`, details: { focused, ready } });
+  let after = null;
+  for (let i = 1; i <= 18; i += 1) {
+    await page.Input.dispatchKeyEvent({ type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 }).catch(() => null);
+    await page.Input.dispatchKeyEvent({ type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 }).catch(() => null);
+    await sleep(900);
+    after = await evaluateOnCdpPage(page, `(() => {
+      const text = document.body?.innerText || '';
+      return { url: location.href, generating: /Generating|Creating|Cancel|%/i.test(text), stillEcho: /DÒNG\s*7|DONG\s*7|Negative Prompt/i.test(text.slice(-2200)), tail: text.slice(-900) };
+    })()`).catch((error) => ({ error: error.message }));
+    await appendAppLog(null, { source: 'main', kind: 'running', text: `Grok confirm Enter lần ${i}: ${after?.url || ''}`, details: after });
+    if (/\/imagine\/post\//i.test(after?.url || '') || after?.generating) {
+      return { ok: true, mode: 'repeat-enter-until-generating', focused, ready, after, attempts: i };
+    }
+  }
+  return { ok: true, mode: 'repeat-enter-timeout', focused, ready, after };
 }
 
 async function recoverProviderFromCacheOrChallenge(client, provider, reason = 'unknown') {
@@ -2269,31 +2319,21 @@ async function sendPromptViaCdpInput(client, prompt) {
   }
 
   let lastClick = null;
-  for (let attempt = 1; attempt <= 3; attempt += 1) {
-    await sleep(attempt === 1 ? 800 : 1500);
-    lastClick = await evaluateOnCdpPage(client, `(${clickSendButtonScript.toString()})()`);
-    if (lastClick?.ok && lastClick.box) {
-      const x = lastClick.box.x + lastClick.box.width / 2;
-      const y = lastClick.box.y + lastClick.box.height / 2;
-      await client.Input.dispatchMouseEvent({ type: 'mouseMoved', x, y, button: 'none' }).catch(() => null);
-      await client.Input.dispatchMouseEvent({ type: 'mousePressed', x, y, button: 'left', clickCount: 1 });
-      await client.Input.dispatchMouseEvent({ type: 'mouseReleased', x, y, button: 'left', clickCount: 1 });
-    }
-    await sleep(1200);
-    const afterSend = await evaluateOnCdpPage(client, `(${getComposerTextScript.toString()})()`).catch(() => ({ text: '' }));
-    if (!afterSend?.text || afterSend.text.length < 5) {
-      return { ok: true, mode: `cdp-insertText+send-attempt-${attempt}`, selector: focused.selector, send: lastClick?.selector || lastClick?.mode };
-    }
+  for (let attempt = 1; attempt <= 10; attempt += 1) {
+    lastClick = await evaluateOnCdpPage(client, `(${clickSendButtonScript.toString()})()`).catch((error) => ({ ok: false, error: error.message }));
+    if (lastClick?.ok) break;
+    await sleep(2000);
   }
-
-  await client.Input.dispatchKeyEvent({ type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 });
-  await client.Input.dispatchKeyEvent({ type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 });
-  await sleep(1200);
-  const finalText = await evaluateOnCdpPage(client, `(${getComposerTextScript.toString()})()`).catch(() => ({ text: '' }));
-  if (finalText?.text && finalText.text.length >= 5) {
-    return { ok: false, error: `Prompt đã paste nhưng chưa gửi được. Nút send: ${lastClick?.error || lastClick?.selector || 'unknown'}` };
+  if (!lastClick?.ok) {
+    await client.Input.dispatchKeyEvent({ type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 }).catch(() => null);
+    await client.Input.dispatchKeyEvent({ type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 }).catch(() => null);
+    await sleep(1500);
   }
-  return { ok: true, mode: 'cdp-insertText+enter-retry', selector: focused.selector };
+  const afterSend = await evaluateOnCdpPage(client, `(${getComposerTextScript.toString()})()`).catch(() => ({ text: '' }));
+  if (!afterSend?.text || afterSend.text.length < 5) {
+    return { ok: true, mode: lastClick?.ok ? 'cdp-insertText+send-retry' : 'cdp-insertText+enter-fallback', selector: focused.selector, send: lastClick?.selector || lastClick?.mode || lastClick?.error };
+  }
+  return { ok: false, error: `Prompt đã paste nhưng chưa gửi được sau khi chờ nút Send. Nút send: ${lastClick?.error || lastClick?.selector || 'unknown'}` };
 }
 
 async function waitForCdpAssistantResponse(client, beforeCount) {
@@ -2564,8 +2604,8 @@ async function waitForChatGptImageOrRetry(client, existingUrls = [], prompt, sce
       if (attempt >= maxAttempts) {
         throw new Error(`ChatGPT không trả ảnh sau ${maxAttempts} lần gửi NV1 (${reason}).`);
       }
-      await page.Page.reload({ ignoreCache: true }).catch(() => null);
-      await waitForCdpLoad(page).catch(() => null);
+      await client.Page.reload({ ignoreCache: true }).catch(() => null);
+      await waitForCdpLoad(client).catch(() => null);
       await sleep(1800);
       const stopped = await evaluateOnCdpPage(client, `(${clickChatGptStopGeneratingScript.toString()})()`).catch((error) => ({ ok: false, error: error.message }));
       await appendAppLog(null, { source: 'main', kind: stopped?.ok ? 'running' : 'error', text: `Scene ${sceneId}: ChatGPT F5 → stop trước retry NV1 (${reason}): ${stopped?.ok ? stopped.mode : stopped?.error || 'not-found'}`, details: stopped });
@@ -2587,13 +2627,14 @@ async function waitForChatGptImageOrRetry(client, existingUrls = [], prompt, sce
       if (composerLooksReady) readyTicks += 1;
       else readyTicks = 0;
       if (imageUrl) {
-        if (readyTicks >= 3) {
-          await appendAppLog(null, { source: 'main', kind: 'ok', text: `Scene ${sceneId}: thấy ảnh mới và ChatGPT đã idle ổn định (${readyTicks} ticks), bắt đầu lưu ảnh.`, details: { imageUrl, readyTicks, voiceReady: snapshot?.voiceReady, stopButton: snapshot?.stopButton } });
+        if (!snapshot?.generating && !snapshot?.preparingImage) readyTicks += 1;
+        if (readyTicks >= 1 || snapshot?.voiceReady) {
+          await appendAppLog(null, { source: 'main', kind: 'ok', text: `Scene ${sceneId}: thấy ảnh mới từ ChatGPT, bắt đầu lưu ảnh.`, details: { imageUrl, readyTicks, voiceReady: snapshot?.voiceReady, stopButton: snapshot?.stopButton, generating: snapshot?.generating, preparingImage: snapshot?.preparingImage } });
           return imageUrl;
         }
         if (Date.now() - lastLogAt > 8000) {
           lastLogAt = Date.now();
-          await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: đã thấy preview/URL ảnh nhưng ChatGPT chưa idle đủ, chưa lưu/chụp.`, details: { readyTicks, voiceReady: snapshot?.voiceReady, stopButton: snapshot?.stopButton, generating: snapshot?.generating, preparingImage: snapshot?.preparingImage, urlCount: snapshot?.urls?.length || 0 } });
+          await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: đã thấy preview/URL ảnh, chờ generation dừng trước khi lưu.`, details: { readyTicks, voiceReady: snapshot?.voiceReady, stopButton: snapshot?.stopButton, generating: snapshot?.generating, preparingImage: snapshot?.preparingImage, urlCount: snapshot?.urls?.length || 0 } });
         }
       }
       if (snapshot?.generating || snapshot?.preparingImage) {
@@ -2838,17 +2879,22 @@ async function setFirstFileInput(client, filePath) {
 
 async function uploadFileViaCdp(client, filePath, provider = 'grok') {
   if (provider === 'grok') {
-    await appendAppLog(null, { source: 'main', kind: 'running', text: 'Grok: copy ảnh vào clipboard, click workspace Empty Canvas rồi Ctrl+V trực tiếp.' });
-    await pasteImageViaClipboard(client, filePath, 'workspace');
-    let accepted = await waitForGrokUploadedAsset(client, 18000);
+    await appendAppLog(null, { source: 'main', kind: 'running', text: 'Grok: click ô nhập prompt Image rồi Ctrl+V ảnh trực tiếp vào composer.' });
+    await pasteImageViaClipboard(client, filePath, 'composer');
+    let accepted = await waitForGrokUploadedAsset(client, 22000);
     if (!accepted?.ok) {
-      await appendAppLog(null, { source: 'main', kind: 'running', text: 'Grok chưa nhận Ctrl+V workspace, thử nút Upload Image và tự chọn file qua CDP.' });
+      await appendAppLog(null, { source: 'main', kind: 'running', text: 'Grok chưa nhận ảnh trong ô prompt, fallback click workspace rồi Ctrl+V.' });
+      await pasteImageViaClipboard(client, filePath, 'workspace');
+      accepted = await waitForGrokUploadedAsset(client, 18000);
+    }
+    if (!accepted?.ok) {
+      await appendAppLog(null, { source: 'main', kind: 'running', text: 'Grok chưa nhận Ctrl+V, thử nút Upload Image và tự chọn file qua CDP.' });
       const fileSet = await clickGrokUploadAndChooseFile(client, filePath);
       await appendAppLog(null, { source: 'main', kind: fileSet?.ok ? 'ok' : 'error', text: `Grok Upload Image file chooser: ${fileSet?.ok ? 'đã chọn file' : fileSet?.error || 'failed'}`, details: fileSet });
       if (fileSet?.ok) accepted = await waitForGrokUploadedAsset(client, 45000);
     }
-    await appendAppLog(null, { source: 'main', kind: accepted?.ok ? 'ok' : 'error', text: `Kết quả add ảnh vào Grok workspace: ${accepted?.ok ? 'đã thấy ảnh, tiếp tục prompt' : accepted?.error || 'chưa thấy ảnh'}`, details: accepted });
-    return accepted?.ok ? { ok: true, uploaded: accepted, mode: 'grok-workspace-image-add' } : { ok: false, error: accepted?.error || 'Grok chưa add ảnh xong, không gửi prompt để tránh tạo sai.' };
+    await appendAppLog(null, { source: 'main', kind: accepted?.ok ? 'ok' : 'error', text: `Kết quả add ảnh vào Grok prompt: ${accepted?.ok ? 'đã thấy ảnh, tiếp tục gửi NV2' : accepted?.error || 'chưa thấy ảnh'}`, details: accepted });
+    return accepted?.ok ? { ok: true, uploaded: accepted, mode: 'grok-composer-image-paste' } : { ok: false, error: accepted?.error || 'Grok chưa nhận ảnh trong ô prompt, không gửi NV2 để tránh tạo sai.' };
   }
 
   const handle = await client.DOM.getDocument();
@@ -2899,7 +2945,7 @@ async function pasteImageViaClipboard(client, imagePath, target = 'composer') {
   if (image.isEmpty()) throw new Error(`Không đọc được ảnh để paste clipboard: ${imagePath}`);
   clipboard.writeImage(image);
   if (target === 'workspace') {
-    const focused = await evaluateOnCdpPage(client, `(${focusGrokWorkspaceScript.toString()})()`);
+    const focused = await evaluateOnCdpPage(client, `(${focusGrokWorkspaceScript.toString()})()`).catch((error) => ({ ok: false, error: error.message }));
     await appendAppLog(null, { source: 'main', kind: focused?.ok ? 'ok' : 'running', text: `Grok workspace focus: ${focused?.ok ? focused.mode : focused?.error || 'fallback'}`, details: focused });
     if (focused?.point) {
       const { x, y } = focused.point;
@@ -2908,7 +2954,7 @@ async function pasteImageViaClipboard(client, imagePath, target = 'composer') {
       await client.Input.dispatchMouseEvent({ type: 'mouseReleased', x, y, button: 'left', clickCount: 1 }).catch(() => null);
     }
   } else {
-    await evaluateOnCdpPage(client, `(${focusGrokComposerScript.toString()})()`);
+    await evaluateOnCdpPage(client, `(${focusGrokComposerScript.toString()})()`).catch(() => null);
   }
   await sleep(300);
   await client.Input.dispatchKeyEvent({ type: 'keyDown', key: 'Control', code: 'ControlLeft', windowsVirtualKeyCode: 17, nativeVirtualKeyCode: 17, modifiers: 2 }).catch(() => null);
@@ -2945,14 +2991,8 @@ async function submitGrokVideoPrompt(client, prompt, config = {}) {
   await sleep(500);
   const focused = await evaluateOnCdpPage(client, `(${focusGrokComposerScript.toString()})()`);
   if (!focused?.ok) return { ok: false, error: focused?.error || 'Không focus được ô nhập Grok.' };
-  await client.Input.dispatchKeyEvent({ type: 'keyDown', key: 'Control', code: 'ControlLeft', windowsVirtualKeyCode: 17, nativeVirtualKeyCode: 17, modifiers: 2 }).catch(() => null);
-  await client.Input.dispatchKeyEvent({ type: 'keyDown', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, nativeVirtualKeyCode: 65, modifiers: 2 }).catch(() => null);
-  await client.Input.dispatchKeyEvent({ type: 'keyUp', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, nativeVirtualKeyCode: 65, modifiers: 2 }).catch(() => null);
-  await client.Input.dispatchKeyEvent({ type: 'keyUp', key: 'Control', code: 'ControlLeft', windowsVirtualKeyCode: 17, nativeVirtualKeyCode: 17, modifiers: 0 }).catch(() => null);
-  await client.Input.dispatchKeyEvent({ type: 'keyDown', key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8, nativeVirtualKeyCode: 8 }).catch(() => null);
-  await client.Input.dispatchKeyEvent({ type: 'keyUp', key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8, nativeVirtualKeyCode: 8 }).catch(() => null);
   await sleep(250);
-  await client.Input.insertText({ text: prompt });
+  await client.Input.insertText({ text: `\n${prompt}` });
   await sleep(800);
   let verified = await evaluateOnCdpPage(client, `(${getActiveComposerTextScript.toString()})()`).catch(() => ({ text: '' }));
   if (!verified?.text || !verified.text.includes(prompt.slice(0, Math.min(24, prompt.length)))) {
@@ -2977,12 +3017,28 @@ async function submitGrokVideoPrompt(client, prompt, config = {}) {
     await appendAppLog(null, { source: 'main', kind: 'ok', text: `Grok đã bắt đầu chạy bằng Enter (${started.mode}).`, details: started });
     return { ok: true, mode: 'grok-started-enter', selector: 'trusted-enter' };
   }
+  if (focused?.box) {
+    const x = focused.box.x + focused.box.w - 20;
+    const y = focused.box.y + focused.box.h - 20;
+    await client.Input.dispatchMouseEvent({ type: 'mouseMoved', x, y, button: 'none' }).catch(() => null);
+    await client.Input.dispatchMouseEvent({ type: 'mousePressed', x, y, button: 'left', clickCount: 1 }).catch(() => null);
+    await client.Input.dispatchMouseEvent({ type: 'mouseReleased', x, y, button: 'left', clickCount: 1 }).catch(() => null);
+    await sleep(2200);
+    started = await evaluateOnCdpPage(client, `(${detectGrokGeneratingStateScript.toString()})(${JSON.stringify(beforeSubmitState || {})})`).catch(() => null);
+    if (started?.generating) {
+      await appendAppLog(null, { source: 'main', kind: 'ok', text: `Grok đã bắt đầu chạy bằng click góc phải ô prompt (${started.mode}).`, details: { started, point: { x, y }, focused } });
+      return { ok: true, mode: 'grok-started-composer-corner-click', selector: 'composer-bottom-right-arrow' };
+    }
+    await appendAppLog(null, { source: 'main', kind: 'running', text: 'Grok click trực tiếp nút mũi tên theo tọa độ nhưng chưa thấy generating, thử selector tiếp.', details: { point: { x, y }, focused, started } });
+  }
   let clicked = null;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
-    clicked = await evaluateOnCdpPage(client, `(${clickGrokGenerateScript.toString()})()`);
+    clicked = await evaluateOnCdpPage(client, `(${clickGrokGenerateScript.toString()})()`).catch((error) => ({ ok: false, error: error.message }));
+    await appendAppLog(null, { source: 'main', kind: clicked?.ok ? 'running' : 'error', text: `Grok send selector attempt ${attempt}: ${clicked?.ok ? `candidate=${clicked.selector || 'unknown'}` : clicked?.error || 'failed'}`, details: clicked });
     if (clicked?.ok && clicked.box) {
       const x = clicked.box.x + clicked.box.width / 2;
       const y = clicked.box.y + clicked.box.height / 2;
+      await appendAppLog(null, { source: 'main', kind: 'running', text: `Grok send mouse click attempt ${attempt} tại (${Math.round(x)}, ${Math.round(y)}).`, details: { box: clicked.box, selector: clicked.selector } });
       await client.Input.dispatchMouseEvent({ type: 'mouseMoved', x, y, button: 'none' }).catch(() => null);
       await client.Input.dispatchMouseEvent({ type: 'mousePressed', x, y, button: 'left', clickCount: 1 }).catch(() => null);
       await client.Input.dispatchMouseEvent({ type: 'mouseReleased', x, y, button: 'left', clickCount: 1 }).catch(() => null);
@@ -3341,8 +3397,13 @@ function clickSendButtonScript() {
     if (button.disabled || button.getAttribute('aria-disabled') === 'true') return false;
     const rect = button.getBoundingClientRect();
     if (rect.width < 20 || rect.height < 20) return false;
+    const nearComposer = rect.top > window.innerHeight * 0.55 && rect.left > window.innerWidth * 0.45;
+    if (!nearComposer) return false;
     const label = `${button.getAttribute('aria-label') || ''} ${button.textContent || ''} ${button.dataset?.testid || ''} ${button.innerHTML || ''}`;
-    return /send|submit|gửi|arrow-up|composer-submit|send-button|M2\.01|up/i.test(label) || button.closest('form');
+    if (/voice|mic|microphone|dictate|audio|record|waveform|stop|cancel|square/i.test(label)) return false;
+    const explicitSend = /send|submit|gửi|arrow-up|composer-submit|send-button|up/i.test(label);
+    const hasUpArrowIcon = /M(?:2|8|12)[^<]{0,80}(?:L|V|H)[^<]{0,80}(?:up|arrow)|rotate\(-?90|arrow-up/i.test(label);
+    return explicitSend || hasUpArrowIcon;
   });
   if (!sendButton) return { ok: false, error: 'Không tìm thấy nút send đang enabled.' };
   sendButton.scrollIntoView({ block: 'center', inline: 'center' });
@@ -3743,32 +3804,92 @@ async function prepareGrokVideoComposerScript(config = {}) {
     path = location.pathname.toLowerCase();
   }
 
-  const imageTab = findClickable(/(^|\s)(Image|Images|Ảnh)(\s|$)/i);
-  clickNode(imageTab);
-  await sleep(500);
+  const composerBar = [...document.querySelectorAll('button, [role="button"]')]
+    .map((node) => ({ node, rect: node.getBoundingClientRect?.(), text: textOf(node) }))
+    .filter((item) => item.rect && item.rect.width > 18 && item.rect.height > 18 && item.rect.top > window.innerHeight * 0.72)
+    .sort((a, b) => a.rect.left - b.rect.left);
+  const clickExact = (pattern) => {
+    const target = composerBar.find((item) => pattern.test(item.text) && item.rect.left < window.innerWidth * 0.75)?.node;
+    return { clicked: clickNode(target), text: target ? textOf(target).slice(0, 120) : '', box: target ? (() => { const r = target.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height }; })() : null };
+  };
+  const imageResult = clickExact(/^\s*Image\s*$/i);
+  await sleep(450);
+  const videoResult = clickExact(/^\s*Video\s*$/i);
+  await sleep(450);
+  const ratioMenuResult = clickExact(/^\s*(Original|\d+\s*:\s*\d+|Widescreen|Wide|Square|Vertical)\s*$/i);
+  await sleep(300);
+  const ratio169Node = [...document.querySelectorAll('button, [role="button"], [role="menuitem"], div, span')]
+    .filter(visible)
+    .map((node) => ({ node, text: textOf(node), rect: node.getBoundingClientRect?.() }))
+    .filter((item) => item.rect && item.rect.top > window.innerHeight * 0.35)
+    .find((item) => /^\s*(16\s*:\s*9|Widescreen|Wide)\s*$/i.test(item.text))?.node;
+  const clicked169 = clickNode(ratio169Node);
+  await sleep(250);
+  const wantedDuration = String(config?.duration || '10').startsWith('6') ? '6s' : '10s';
+  const qualityResult = clickExact(/^\s*(480p|720p|1080p)\s*$/i);
+  await sleep(250);
+  const quality720Node = [...document.querySelectorAll('button, [role="button"], [role="menuitem"], div, span')]
+    .filter(visible)
+    .map((node) => ({ node, text: textOf(node), rect: node.getBoundingClientRect?.() }))
+    .filter((item) => item.rect && item.rect.top > window.innerHeight * 0.35)
+    .find((item) => /^\s*720p\s*$/i.test(item.text))?.node;
+  const clicked720 = clickNode(quality720Node);
+  await sleep(250);
+  const durationResult = clickExact(/^\s*(6s|10s)\s*$/i);
+  await sleep(250);
+  const durationNode = [...document.querySelectorAll('button, [role="button"], [role="menuitem"], div, span')]
+    .filter(visible)
+    .map((node) => ({ node, text: textOf(node), rect: node.getBoundingClientRect?.() }))
+    .filter((item) => item.rect && item.rect.top > window.innerHeight * 0.35)
+    .find((item) => new RegExp(`^\\s*${wantedDuration}\\s*$`, 'i').test(item.text))?.node;
+  const clickedDuration = clickNode(durationNode);
+  await sleep(250);
+  const configLog = {
+    wantedDuration,
+    wantedResolution: config?.resolution || '720p',
+    imageResult,
+    videoResult,
+    ratioMenuResult,
+    clicked169,
+    qualityResult,
+    clicked720,
+    durationResult,
+    clickedDuration,
+    ratio169Text: ratio169Node ? textOf(ratio169Node).slice(0, 120) : '',
+    quality720Text: quality720Node ? textOf(quality720Node).slice(0, 120) : '',
+    durationText: durationNode ? textOf(durationNode).slice(0, 120) : '',
+    composerButtons: composerBar.map((item) => ({ text: item.text.slice(0, 80), box: { x: item.rect.x, y: item.rect.y, w: item.rect.width, h: item.rect.height } })),
+    url: location.href,
+    bodyTail: (document.body?.innerText || '').slice(-1500),
+  };
 
   path = location.pathname.toLowerCase();
   const isAgentCanvas = path.includes('/imagine/agent/') && path.length > '/imagine/agent/'.length;
-  if (isAgentCanvas) return { ok: true, isAgentCanvas: true, status: 'already-canvas-image-mode', url: location.href };
+  if (isAgentCanvas) return { ok: true, isAgentCanvas: true, status: 'already-canvas-video-16x9', configLog, url: location.href };
 
   const emptyCanvas = findClickable(/(^|\s)Empty\s*Canvas(\s|$)|Create\s*from\s*scratch|Blank\s*canvas/i);
   if (!emptyCanvas) {
     const bodyText = document.body?.innerText || '';
-    return { ok: false, isAgentCanvas: false, status: 'empty-canvas-button-not-found-after-image', url: location.href, bodyHead: bodyText.slice(0, 1000) };
+    return { ok: true, isAgentCanvas: false, status: 'imagine-chat-video-16x9-ready-no-empty-canvas', configLog, url: location.href, bodyHead: bodyText.slice(0, 1000), bodyTail: bodyText.slice(-1500) };
   }
-  clickNode(emptyCanvas);
+  const clickedEmptyCanvas = clickNode(emptyCanvas);
   const started = Date.now();
   while (Date.now() - started < 8000) {
     await sleep(300);
     const nowPath = location.pathname.toLowerCase();
     if (nowPath.includes('/imagine/agent/') && nowPath.length > '/imagine/agent/'.length) {
-      const imageModeAgain = findClickable(/(^|\s)(Image|Images|Ảnh)(\s|$)/i);
-      clickNode(imageModeAgain);
-      return { ok: true, isAgentCanvas: true, emptyCanvasClicked: true, status: 'clicked-empty-canvas-image-mode', url: location.href };
+      const videoModeAgain = findClickable(/(^|\s)(Video|Motion)(\s|$)/i);
+      const clickedVideoAgain = clickNode(videoModeAgain);
+      const ratioAgain = findClickable(/\b(2:3|3:2|1:1|9:16|16:9)\b|Tall|Wide|Square|Vertical|Widescreen/i);
+      const clickedRatioAgain = clickNode(ratioAgain);
+      await sleep(150);
+      const ratio169Again = findClickable(/\b16\s*:\s*9\b|Widescreen/i);
+      const clicked169Again = clickNode(ratio169Again);
+      return { ok: true, isAgentCanvas: true, emptyCanvasClicked: clickedEmptyCanvas, status: 'clicked-empty-canvas-video-16x9', configLog: { ...configLog, clickedVideoAgain, clickedRatioAgain, clicked169Again, videoAgainText: videoModeAgain ? textOf(videoModeAgain).slice(0, 120) : '', ratioAgainText: ratioAgain ? textOf(ratioAgain).slice(0, 120) : '', ratio169AgainText: ratio169Again ? textOf(ratio169Again).slice(0, 120) : '' }, url: location.href };
     }
   }
   const rect = emptyCanvas.getBoundingClientRect?.();
-  return { ok: false, isAgentCanvas: false, emptyCanvasClicked: true, status: 'clicked-but-no-navigation', url: location.href, emptyCanvasBox: rect ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height } : null };
+  return { ok: true, isAgentCanvas: false, emptyCanvasClicked: clickedEmptyCanvas, status: 'clicked-but-no-navigation-use-imagine-chat', configLog, url: location.href, emptyCanvasBox: rect ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height } : null };
 }
 
 function preparePixVerseComposerScript(config = {}) {
@@ -3881,7 +4002,7 @@ function focusGrokComposerScript() {
       if (rect.bottom < window.innerHeight * 0.35) return false;
       if (rect.left < window.innerWidth * 0.18 || rect.right > window.innerWidth * 0.95) return false;
       const text = (node.innerText || node.textContent || node.value || '').trim();
-      if (text.length > 1200) return false;
+      if (text.length > 30000) return false;
       const all = `${node.getAttribute?.('placeholder') || ''} ${node.getAttribute?.('aria-label') || ''} ${text}`;
       if (/connect|connector|gmail|google drive|notion|vercel/i.test(all)) return false;
       return true;
@@ -4006,12 +4127,12 @@ function detectUploadedAssetScript() {
     })
     .filter((item) => item.width >= 24 && item.height >= 24 && item.top > 40);
   const fileInputs = [...document.querySelectorAll('input[type="file"]')].map((input) => ({ files: input.files?.length || 0, accept: input.accept || '' }));
-  const hasFileName = /\.png|\.jpe?g|\.mp4|\.webm|\.mov|image uploaded|video uploaded|upload complete|remove image|remove video|attached|ảnh|video/i.test(bodyText);
+  const hasFileName = /\.(png|jpe?g|webp|gif|mp4|webm|mov)\b|image uploaded|video uploaded|upload complete|remove image|remove video|attached file|attachment|đã tải lên|tệp đã tải/i.test(bodyText);
   const canvasImages = images.filter((item) => item.left < window.innerWidth * 0.78 || item.tag === 'CANVAS');
   const hasPreview = canvasImages.length > 0;
   const hasInputFile = fileInputs.some((input) => input.files > 0);
   if (hasPreview || hasInputFile || hasFileName) return { ok: true, hasPreview, hasInputFile, hasFileName, images, canvasImages, fileInputs };
-  return { ok: false, error: 'Chưa thấy ảnh được paste vào workspace/canvas Grok sau Ctrl+V.', images, fileInputs, sampleText: bodyText.slice(-1000) };
+  return { ok: false, error: 'Chưa thấy ảnh/file được attach thành preview hoặc file chip sau upload.', images, fileInputs, sampleText: bodyText.slice(-1000) };
 }
 
 function setGrokVideoPromptScript(prompt) {
@@ -4229,55 +4350,65 @@ async function clickGrokRetryButton(client, state = null) {
 }
 
 function clickGrokGenerateScript() {
-  const nodes = [...document.querySelectorAll('button, [role="button"]')];
-  const input = document.activeElement;
-  const button = nodes.find((item) => {
-    if (item.disabled || item.getAttribute('aria-disabled') === 'true') return false;
-    const rect = item.getBoundingClientRect();
-    if (rect.width < 24 || rect.height < 20) return false;
-
-    const inputRect = input?.getBoundingClientRect?.();
-    const isNearInput = inputRect && rect.top > inputRect.top - 80 && rect.top < inputRect.bottom + 80 && rect.left > inputRect.left - 40;
-    const isComposerSubmit = rect.left > window.innerWidth * 0.72 && rect.top > window.innerHeight * 0.72;
-    if (!isNearInput && !isComposerSubmit) return false;
-
-    const text = `${item.textContent || ''} ${item.getAttribute('aria-label') || ''} ${item.title || ''} ${item.dataset?.testid || ''}`.trim();
-    if (/Agent\s*\(?Beta\)?|Create\s*Worlds|Historical\s*Stories|Short\s*Film|UGC\s*Product|^\s*(Image|Video|480p|720p|6s|10s)\s*$/i.test(text)) return false;
-
-    const html = item.innerHTML || '';
-    const hasSendIcon = /arrow-up|send-icon|paper-plane/i.test(html);
-    return /^(Generate|Create|Start|Send|Submit|gửi|Imagine)$/i.test(text) || (text === '' && hasSendIcon);
-  });
-  if (!button) {
-    const bottomRightSend = nodes
-      .filter((item) => {
-        if (item.disabled || item.getAttribute('aria-disabled') === 'true') return false;
-        const rect = item.getBoundingClientRect?.();
-        if (!rect || rect.width < 24 || rect.height < 20) return false;
-        const text = `${item.textContent || ''} ${item.getAttribute('aria-label') || ''} ${item.title || ''} ${item.dataset?.testid || ''}`.trim();
-        if (/microphone|voice|audio|attach|add|upload|\+|new chat/i.test(text)) return false;
-        return rect.left > window.innerWidth * 0.84 && rect.top > window.innerHeight * 0.74;
-      })
-      .sort((a, b) => b.getBoundingClientRect().left - a.getBoundingClientRect().left)[0];
-    if (bottomRightSend) {
-      bottomRightSend.scrollIntoView({ block: 'center', inline: 'center' });
-      bottomRightSend.focus();
-      bottomRightSend.click();
-      const rect = bottomRightSend.getBoundingClientRect();
-      return { ok: true, selector: bottomRightSend.textContent || bottomRightSend.getAttribute('aria-label') || 'grok-bottom-right-send', box: { x: rect.x, y: rect.y, width: rect.width, height: rect.height } };
-    }
-    if (input) {
-      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true }));
-      input.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', bubbles: true }));
-      return { ok: true, selector: 'enter-fallback' };
-    }
-    return { ok: false, error: 'Không tìm thấy nút Generate/Create/Send Grok đang enabled.' };
+  const visible = (node) => {
+    const rect = node.getBoundingClientRect?.();
+    return rect && rect.width >= 8 && rect.height >= 8 && rect.bottom > 0 && rect.right > 0;
+  };
+  const textOf = (node) => `${node.textContent || ''} ${node.getAttribute?.('aria-label') || ''} ${node.title || ''} ${node.dataset?.testid || ''}`.trim();
+  const active = document.activeElement;
+  const roots = [];
+  let node = active;
+  for (let depth = 0; node && depth < 8; depth += 1, node = node.parentElement) {
+    const rect = node.getBoundingClientRect?.();
+    if (rect && rect.width > 360 && rect.height > 90 && rect.height < 260 && rect.bottom > window.innerHeight * 0.55) roots.push(node);
   }
-  button.scrollIntoView({ block: 'center', inline: 'center' });
-  button.focus();
-  button.click();
-  const rect = button.getBoundingClientRect();
-  return { ok: true, selector: button.textContent || button.getAttribute('aria-label') || 'Grok generate', box: { x: rect.x, y: rect.y, width: rect.width, height: rect.height } };
+  roots.push(...[...document.querySelectorAll('form, [role="dialog"], [class]')].filter((item) => {
+    const rect = item.getBoundingClientRect?.();
+    const text = item.innerText || '';
+    return rect && rect.width > 360 && rect.height > 90 && rect.height < 260 && rect.bottom > window.innerHeight * 0.55 && /Agent|Image|Video|Original|Negative Prompt|DÒNG|DONG|NO soundtrack/i.test(text);
+  }));
+  const root = [...new Set(roots)].sort((a, b) => {
+    const ar = a.getBoundingClientRect();
+    const br = b.getBoundingClientRect();
+    return (ar.width * ar.height) - (br.width * br.height);
+  })[0];
+  const rootRect = root?.getBoundingClientRect?.();
+  const scope = root || document;
+  const buttons = [...scope.querySelectorAll('button, [role="button"]')]
+    .map((button) => ({ button, rect: button.getBoundingClientRect?.(), label: textOf(button), html: button.innerHTML || '' }))
+    .filter((item) => {
+      if (!item.rect || item.rect.width < 20 || item.rect.height < 20) return false;
+      if (item.button.disabled || item.button.getAttribute('aria-disabled') === 'true') return false;
+      if (rootRect) {
+        if (item.rect.left < rootRect.left || item.rect.right > rootRect.right + 3 || item.rect.top < rootRect.top || item.rect.bottom > rootRect.bottom + 3) return false;
+        if (item.rect.left < rootRect.right - 95) return false;
+        if (item.rect.top < rootRect.bottom - 85) return false;
+      } else {
+        if (item.rect.left < window.innerWidth * 0.78 || item.rect.top < window.innerHeight * 0.68) return false;
+      }
+      const compactRightArrow = item.rect.width <= 58 && item.rect.height <= 58 && (!rootRect || (item.rect.left > rootRect.right - 80 && item.rect.top > rootRect.bottom - 80));
+      if (/microphone|voice|audio|attach|upload|new chat/i.test(item.label) && !compactRightArrow) return false;
+      if (/^\s*(Agent\s*\(?Beta\)?|Original|Image|Video|Speed|Quality|2:3|16:9|480p|720p|6s|10s)\s*$/i.test(item.label)) return false;
+      return true;
+    })
+    .sort((a, b) => (b.rect.right - a.rect.right) || (b.rect.bottom - a.rect.bottom));
+  const sendButton = buttons[0];
+  const debugButtons = [...scope.querySelectorAll('button, [role="button"]')]
+    .map((button) => {
+      const rect = button.getBoundingClientRect?.();
+      return rect ? { label: textOf(button).slice(0, 120), box: { x: rect.x, y: rect.y, w: rect.width, h: rect.height }, disabled: button.disabled || button.getAttribute('aria-disabled') === 'true' } : null;
+    })
+    .filter(Boolean)
+    .filter((item) => !rootRect || (item.box.x >= rootRect.left - 2 && item.box.y >= rootRect.top - 2 && item.box.x <= rootRect.right + 2 && item.box.y <= rootRect.bottom + 2));
+  if (!sendButton) return { ok: false, error: 'Không tìm thấy nút mũi tên Send trong composer Grok.', rootBox: rootRect ? { x: rootRect.x, y: rootRect.y, width: rootRect.width, height: rootRect.height } : null, buttons: debugButtons };
+  sendButton.button.scrollIntoView({ block: 'center', inline: 'center' });
+  sendButton.button.focus();
+  sendButton.button.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerType: 'mouse', isPrimary: true }));
+  sendButton.button.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+  sendButton.button.click();
+  sendButton.button.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+  const rect = sendButton.rect;
+  return { ok: true, selector: sendButton.label || 'grok-composer-rightmost-send', box: { x: rect.x, y: rect.y, width: rect.width, height: rect.height }, rootBox: rootRect ? { x: rootRect.x, y: rootRect.y, width: rootRect.width, height: rootRect.height } : null, buttons: debugButtons };
 }
 
 function prepareChatGptCreateImageScript() {
