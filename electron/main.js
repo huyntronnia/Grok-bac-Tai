@@ -999,7 +999,8 @@ async function mergeVideoFiles(videos, outputPath) {
 
 function runFfmpeg(args) {
   return new Promise((resolve, reject) => {
-    const binaryPath = ffmpegPath || 'ffmpeg';
+    const bundledPath = app.isPackaged ? path.join(process.resourcesPath, 'ffmpeg.exe') : '';
+    const binaryPath = bundledPath || ffmpegPath || 'ffmpeg';
     const child = spawn(binaryPath, args, { windowsHide: true });
     let stderr = '';
 
@@ -1008,7 +1009,7 @@ function runFfmpeg(args) {
     });
 
     child.on('error', (error) => {
-      reject(new Error(`Không chạy được FFmpeg bundled (${binaryPath}). ${error.message}`));
+      reject(new Error(`Không chạy được FFmpeg (${binaryPath}). ${error.message}`));
     });
 
     child.on('close', (code) => {
@@ -1735,10 +1736,11 @@ async function generateMotionPromptWithChatGPT({ imagePath, prompt, sceneDir, sc
     latest = state.text.trim();
     const freshAssistant = state.count > (before?.count || 0) || latest !== before?.text;
     const quality = validateMotionPromptResponse(latest, { beforeText: before?.text || '', instruction, taskPrompt: prompt });
-    const composerDone = state.voiceReady && !state.stopButton && !state.generating;
+    const composerIdle = !state.stopButton && !state.generating;
+    const composerDone = composerIdle && (state.voiceReady || quality.ok);
     if (freshAssistant && composerDone && quality.ok) break;
-    if (freshAssistant && !state.generating && state.voiceReady && !quality.ok && Date.now() - startedAt > 25000 && await retryMotionPrompt(quality.error || 'bad-response-idle', state)) continue;
-    if (!freshAssistant && !state.generating && Date.now() - startedAt > 25000 && await retryMotionPrompt('stuck-after-user-message', state)) continue;
+    if (freshAssistant && composerIdle && !quality.ok && Date.now() - startedAt > 25000 && await retryMotionPrompt(quality.error || 'bad-response-idle', state)) continue;
+    if (!freshAssistant && composerIdle && Date.now() - startedAt > 25000 && await retryMotionPrompt('stuck-after-user-message', state)) continue;
     await appendAppLog(null, {
       source: 'main',
       kind: 'running',
@@ -2617,7 +2619,8 @@ async function renameChatGptCurrentConversation(_event, title = '') {
 async function waitForChatGptImageOrRetry(client, existingUrls = [], prompt, sceneDir, sceneId) {
   const known = new Set(existingUrls);
   const maxAttempts = 3;
-  const thinkingStallMs = 120000;
+  const thinkingStallMs = 240000;
+  const preparingImageStallMs = 900000;
   let lastSnapshot = null;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     const attemptStartedAt = Date.now();
@@ -2653,12 +2656,13 @@ async function waitForChatGptImageOrRetry(client, existingUrls = [], prompt, sce
       lastSnapshot = snapshot;
       if (snapshot?.loggedOut) throw new Error(loginRequiredMessage('chatgpt', snapshot.logoutReason || 'ChatGPT logged out while waiting for NV1 image'));
       const imageUrl = (snapshot?.urls || []).find((url) => !known.has(url));
+      const isCustomBoxRef = String(imageUrl || '').startsWith('chatgpt-custom-box-y');
       const composerLooksReady = snapshot?.voiceReady && !snapshot?.stopButton && !snapshot?.generating && !snapshot?.preparingImage;
       if (composerLooksReady) readyTicks += 1;
       else readyTicks = 0;
       if (imageUrl) {
-        if (!snapshot?.generating && !snapshot?.preparingImage) readyTicks += 1;
-        if (readyTicks >= 1 || snapshot?.voiceReady) {
+        if (!snapshot?.generating && !snapshot?.preparingImage && !isCustomBoxRef) readyTicks += 1;
+        if (!isCustomBoxRef && (readyTicks >= 1 || snapshot?.voiceReady)) {
           await appendAppLog(null, { source: 'main', kind: 'ok', text: `Scene ${sceneId}: thấy ảnh mới từ ChatGPT, bắt đầu lưu ảnh.`, details: { imageUrl, readyTicks, voiceReady: snapshot?.voiceReady, stopButton: snapshot?.stopButton, generating: snapshot?.generating, preparingImage: snapshot?.preparingImage } });
           return imageUrl;
         }
@@ -2674,8 +2678,9 @@ async function waitForChatGptImageOrRetry(client, existingUrls = [], prompt, sce
           lastLogAt = Date.now();
           await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: đang chờ ChatGPT hoàn tất NV1/tạo ảnh (${snapshot?.preparingImage ? 'preparing-image' : 'thinking'}).`, details: { mode: snapshot?.assistantMode, urls: snapshot?.urls?.length || 0, assistantCount: snapshot?.assistantCount || 0, elapsedMs: Date.now() - attemptStartedAt } });
         }
-        if (!snapshot?.preparingImage && Date.now() - attemptStartedAt > thinkingStallMs) {
-          await resendImagePrompt('thinking-stall', snapshot);
+        const stallLimitMs = snapshot?.preparingImage ? preparingImageStallMs : thinkingStallMs;
+        if (Date.now() - attemptStartedAt > stallLimitMs) {
+          await resendImagePrompt(snapshot?.preparingImage ? 'preparing-image-stall' : 'thinking-stall', snapshot);
           break;
         }
         continue;
@@ -2686,16 +2691,12 @@ async function waitForChatGptImageOrRetry(client, existingUrls = [], prompt, sce
         && !/preparing image|creating image|generating image|đang tạo ảnh|thinking/i.test(String(snapshot?.latestAssistantText || ''))
         && !looksLikeCollapsedUserPrompt(snapshot?.latestAssistantText, 'image');
       if (textOnlyAnswer && isChatGptLimitText(snapshot?.latestAssistantText)) {
-        const rolled = await rollProviderAccount(client, 'chatgpt', sceneId, 'limit').catch((error) => ({ ok: false, error: error.message }));
-        if (rolled?.ok) {
-          await resendImagePrompt('account-limit-roll', snapshot);
-          break;
-        }
-        throw new Error(rolled?.error || 'ChatGPT bị limit nhưng không roll được account.');
+        await notifyRenderer('chatgpt-limit-stop', `Scene ${sceneId}: ChatGPT báo limit/hạn mức. Bấm OK để tool dừng hẳn; đổi account hoặc chờ reset rồi bấm Start lại thủ công.`, { sceneId, text: snapshot?.latestAssistantText });
+        throw new Error('ChatGPT bị limit/hạn mức. Tool đã dừng theo yêu cầu, không tự gửi lại.');
       }
       if (composerReadyForRetry) readyTicks += 1;
       if (((sawGenerating && composerReadyForRetry && readyTicks >= 4) || textOnlyAnswer)) {
-        await resendImagePrompt(textOnlyAnswer ? 'text-only-answer' : 'no-image-after-generating', snapshot);
+        await resendImagePrompt(textOnlyAnswer ? 'text-only-answer' : 'idle-no-image-after-generating', snapshot);
         break;
       }
     }
@@ -2753,32 +2754,9 @@ async function waitForNewVideoUrl(client, existingUrls = [], options = {}) {
         throw new Error('Grok chặn content policy sau 3 lần tự sửa prompt/đổi canvas. Cần sửa scene/prompt thủ công.');
       }
       if (grokState?.kind === 'limit') {
-        const rolled = await rollProviderAccount(client, 'grok', sceneId, 'limit').catch((error) => ({ ok: false, error: error.message }));
-        if (rolled?.ok) {
-          retryCount += 1;
-          await appendAppLog(null, { source: 'main', kind: 'ok', text: `Scene ${sceneId}: Grok limit, đã roll account sang ${rolled.maskedEmail}.`, details: { sceneId, accountId: rolled.accountId, maskedEmail: rolled.maskedEmail } });
-          if (options.sceneDir && options.imagePath && options.motionPrompt) {
-            const recovered = await recoverGrokCanvasAfterLimit(client, options).catch((error) => ({ ok: false, error: error.message }));
-            await appendAppLog(null, { source: 'main', kind: recovered?.ok ? 'ok' : 'error', text: `Scene ${sceneId}: gửi lại Grok sau roll account: ${recovered?.ok ? 'ok' : recovered?.error}`, details: recovered });
-          }
-          await sleep(10000);
-          continue;
-        }
-        if (!notifiedLimit) {
-          notifiedLimit = true;
-          await notifyRenderer('grok-limit', `Scene ${sceneId}: Grok báo limit trong canvas hiện tại. Tool sẽ tạo canvas mới, restore keyframe/video scene trước rồi gửi lại.`, grokState);
-          await appendAppLog(null, { source: 'main', kind: 'error', text: `Scene ${sceneId}: Grok canvas limit detected, switching to a new canvas.`, details: grokState });
-        }
-        if (retryCount < 3 && options.sceneDir && options.imagePath && options.motionPrompt) {
-          retryCount += 1;
-          const recovered = await recoverGrokCanvasAfterLimit(client, options).catch((error) => ({ ok: false, error: error.message }));
-          await appendAppLog(null, { source: 'main', kind: recovered?.ok ? 'ok' : 'error', text: `Scene ${sceneId}: recover canvas sau limit lần ${retryCount}/3: ${recovered?.ok ? 'ok' : recovered?.error}`, details: recovered });
-          await sleep(10000);
-          continue;
-        }
-        const routerDevFolder = path.join(__dirname, '..', 'dev_sandbox_grok_account_router');
-        await notifyRenderer('grok-account-router-dev', `Scene ${sceneId}: đã thử tạo 3 canvas mới nhưng vẫn bị limit. Roll Grok account đang được phát triển tại ${routerDevFolder}`, { sceneId, devFolder: routerDevFolder });
-        throw new Error(`Grok limit sau 3 lần đổi canvas. Roll account đang phát triển: ${routerDevFolder}`);
+        await notifyRenderer('grok-limit-stop', `Scene ${sceneId}: Grok báo limit/lỗi tạo video. Bấm OK để tool dừng hẳn; đổi account/canvas hoặc xử lý trên Grok rồi bấm Start lại thủ công.`, grokState);
+        await appendAppLog(null, { source: 'main', kind: 'error', text: `Scene ${sceneId}: Grok limit/generation error detected; stopped without retry.`, details: grokState });
+        throw new Error('Grok báo limit/lỗi tạo video. Tool đã dừng theo yêu cầu, không tự gửi lại.');
       }
     }
     const snapshot = await evaluateOnCdpPage(client, `(${collectVideoUrlsScript.toString()})()`);
@@ -3185,14 +3163,16 @@ function detectLoginScript(provider) {
     '#prompt-textarea',
     '[aria-label*="Message"]',
     '[aria-label*="Ask"]',
+    '[aria-label*="Hỏi"]',
     '[placeholder*="Ask"]',
+    '[placeholder*="Hỏi"]',
   ];
   const composer = composerSelectors.map((selector) => document.querySelector(selector)).find(Boolean);
   const hasAppShell = provider === 'grok'
     ? /Grok|Imagine|DeepSearch|Think|What do you want to know|Ask anything/i.test(bodyText)
     : provider === 'pixverse'
       ? /PixVerse|Create|Generate|Image to Video|Text to Video|My Videos|Workspace/i.test(bodyText)
-      : /New chat|Search chats|Library|Recents|What’s on the agenda|Ask anything|Projects/i.test(bodyText);
+      : /New chat|Search chats|Library|Recents|What’s on the agenda|Ask anything|Projects|Đoạn chat mới|Tìm kiếm đoạn chat|Thư viện|Dự án|Bạn đang làm về cái gì|Hỏi bất kỳ điều gì/i.test(bodyText);
   const hasExplicitLoginButton = provider === 'grok'
     ? /(^|\|)\s*(sign in|log in|đăng nhập|sign up|đăng ký)\s*(\||$)/i.test(buttonsText)
     || /(^|\n)\s*(Sign in|Sign up)\s*($|\n)/i.test(bodyText)
@@ -3209,9 +3189,9 @@ function detectLoginScript(provider) {
     || /Get responses tailored to you|Log in to get|saved chats|upload files/i.test(bodyText)
   );
   const chatgptLoggedInShell = provider === 'chatgpt' && !hasChatGptLoginUi && (
-    /Projects|GPTs|Company knowledge|Invite team members/i.test(bodyText)
-    || /CUSTOMVOICE|Business|Team|Workspace/i.test(bodyText)
-    || /Share\s*\|/i.test(buttonsText)
+    /Projects|GPTs|Company knowledge|Invite team members|Đoạn chat mới|Tìm kiếm đoạn chat|Thư viện|Dự án|Bạn đang làm về cái gì|Hỏi bất kỳ điều gì/i.test(bodyText)
+    || /CUSTOMVOICE|Business|Team|Workspace|Tài khoản|Cài đặt|Nâng cấp gói|Đăng xuất/i.test(bodyText)
+    || /Share\s*\||Chia sẻ|Tạo ảnh|Tra cứu thông tin/i.test(buttonsText)
   );
   const grokLoggedInShell = provider === 'grok' && (
     /SuperGrok|Imagine|Private|What do you want to know\?|Ask anything|Sign Out|Settings|Connectors|Tasks|Files/i.test(bodyText)
@@ -4329,12 +4309,15 @@ function detectGrokGeneratingStateScript(before = {}) {
     const nearComposer = item.rect.left > window.innerWidth * 0.72 && item.rect.top > window.innerHeight * 0.68;
     return nearComposer && (/stop|cancel|square/i.test(item.text) || /rect|square|stop/i.test(item.html));
   });
+  const percentMatch = bodyText.match(/(?:Generating\s*)?(\d{1,3})\s*%/i);
+  const hasProgressPercent = Boolean(percentMatch && Number(percentMatch[1]) >= 0 && Number(percentMatch[1]) <= 100);
   const thinking = /Thinking|Thinking about your request|Đang suy nghĩ|Generating|Creating/i.test(tail);
   return {
     ok: true,
-    generating: Boolean(stopButton || thinking),
-    mode: stopButton ? 'stop-button' : thinking ? 'thinking-text' : '',
+    generating: Boolean(stopButton || hasProgressPercent || thinking),
+    mode: stopButton ? 'stop-button' : hasProgressPercent ? 'progress-percent' : thinking ? 'thinking-text' : '',
     stopText: stopButton?.text || '',
+    progressPercent: hasProgressPercent ? Number(percentMatch[1]) : null,
     url: location.href,
     beforeUrl: before?.url || '',
     tail,
@@ -4354,7 +4337,7 @@ function detectGrokGenerationProblemScript() {
   const retry = buttons.find((item) => /(^|\s)(Retry|Try again|Thử lại|Gửi lại)(\s|$)/i.test(item.text));
   const unable = /Grok was unable to finish replying|unable to finish replying|couldn'?t finish|Something went wrong|try again/i.test(tail);
   const contentPolicy = /content policy|blocked by content policy|triggered moderation|cannot generate or retry|I cannot generate|adjust the prompt significantly|chặn.*content|vi phạm.*chính sách/i.test(tail);
-  const limit = /Video generation hiện đang gặp giới hạn|generation.*limit|rate limit|too many requests|limit được reset|quota|usage limit|come back later|try again later/i.test(tail);
+  const limit = /Video generation hiện đang gặp giới hạn|generation.*limit|rate limit|too many requests|limit được reset|quota|usage limit|come back later|try again later|temporarily unavailable|temporarily disabled|not available right now|something went wrong while generating|failed to generate|generation failed|couldn'?t generate|can'?t generate|unable to generate|error generating|please try again later|try again in|daily limit|monthly limit|usage cap|credits|insufficient/i.test(tail);
   const loginRequired = /(^|\n)\s*(Log in|Sign in|Sign up|Đăng nhập|Get started)\s*($|\n)|continue with google|sign up for free/i.test(bodyText)
     && !/SuperGrok|Imagine|Private|What do you want to know\?|Grok can make mistakes/i.test(bodyText);
   return {
@@ -4582,7 +4565,7 @@ function readChatGptImageStateScript() {
   const voiceReady = composerButtons.some((item) => /voice|mic|microphone|record|dictate/i.test(item.text) || /waveform|audio|voice|mic/i.test(item.html));
   const thinkingText = /Thinking about your request|Đang suy nghĩ|Generating|Creating/i.test(bodyTail);
   const generating = stopButton || (thinkingText && !voiceReady);
-  const preparingImage = /preparing image|creating image|generating image|đang tạo ảnh|đang chuẩn bị ảnh/i.test(bodyText);
+  const preparingImage = /preparing image|creating image|generating image|đang tạo ảnh|đang chuẩn bị ảnh|defining scene for image generation|This prepares the scene for the cat'?s intervention/i.test(bodyText);
   const loggedOut = /(^|\n)\s*(sign in|log in|đăng nhập|sign up)\s*($|\n)|sign up to keep chatting|continue with google/i.test(bodyText)
     && !/ChatGPT can make mistakes|Share|Ask anything/i.test(bodyText.slice(-3000));
   const mediaRoots = [...document.querySelectorAll('[data-message-author-role="assistant"], article, .message, [class*="response"]')]
@@ -4598,6 +4581,8 @@ function readChatGptImageStateScript() {
     .map((node) => node.currentSrc || node.src || node.getAttribute('srcset') || node.getAttribute('src') || '')
     .filter((url) => /^https?:|^blob:|^data:image\//i.test(url));
 
+  const loadingMediaText = /defining scene for image generation|preparing image|creating image|generating image|đang tạo ảnh|đang chuẩn bị ảnh/i.test(bodyText);
+  const renderedImageHint = /Generated image|Edit image|Download|Tải xuống|Open image|Image created|Ảnh đã được tạo/i.test(bodyText);
   const visibleImageBoxes = [...mediaRoot.querySelectorAll('img, canvas, button, div')]
     .map((node) => {
       const rect = node.getBoundingClientRect?.();
@@ -4614,7 +4599,7 @@ function readChatGptImageStateScript() {
     })
     .filter(Boolean)
     .sort((a, b) => b.y - a.y);
-  if (!urls.length && visibleImageBoxes.length) urls.push(`chatgpt-custom-box-y${visibleImageBoxes[0].y}`);
+  if (!urls.length && visibleImageBoxes.length && !loadingMediaText && renderedImageHint) urls.push(`chatgpt-custom-box-y${visibleImageBoxes[0].y}`);
 
   const roleAssistantNodes = [...document.querySelectorAll('[data-message-author-role="assistant"]')]
     .filter((node) => (node.innerText || '').trim().length > 20);

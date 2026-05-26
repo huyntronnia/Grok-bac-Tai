@@ -27,10 +27,17 @@
       "package.json",
       "node_modules/**/*"
     ],
+    "asarUnpack": [
+      "node_modules/ffmpeg-static/**/*"
+    ],
     "extraResources": [
       {
         "from": "2 NHIỆM VỤ BẰNG PROMPT.txt",
         "to": "2 NHIỆM VỤ BẰNG PROMPT.txt"
+      },
+      {
+        "from": "node_modules/ffmpeg-static/ffmpeg.exe",
+        "to": "ffmpeg.exe"
       }
     ],
     "win": {
