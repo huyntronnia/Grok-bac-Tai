@@ -24,9 +24,14 @@
     },
     "files": [
       "electron/**/*",
-      "2 NHIỆM VỤ BẰNG PROMPT.txt",
       "package.json",
       "node_modules/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "2 NHIỆM VỤ BẰNG PROMPT.txt",
+        "to": "prompts/2 NHIỆM VỤ BẰNG PROMPT.txt"
+      }
     ],
     "win": {
       "target": [

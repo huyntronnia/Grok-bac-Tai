@@ -17,14 +17,34 @@ const CHROME_DEBUG_PORT = 9223;
 const CHROME_CDP_HOST = `http://127.0.0.1:${CHROME_DEBUG_PORT}`;
 const CHROME_USER_DATA_DIR = path.resolve(__dirname, '..', '.chrome-cdp-profile');
 const CHALLENGE_RECOVERY_LIMIT = 2;
+const GROK_IMAGINE_AGENT_URL = 'https://grok.com/imagine/agent';
+const CHAT_TITLE_CHECK_MIN_INTERVAL_MS = 45000;
+const GROK_SEND_RETRY_LIMIT = 2;
 const challengeRecoveryAttempts = new Map();
 const motionPromptSendLocks = new Map();
 let chromeProcess = null;
 let showPipelineLog = false;
 const chatTitleStableChecks = new Map();
+const chatGptConversationIdentityCache = {
+  conversationId: '',
+  path: '',
+  title: '',
+  verifiedAt: 0,
+  lastCheckAt: 0,
+  invalidatedAt: 0,
+  forceAfterInvalidation: false,
+};
+app.setPath('userData', path.join(app.getPath('appData'), 'vidora'));
 const APP_LOG_FILE = path.join(app.getPath('userData'), 'ai-video-pipeline.log');
 const GROK_ROUTER_CHECKPOINT_FILE = path.join(app.getPath('userData'), 'grok-router-checkpoint.json');
-const HARD_PROMPT_FILE = path.resolve(__dirname, '..', '2 NHIỆM VỤ BẰNG PROMPT.txt');
+const HARD_PROMPT_FILENAME = '2 NHIỆM VỤ BẰNG PROMPT.txt';
+const HARD_PROMPT_DEFAULT_CONTENT = [
+  'NHIỆM VỤ 1:',
+  'Viết prompt tạo ảnh keyframe đầu scene dựa trên kịch bản, continuity, bối cảnh và yêu cầu hình ảnh của Vidora.',
+  '',
+  'NHIỆM VỤ 2:',
+  'Viết motion prompt video dựa trên keyframe đã tạo, giữ đúng hành động scene, không thêm chi tiết ngoài khung hình.',
+].join('\n');
 const GROK_ROUTER_ALLOWED_STATES = new Set(['available', 'active', 'cooldown', 'limited', 'login_required', 'invalid', 'disabled_by_user']);
 
 const GROKPROJ_SCHEMA_VERSION = 1;
@@ -62,6 +82,45 @@ function sanitizeProjectValue(value) {
     return clean;
   }
   if (typeof value === 'string') return value.replace(EMAIL_PATTERN, (email) => (/^\*+@|\*{2,}/.test(email) ? email : maskRouterText(email)));
+  return value;
+}
+
+const LOG_URL_PATTERN = /\b(?:https?:\/\/|blob:https?:\/\/)[^\s"'<>\\)]+/gi;
+
+function sanitizeLogString(value = '') {
+  return maskRouterText(String(value || '')
+    .replace(LOG_URL_PATTERN, (raw) => {
+      try {
+        const parsed = new URL(raw);
+        if (parsed.protocol === 'blob:') {
+          const origin = String(raw).match(/^blob:(https?:\/\/[^/]+)/i)?.[1] || 'blob:[redacted]';
+          return `blob:${origin}/...`;
+        }
+        const host = parsed.hostname.toLowerCase();
+        const safePath = parsed.pathname || '/';
+        if (host === 'grok.com' || host === 'chatgpt.com') return `${parsed.origin}${safePath}`;
+        return `${parsed.origin}/...`;
+      } catch (_error) {
+        return '[redacted-url]';
+      }
+    }));
+}
+
+function sanitizeLogValue(value, key = '') {
+  if (Array.isArray(value)) return value.map((item) => sanitizeLogValue(item, key));
+  if (value && typeof value === 'object') {
+    const clean = {};
+    for (const [key, child] of Object.entries(value)) {
+      if (SECRET_KEY_PATTERN.test(key)) continue;
+      clean[key] = sanitizeLogValue(child, key);
+    }
+    return clean;
+  }
+  if (typeof value === 'string') {
+    const clean = sanitizeLogString(value);
+    const max = /tail|sample|body|html|actual|expected|composer|prompt|snippet/i.test(key) ? 520 : 1400;
+    return clean.length > max ? `${clean.slice(0, max)}...` : clean;
+  }
   return value;
 }
 
@@ -274,6 +333,134 @@ function maskRouterText(value = '') {
     .replace(/(password|cookie|session[_-]?token|refresh[_-]?token|api[_-]?key)\s*[:=]\s*[^\s,;]+/gi, '$1=[redacted]');
 }
 
+function sanitizeChatTitleForLog(title = '') {
+  return maskRouterText(String(title || '').replace(/\s+/g, ' ').trim()).slice(0, 120);
+}
+
+function normalizeChatTitleValue(title = '') {
+  return String(title || '').replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+function getChatGptConversationIdFromPath(pathname = '') {
+  return String(pathname || '').match(/\/c\/([^/?#]+)/)?.[1] || '';
+}
+
+function isSameChatTitle(left = '', right = '') {
+  return normalizeChatTitleValue(left) === normalizeChatTitleValue(right);
+}
+
+async function getChatGptLocationState(page) {
+  return evaluateOnCdpPage(page, `(() => {
+    try {
+      const path = location.pathname || '';
+      const id = (path.match(/\\/c\\/([^/?#]+)/) || [])[1] || '';
+      return { ok: true, origin: location.origin, path, conversationId: id, title: document.title || '' };
+    } catch (error) {
+      return { ok: false, error: error && error.message ? error.message : String(error) };
+    }
+  })()`).catch((error) => ({ ok: false, error: error.message }));
+}
+
+async function invalidateChatGptConversationIdentity(reason = 'unknown') {
+  chatGptConversationIdentityCache.conversationId = '';
+  chatGptConversationIdentityCache.path = '';
+  chatGptConversationIdentityCache.title = '';
+  chatGptConversationIdentityCache.verifiedAt = 0;
+  chatGptConversationIdentityCache.lastCheckAt = 0;
+  chatGptConversationIdentityCache.invalidatedAt = Date.now();
+  chatGptConversationIdentityCache.forceAfterInvalidation = true;
+  await appendAppLog(null, { source: 'main', kind: 'running', text: `chatTitleCheck: cache invalidated reason=${reason}` });
+}
+
+function updateChatGptConversationIdentity(locationState = {}, title = '') {
+  const pathValue = String(locationState?.path || '');
+  const conversationId = locationState?.conversationId || getChatGptConversationIdFromPath(pathValue);
+  if (!conversationId) return;
+  chatGptConversationIdentityCache.conversationId = conversationId;
+  chatGptConversationIdentityCache.path = pathValue;
+  chatGptConversationIdentityCache.title = String(title || locationState.currentTitle || '').trim();
+  chatGptConversationIdentityCache.verifiedAt = Date.now();
+  chatGptConversationIdentityCache.forceAfterInvalidation = false;
+}
+
+async function maybeSelectChatGptConversationByTitle(page, title = '', { sceneId = '', force = false, reason = 'stage' } = {}) {
+  const wanted = String(title || '').trim();
+  if (!wanted) return { ok: true, skipped: true, reason: 'missing-title' };
+  const locationState = await getChatGptLocationState(page);
+  const currentId = locationState?.conversationId || getChatGptConversationIdFromPath(locationState?.path || '');
+  const cached = chatGptConversationIdentityCache;
+  if (!force && currentId && cached.conversationId && currentId !== cached.conversationId) {
+    await invalidateChatGptConversationIdentity('chatgpt-url-changed');
+  }
+  const sameCachedConversation = currentId && cached.conversationId === currentId && isSameChatTitle(cached.title, wanted);
+  if (!force && !cached.forceAfterInvalidation && sameCachedConversation) {
+    await appendAppLog(null, {
+      source: 'main',
+      kind: 'running',
+      text: 'chatTitleCheck: using cached conversation identity',
+      details: { sceneId, reason, path: locationState?.path || '', title: sanitizeChatTitleForLog(wanted), verifiedAgoMs: Date.now() - cached.verifiedAt },
+    });
+    return { ok: true, skipped: true, cached: true, title: wanted, location: locationState };
+  }
+  if (!force && cached.lastCheckAt && Date.now() - cached.lastCheckAt < CHAT_TITLE_CHECK_MIN_INTERVAL_MS && sameCachedConversation) {
+    await appendAppLog(null, {
+      source: 'main',
+      kind: 'running',
+      text: `chatTitleCheck: skipped reason=rate-limit-${reason}`,
+      details: { sceneId, path: locationState?.path || '', title: sanitizeChatTitleForLog(wanted), lastCheckAgoMs: Date.now() - cached.lastCheckAt },
+    });
+    return { ok: true, skipped: true, rateLimited: true, title: wanted, location: locationState };
+  }
+  if (force) {
+    await appendAppLog(null, { source: 'main', kind: 'running', text: `chatTitleCheck: forced reason=${reason}`, details: { sceneId, title: sanitizeChatTitleForLog(wanted) } });
+  }
+  cached.lastCheckAt = Date.now();
+  const selected = await selectChatGptConversationByTitle(page, wanted);
+  if (selected?.ok) {
+    const selectedLocation = selected.location || await getChatGptLocationState(page);
+    updateChatGptConversationIdentity(selectedLocation, wanted);
+    await appendAppLog(null, { source: 'main', kind: 'ok', text: `chatTitleCheck: verified title=${sanitizeChatTitleForLog(wanted)}`, details: { sceneId, reason, path: selectedLocation?.path || '', mode: selected.mode || '' } });
+  }
+  return selected;
+}
+
+async function maybeRenameChatGptCurrentConversationUntilTitle(page, title = '', options = {}) {
+  const wanted = String(title || '').trim();
+  if (!wanted) return { ok: false, error: 'missing-title' };
+  const locationState = await getChatGptLocationState(page);
+  const cached = chatGptConversationIdentityCache;
+  if (!options.force && locationState?.conversationId && cached.conversationId && locationState.conversationId !== cached.conversationId) {
+    await invalidateChatGptConversationIdentity('chatgpt-url-changed');
+  }
+  if (!options.force && locationState?.conversationId && cached.conversationId === locationState.conversationId && isSameChatTitle(cached.title, wanted)) {
+    await appendAppLog(null, {
+      source: 'main',
+      kind: 'running',
+      text: 'chatTitleCheck: using cached conversation identity',
+      details: { sceneId: options.sceneId || '', reason: options.reason || 'rename-skip', path: locationState.path || '', title: sanitizeChatTitleForLog(wanted) },
+    });
+    return { ok: true, skipped: true, cached: true, title: wanted, path: locationState.path };
+  }
+  if (!options.force && cached.lastCheckAt && Date.now() - cached.lastCheckAt < CHAT_TITLE_CHECK_MIN_INTERVAL_MS && locationState?.conversationId === cached.conversationId && isSameChatTitle(cached.title, wanted)) {
+    await appendAppLog(null, {
+      source: 'main',
+      kind: 'running',
+      text: `chatTitleCheck: skipped reason=rate-limit-${options.reason || 'rename'}`,
+      details: { sceneId: options.sceneId || '', path: locationState?.path || '', title: sanitizeChatTitleForLog(wanted), lastCheckAgoMs: Date.now() - cached.lastCheckAt },
+    });
+    return { ok: true, skipped: true, rateLimited: true, title: wanted, path: locationState?.path || '' };
+  }
+  if (options.force) await appendAppLog(null, { source: 'main', kind: 'running', text: `chatTitleCheck: forced reason=${options.reason || 'rename'}`, details: { sceneId: options.sceneId || '', title: sanitizeChatTitleForLog(wanted) } });
+  cached.lastCheckAt = Date.now();
+  const result = await renameChatGptCurrentConversationUntilTitle(page, wanted, options);
+  if (result?.ok) {
+    const verifiedLocation = await getChatGptLocationState(page);
+    updateChatGptConversationIdentity(verifiedLocation, wanted);
+    await appendAppLog(null, { source: 'main', kind: 'ok', text: `chatTitleCheck: verified title=${sanitizeChatTitleForLog(wanted)}`, details: { sceneId: options.sceneId || '', reason: options.reason || 'rename', path: verifiedLocation?.path || '' } });
+  }
+  return result;
+}
+
 function getSafeGrokAccounts() {
   return grokRouterState.accounts.map((account) => ({
     accountId: account.accountId,
@@ -395,8 +582,8 @@ async function appendAppLog(_event, entry = {}) {
     ts: new Date().toISOString(),
     source: entry.source || 'renderer',
     kind: entry.kind || 'info',
-    text: entry.text || '',
-    details: entry.details || null,
+    text: sanitizeLogString(entry.text || ''),
+    details: entry.details ? sanitizeLogValue(entry.details) : null,
   };
   const line = JSON.stringify(record);
   const terminalLine = `[VidoraLog][${record.source}][${record.kind}] ${record.text}${record.details ? ` ${JSON.stringify(record.details).slice(0, 2000)}` : ''}`;
@@ -419,15 +606,76 @@ async function getAppLogPath() {
   return APP_LOG_FILE;
 }
 
+function getUserPromptDir() {
+  return path.join(app.getPath('userData'), 'prompts');
+}
+
+function sanitizePromptSourcePathForLog(filePath = '') {
+  const value = String(filePath || '');
+  if (!value) return '';
+  return value.replace(/app\.asar(?:\.unpacked)?/gi, '[app-resource]');
+}
+
+async function findBundledPromptTemplate(filename = HARD_PROMPT_FILENAME) {
+  const candidates = [
+    path.join(process.resourcesPath || '', 'prompts', filename),
+    path.join(process.resourcesPath || '', filename),
+    path.join(process.resourcesPath || '', 'app.asar.unpacked', 'prompts', filename),
+    path.join(process.resourcesPath || '', 'app.asar.unpacked', filename),
+    path.resolve(__dirname, '..', 'prompts', filename),
+    path.resolve(__dirname, '..', filename),
+  ].filter(Boolean);
+  for (const candidate of candidates) {
+    if (candidate.includes('app.asar') && !candidate.includes('app.asar.unpacked')) continue;
+    if (await pathExists(candidate)) return candidate;
+  }
+  return '';
+}
+
+async function ensureUserPromptFile(filename = HARD_PROMPT_FILENAME) {
+  const userData = app.getPath('userData');
+  const promptDir = getUserPromptDir();
+  const targetPath = path.join(promptDir, filename);
+  await appendAppLog(null, { source: 'main', kind: 'info', text: `promptFile: userData=${userData}` });
+  await appendAppLog(null, { source: 'main', kind: 'info', text: `promptFile: promptDir=${promptDir}` });
+  try {
+    await fs.mkdir(promptDir, { recursive: true });
+    await appendAppLog(null, { source: 'main', kind: 'ok', text: 'promptFile: ensuredDir', details: { promptDir } });
+    if (await pathExists(targetPath)) return targetPath;
+    const bundled = await findBundledPromptTemplate(filename);
+    if (bundled) {
+      await fs.copyFile(bundled, targetPath);
+      await appendAppLog(null, {
+        source: 'main',
+        kind: 'ok',
+        text: `promptFile: copiedDefault from=${sanitizePromptSourcePathForLog(bundled)} to=${targetPath}`,
+      });
+      return targetPath;
+    }
+    await fs.writeFile(targetPath, HARD_PROMPT_DEFAULT_CONTENT, 'utf8');
+    await appendAppLog(null, { source: 'main', kind: 'ok', text: `promptFile: createdDefault file=${targetPath}` });
+    return targetPath;
+  } catch (error) {
+    throw new Error(`Cannot create/open editable prompt file at ${targetPath}: ${error.message}`);
+  }
+}
+
+async function resolveEditablePromptPath(filename = HARD_PROMPT_FILENAME) {
+  return ensureUserPromptFile(filename);
+}
+
 async function openHardPromptFile() {
-  await fs.access(HARD_PROMPT_FILE);
-  const error = await shell.openPath(HARD_PROMPT_FILE);
-  if (error) throw new Error(error);
-  return { ok: true, filePath: HARD_PROMPT_FILE };
+  const filePath = await resolveEditablePromptPath(HARD_PROMPT_FILENAME);
+  await appendAppLog(null, { source: 'main', kind: 'info', text: `promptFile: opening file=${filePath}` });
+  const error = await shell.openPath(filePath);
+  if (error) throw new Error(`Cannot open editable prompt file at ${filePath}: ${error}`);
+  return { ok: true, filePath };
 }
 
 async function loadHardPromptTasks() {
-  const content = await fs.readFile(HARD_PROMPT_FILE, 'utf8');
+  const filePath = await resolveEditablePromptPath(HARD_PROMPT_FILENAME);
+  await appendAppLog(null, { source: 'main', kind: 'info', text: `promptFile: reading file=${filePath}` });
+  const content = await fs.readFile(filePath, 'utf8');
   const task2Index = content.search(/NHIỆM\s*VỤ\s*2\s*:/i);
   if (task2Index < 0) return { task1: content.trim(), task2: content.trim() };
   const task1 = content.slice(0, task2Index).trim();
@@ -1365,22 +1613,24 @@ async function generateImageAndMotionWithChatGPT({ imagePrompt, sceneDir, sceneI
   const page = await getCdpPage('chatgpt', true);
   const loginState = await evaluateOnCdpPage(page, `(${detectLoginScript.toString()})('chatgpt')`);
   if (!loginState.loggedIn) {
+    await invalidateChatGptConversationIdentity('chatgpt-login-required');
     await page.close();
     throw new Error(loginRequiredMessage('chatgpt', loginState.reason || loginState.url || ''));
   }
   if (pendingChatRenameTitle?.trim() && !chatContextTitle?.trim()) {
+    await invalidateChatGptConversationIdentity('new-chat-requested');
     await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: pending chat mới, mở ChatGPT root trước khi gửi prompt. targetRename="${pendingChatRenameTitle}"` });
     await page.Page.navigate({ url: 'https://chatgpt.com/' }).catch((error) => appendAppLog(null, { source: 'main', kind: 'error', text: `Scene ${sceneId}: navigate ChatGPT root failed: ${error.message}` }));
     await waitForCdpLoad(page).catch(() => null);
     await sleep(1600);
   }
   if (chatContextTitle?.trim()) {
-    const selectedChat = await selectChatGptConversationByTitle(page, chatContextTitle.trim());
+    const selectedChat = await maybeSelectChatGptConversationByTitle(page, chatContextTitle.trim(), { sceneId, force: Boolean(pendingChatRenameTitle?.trim()), reason: pendingChatRenameTitle?.trim() ? 'explicit-rename-select' : 'initial-conversation-setup' });
     await appendAppLog(null, { source: 'main', kind: selectedChat?.ok ? 'ok' : 'error', text: `ChatGPT context: ${selectedChat?.ok ? `đã mở chat "${chatContextTitle}"` : selectedChat?.error || 'không tìm thấy chat'}`, details: selectedChat });
     if (!selectedChat?.ok) throw new Error(selectedChat?.error || `Không tìm thấy cuộc trò chuyện ChatGPT: ${chatContextTitle}`);
     if (pendingChatRenameTitle?.trim()) {
       await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: Option 2 đã mở chat cũ, rename ngay thành "${pendingChatRenameTitle.trim()}" trước khi gửi prompt.` });
-      const prePromptRename = await renameChatGptCurrentConversationUntilTitle(page, pendingChatRenameTitle.trim(), { sceneId, timeoutMs: 60000, waitForRecent: true }).catch((error) => ({ ok: false, error: error.message }));
+      const prePromptRename = await maybeRenameChatGptCurrentConversationUntilTitle(page, pendingChatRenameTitle.trim(), { sceneId, timeoutMs: 60000, waitForRecent: true, force: true, reason: 'explicit-pre-prompt-rename' }).catch((error) => ({ ok: false, error: error.message }));
       await appendAppLog(null, { source: 'main', kind: prePromptRename?.ok ? 'ok' : 'error', text: `Scene ${sceneId}: Option 2 pre-prompt rename ${prePromptRename?.ok ? 'ok' : prePromptRename?.error || 'failed/timeout'}`, details: prePromptRename });
     }
   }
@@ -1395,42 +1645,48 @@ async function generateImageAndMotionWithChatGPT({ imagePrompt, sceneDir, sceneI
   await appendAppLog(null, { source: 'main', kind: restoredFrames?.count ? 'ok' : 'running', text: `Scene ${sceneId}: đã add keyframe scene trước vào ChatGPT: ${restoredFrames?.count || 0} ảnh`, details: restoredFrames });
   await evaluateOnCdpPage(page, `(${prepareChatGptCreateImageScript.toString()})()`).catch(() => null);
   await sleep(800);
-  const sentImage = await sendPromptViaCdpInput(page, imageInstruction);
-  await appendAppLog(null, { source: 'main', kind: sentImage?.ok ? 'ok' : 'error', text: `Scene ${sceneId}: ChatGPT send image prompt ${sentImage?.ok ? 'ok' : sentImage?.error || 'failed'}`, details: sentImage });
-  if (!sentImage.ok) throw new Error(sentImage.error || 'Không gửi được image prompt vào ChatGPT.');
-  const earlyRenameTitle = pendingChatRenameTitle || chatContextTitle;
-  await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: earlyRenameTitle="${earlyRenameTitle || ''}"` });
-  if (earlyRenameTitle?.trim()) {
-    const renameStartedAt = Date.now();
-    let sawConversationPath = '';
-    while (Date.now() - renameStartedAt < 20000) {
-      const currentPath = await evaluateOnCdpPage(page, `location.pathname`).catch(() => '');
-      await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: ChatGPT rename poll path=${currentPath || '(empty)'}` });
-      if (String(currentPath || '').startsWith('/c/')) {
-        sawConversationPath = String(currentPath || '');
-        const recentsReady = await waitForChatGptRecentItem(page, sawConversationPath, sceneId);
-        await appendAppLog(null, { source: 'main', kind: recentsReady?.ok ? 'running' : 'error', text: `Scene ${sceneId}: Recents ready before rename: ${recentsReady?.ok ? recentsReady.text || recentsReady.mode : recentsReady?.error || 'not-ready'}`, details: recentsReady });
-        if (!recentsReady?.ok) break;
-        await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: ChatGPT conversation ready at ${sawConversationPath}, rename until title matches.` });
-        const renameResult = await renameChatGptCurrentConversationUntilTitle(page, earlyRenameTitle.trim(), { sceneId, timeoutMs: 60000, waitForRecent: false }).catch((error) => ({ ok: false, error: error.message }));
-        await appendAppLog(null, { source: 'main', kind: renameResult?.ok ? 'ok' : 'error', text: `Scene ${sceneId}: ChatGPT rename after first prompt ${renameResult?.ok ? 'ok' : renameResult?.error || 'failed/timeout'}`, details: renameResult });
-        break;
-      }
-      await sleep(1000);
-    }
-    if (!sawConversationPath) await appendAppLog(null, { source: 'main', kind: 'error', text: `Scene ${sceneId}: sau 20s vẫn chưa thấy ChatGPT URL /c/... để rename.` });
-  }
   const imagePath = path.join(sceneDir, `scene_${String(sceneId).padStart(3, '0')}_keyframe.png`);
-  await saveChatGPTGeneratedImageAsset(page, {
-    existingUrls: beforeImages?.urls || [],
-    minAssistantRootIndex: beforeAssistantRoots?.count || 0,
-    prompt: imageInstruction,
-    sceneDir,
-    sceneId,
-    outputPath: imagePath,
-  });
+  const imageNetworkCapture = startChatGptImageNetworkCapture(page, { sceneId });
+  try {
+    const sentImage = await sendPromptViaCdpInput(page, imageInstruction);
+    await appendAppLog(null, { source: 'main', kind: sentImage?.ok ? 'ok' : 'error', text: `Scene ${sceneId}: ChatGPT send image prompt ${sentImage?.ok ? 'ok' : sentImage?.error || 'failed'}`, details: sentImage });
+    if (!sentImage.ok) throw new Error(sentImage.error || 'Không gửi được image prompt vào ChatGPT.');
+    const earlyRenameTitle = pendingChatRenameTitle || chatContextTitle;
+    await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: earlyRenameTitle="${earlyRenameTitle || ''}"` });
+    if (earlyRenameTitle?.trim()) {
+      const renameStartedAt = Date.now();
+      let sawConversationPath = '';
+      while (Date.now() - renameStartedAt < 20000) {
+        const currentPath = await evaluateOnCdpPage(page, `location.pathname`).catch(() => '');
+        await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: ChatGPT rename poll path=${currentPath || '(empty)'}` });
+        if (String(currentPath || '').startsWith('/c/')) {
+          sawConversationPath = String(currentPath || '');
+          const recentsReady = await waitForChatGptRecentItem(page, sawConversationPath, sceneId);
+          await appendAppLog(null, { source: 'main', kind: recentsReady?.ok ? 'running' : 'error', text: `Scene ${sceneId}: Recents ready before rename: ${recentsReady?.ok ? recentsReady.text || recentsReady.mode : recentsReady?.error || 'not-ready'}`, details: recentsReady });
+          if (!recentsReady?.ok) break;
+          await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: ChatGPT conversation ready at ${sawConversationPath}, rename until title matches.` });
+          const renameResult = await maybeRenameChatGptCurrentConversationUntilTitle(page, earlyRenameTitle.trim(), { sceneId, timeoutMs: 60000, waitForRecent: false, force: true, reason: 'new-conversation-created' }).catch((error) => ({ ok: false, error: error.message }));
+          await appendAppLog(null, { source: 'main', kind: renameResult?.ok ? 'ok' : 'error', text: `Scene ${sceneId}: ChatGPT rename after first prompt ${renameResult?.ok ? 'ok' : renameResult?.error || 'failed/timeout'}`, details: renameResult });
+          break;
+        }
+        await sleep(1000);
+      }
+      if (!sawConversationPath) await appendAppLog(null, { source: 'main', kind: 'error', text: `Scene ${sceneId}: sau 20s vẫn chưa thấy ChatGPT URL /c/... để rename.` });
+    }
+    await saveChatGPTGeneratedImageAsset(page, {
+      existingUrls: beforeImages?.urls || [],
+      minAssistantRootIndex: beforeAssistantRoots?.count || 0,
+      prompt: imageInstruction,
+      sceneDir,
+      sceneId,
+      outputPath: imagePath,
+      networkCapture: imageNetworkCapture,
+    });
+  } finally {
+    imageNetworkCapture.stop();
+  }
   const renameTitle = pendingChatRenameTitle || chatContextTitle;
-  if (renameTitle?.trim()) await renameChatGptCurrentConversationUntilTitle(page, renameTitle.trim(), { sceneId, timeoutMs: 15000, waitForRecent: false }).catch(() => null);
+  if (renameTitle?.trim()) await maybeRenameChatGptCurrentConversationUntilTitle(page, renameTitle.trim(), { sceneId, timeoutMs: 15000, waitForRecent: false, reason: 'post-image-stage' }).catch(() => null);
 
   let generatedMotionPrompt = '';
 
@@ -1461,9 +1717,12 @@ async function generateMotionPromptWithChatGPT({ imagePath, prompt, sceneDir, sc
 async function generateMotionPromptWithChatGPTOnce({ imagePath, prompt, sceneDir, sceneId, chatContextTitle = '' }, lockInfo = {}) {
   const page = await getCdpPage('chatgpt', false, { bringToFront: true });
   const loginState = await evaluateOnCdpPage(page, `(${detectLoginScript.toString()})('chatgpt')`);
-  if (!loginState.loggedIn) throw new Error(loginRequiredMessage('chatgpt', loginState.reason || loginState.url || ''));
+  if (!loginState.loggedIn) {
+    await invalidateChatGptConversationIdentity('chatgpt-login-required');
+    throw new Error(loginRequiredMessage('chatgpt', loginState.reason || loginState.url || ''));
+  }
   if (chatContextTitle?.trim()) {
-    await selectChatGptConversationByTitle(page, chatContextTitle.trim()).catch(async (error) => {
+    await maybeSelectChatGptConversationByTitle(page, chatContextTitle.trim(), { sceneId, reason: 'motion-prompt-stage' }).catch(async (error) => {
       await appendAppLog(null, { source: 'main', kind: 'error', text: `ChatGPT không chọn được cuộc trò chuyện "${chatContextTitle}": ${error.message}` });
     });
   }
@@ -1556,6 +1815,107 @@ async function waitForGrokImagineReady(page, sceneId = '') {
   }
   await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: Grok load chậm, vẫn tiếp tục sau timeout 20s.`, details: lastState });
   return lastState;
+}
+
+function sanitizeGrokUrlForLog(value = '') {
+  try {
+    const parsed = new URL(String(value || ''));
+    return `${parsed.protocol}//${parsed.host}${parsed.pathname}`;
+  } catch (_error) {
+    return String(value || '').split(/[?#]/)[0].slice(0, 160);
+  }
+}
+
+function isGrokImagineAgentUrl(value = '') {
+  try {
+    const parsed = new URL(String(value || ''));
+    return parsed.hostname === 'grok.com' && (parsed.pathname === '/imagine/agent' || parsed.pathname.startsWith('/imagine/agent/'));
+  } catch (_error) {
+    return false;
+  }
+}
+
+async function getGrokRouteState(page) {
+  const state = await evaluateOnCdpPage(page, `(${getGrokRouteStateScript.toString()})()`).catch((error) => ({ ok: false, error: error.message }));
+  return {
+    ...state,
+    safeUrl: sanitizeGrokUrlForLog(state?.url || state?.safeUrl || ''),
+  };
+}
+
+async function waitForGrokImagineAgentReady(page, sceneId = '', options = {}) {
+  const timeoutMs = Number(options.timeoutMs || 45000);
+  const startedAt = Date.now();
+  let lastState = null;
+  while (Date.now() - startedAt < timeoutMs) {
+    lastState = await getGrokRouteState(page);
+    if (lastState?.route === 'imagine_agent_ready' && (!options.requireComposer || lastState.hasComposer || lastState.hasUploadTarget || lastState.hasSendButton)) {
+      await appendAppLog(null, { source: 'main', kind: 'ok', text: 'grokRoute: imagine agent ready', details: { sceneId, ...lastState } });
+      return lastState;
+    }
+    if (lastState?.route === 'normal_chat') {
+      await appendAppLog(null, { source: 'main', kind: 'error', text: 'grokRoute: blocked send because target was normal chat', details: { sceneId, ...lastState } });
+      return lastState;
+    }
+    if (lastState?.route === 'login_or_challenge') return lastState;
+    await sleep(1000);
+  }
+  return lastState || { ok: false, route: 'timeout', error: 'timeout-waiting-imagine-agent-ready' };
+}
+
+async function ensureGrokImagineAgentPage(page, sceneId = '', config = {}) {
+  await page.Page.bringToFront().catch(() => null);
+  let recovered = false;
+  let lastState = null;
+  for (let attempt = 1; attempt <= 4; attempt += 1) {
+    lastState = await getGrokRouteState(page);
+    await appendAppLog(null, { source: 'main', kind: 'running', text: `grokRoute: currentUrl=${lastState?.safeUrl || ''}`, details: { sceneId, attempt, ...lastState } });
+    if (lastState?.route === 'normal_chat') {
+      await appendAppLog(null, { source: 'main', kind: 'error', text: 'grokRoute: blocked send because target was normal chat', details: { sceneId, attempt, ...lastState } });
+    }
+    if (!isGrokImagineAgentUrl(lastState?.url || lastState?.safeUrl || '')) {
+      await appendAppLog(null, { source: 'main', kind: 'running', text: `grokRoute: navigating to ${GROK_IMAGINE_AGENT_URL}`, details: { sceneId, from: lastState?.safeUrl || '', route: lastState?.route || '' } });
+      await page.Page.navigate({ url: GROK_IMAGINE_AGENT_URL }).catch(() => null);
+      await waitForCdpLoad(page).catch(() => null);
+      await sleep(1500);
+      recovered = true;
+      continue;
+    }
+    if (lastState?.route === 'login_or_challenge') {
+      return { ok: false, error: 'Grok is showing login/security challenge before Imagine Agent could become ready.', state: lastState };
+    }
+    if (lastState?.route === 'imagine_agent_ready' && (lastState?.hasComposer || lastState?.hasUploadTarget || lastState?.hasSendButton)) {
+      if (recovered) await appendAppLog(null, { source: 'main', kind: 'ok', text: 'grokRoute: recovered to imagine agent', details: { sceneId, ...lastState } });
+      await appendAppLog(null, { source: 'main', kind: 'ok', text: 'grokRoute: imagine agent ready', details: { sceneId, ...lastState } });
+      return { ok: true, ...lastState };
+    }
+    const prepared = await evaluateOnCdpPage(page, `(${prepareGrokVideoComposerScript.toString()})(${JSON.stringify(config || {})})`).catch((error) => ({ ok: false, error: error.message }));
+    await appendAppLog(null, { source: 'main', kind: prepared?.ok ? 'running' : 'error', text: `grokRoute: prepare imagine agent ${prepared?.ok ? prepared.status || 'ok' : prepared?.status || prepared?.error || 'not-ready'}`, details: { sceneId, attempt, prepared } });
+    if (prepared?.emptyCanvasBox) {
+      const box = prepared.emptyCanvasBox;
+      const x = box.x + box.width / 2;
+      const y = box.y + box.height / 2;
+      await page.Input.dispatchMouseEvent({ type: 'mouseMoved', x, y, button: 'none' }).catch(() => null);
+      await page.Input.dispatchMouseEvent({ type: 'mousePressed', x, y, button: 'left', clickCount: 1 }).catch(() => null);
+      await page.Input.dispatchMouseEvent({ type: 'mouseReleased', x, y, button: 'left', clickCount: 1 }).catch(() => null);
+    }
+    await sleep(1400);
+    lastState = await waitForGrokImagineAgentReady(page, sceneId, { timeoutMs: 12000, requireComposer: false });
+    if (lastState?.route === 'imagine_agent_ready' && (lastState?.hasComposer || lastState?.hasUploadTarget || lastState?.hasSendButton)) {
+      if (recovered) await appendAppLog(null, { source: 'main', kind: 'ok', text: 'grokRoute: recovered to imagine agent', details: { sceneId, ...lastState } });
+      return { ok: true, ...lastState };
+    }
+  }
+  return { ok: false, error: 'Grok Imagine Agent UI was not ready.', state: lastState };
+}
+
+async function assertGrokImagineAgentReady(page, stage = 'send', sceneId = '') {
+  const state = await getGrokRouteState(page);
+  if (state?.route === 'imagine_agent_ready' && (state?.hasComposer || state?.hasUploadTarget || state?.hasWorkspace || state?.hasSendButton)) return { ok: true, state };
+  if (state?.route === 'normal_chat') {
+    await appendAppLog(null, { source: 'main', kind: 'error', text: 'grokRoute: blocked send because target was normal chat', details: { stage, sceneId, ...state } });
+  }
+  return { ok: false, error: `Grok route is not Imagine Agent ready before ${stage}.`, state };
 }
 
 async function closeGrokTemplateModal(page, sceneId = '') {
@@ -1654,10 +2014,11 @@ async function generateVideoWithGenericProvider({ provider, imagePath, motionPro
   }
 
   if (provider === 'grok') {
-    await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: Grok dùng luồng trực tiếp trong chat/image, không vào canvas.` });
-    await page.Page.navigate({ url: 'https://grok.com/' }).catch(() => null);
-    await waitForCdpLoad(page).catch(() => null);
-    await sleep(1200);
+    const route = await ensureGrokImagineAgentPage(page, sceneId, config);
+    if (!route?.ok) {
+      await page.close();
+      throw new Error(route?.error || 'Grok Imagine Agent is not ready.');
+    }
   }
 
   const capability = await evaluateOnCdpPage(page, `(${detectVideoCapabilityScript.toString()})(${JSON.stringify(provider)})`);
@@ -1670,11 +2031,13 @@ async function generateVideoWithGenericProvider({ provider, imagePath, motionPro
     await evaluateOnCdpPage(page, `(${preparePixVerseComposerScript.toString()})(${JSON.stringify(config)})`);
     await sleep(800);
   } else if (provider === 'grok') {
-    await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: bỏ qua canvas, chuẩn bị upload ảnh trực tiếp vào Grok.` });
+    const route = await ensureGrokImagineAgentPage(page, sceneId, config);
+    if (!route?.ok) throw new Error(route?.error || 'Grok Imagine Agent is not ready before upload.');
     await sleep(600);
   }
 
   await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: bắt đầu upload ảnh vào ${title}.`, details: { imagePath } });
+  if (provider === 'grok') await appendAppLog(null, { source: 'main', kind: 'running', text: 'grokMotionPrompt: uploading keyframe to imagine agent', details: { sceneId, imagePath: path.basename(imagePath || '') } });
   const uploadResult = await uploadFileViaCdp(page, imagePath, provider);
   if (!uploadResult.ok) {
     throw new Error(uploadResult.error || `Không upload được ảnh vào ${title}.`);
@@ -1688,21 +2051,39 @@ async function generateVideoWithGenericProvider({ provider, imagePath, motionPro
 
   const beforeVideos = await evaluateOnCdpPage(page, `(${collectVideoUrlsScript.toString()})()`);
   await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: bắt đầu paste prompt vào ${title}.` });
+  if (provider === 'grok') {
+    const route = await ensureGrokImagineAgentPage(page, sceneId, config);
+    if (!route?.ok) throw new Error(route?.error || 'Grok Imagine Agent is not ready before prompt send.');
+    const guard = await assertGrokImagineAgentReady(page, 'motion-prompt-send', sceneId);
+    if (!guard?.ok) throw new Error(guard?.error || 'Grok Imagine Agent route guard blocked send.');
+    await appendAppLog(null, { source: 'main', kind: 'running', text: 'grokMotionPrompt: pasting motion prompt to imagine agent', details: { sceneId, route: guard.state } });
+  }
   const sent = provider === 'pixverse'
     ? await submitPixVersePrompt(page, motionPrompt, config)
     : provider === 'grok'
-      ? await submitGrokVideoPrompt(page, motionPrompt, config)
+      ? await submitGrokVideoPrompt(page, motionPrompt, { ...config, sceneId, imagePath })
       : await sendPromptViaCdpInput(page, motionPrompt);
   if (!sent.ok) throw new Error(sent.error || `Không gửi được motion prompt vào ${title}.`);
+  if (provider === 'grok') await appendAppLog(null, { source: 'main', kind: 'ok', text: 'grokMotionPrompt: send started', details: { sceneId, sent } });
   await appendAppLog(null, { source: 'main', kind: 'ok', text: `Scene ${sceneId}: đã gửi prompt vào ${title}.`, details: sent });
   if (provider === 'grok') {
     const confirmed = await confirmGrokVideoGenerationIfAsked(page, sceneId);
     if (confirmed?.ok) {
       await appendAppLog(null, { source: 'main', kind: 'ok', text: `Scene ${sceneId}: Grok hỏi xác nhận, đã gửi lệnh tạo video.`, details: confirmed });
     }
+    const generationState = await evaluateOnCdpPage(page, `(${detectGrokGeneratingStateScript.toString()})({})`).catch(() => null);
+    await appendAppLog(null, { source: 'main', kind: 'ok', text: 'grokMotionPrompt: send completed or generation started', details: { sceneId, generating: Boolean(generationState?.generating), mode: generationState?.mode || '', confirmed } });
   }
 
-  const videoUrl = await waitForNewVideoUrl(page, beforeVideos?.urls || [], { provider, sceneId, sceneDir, imagePath, motionPrompt }).catch(() => '');
+  let videoUrl = '';
+  try {
+    videoUrl = await waitForNewVideoUrl(page, beforeVideos?.urls || [], { provider, sceneId, sceneDir, imagePath, motionPrompt });
+  } catch (error) {
+    if (/grok_send_failed_external_error/i.test(error.message || String(error))) {
+      await page.close();
+      throw error;
+    }
+  }
   if (!videoUrl) {
     await page.close();
     return { status: `${provider}-sent-await-manual-download` };
@@ -1792,6 +2173,197 @@ async function evaluateOnCdpPage(client, expression) {
     throw new Error(`${details.text || 'CDP evaluate lỗi'}: ${description}${location !== '::' ? ` @ ${location}` : ''}`);
   }
   return result.result?.value;
+}
+
+function sanitizeAssetUrlForLog(value = '') {
+  const url = String(value || '');
+  if (!url) return '';
+  if (url.startsWith('data:')) return `data:${url.slice(5, 32)}...`;
+  if (url.startsWith('blob:')) {
+    try {
+      const parsed = new URL(url);
+      return `blob:${parsed.origin}/...`;
+    } catch (_error) {
+      return 'blob:...';
+    }
+  }
+  try {
+    const parsed = new URL(url);
+    const pathPart = parsed.pathname.length > 90 ? `${parsed.pathname.slice(0, 90)}...` : parsed.pathname;
+    return `${parsed.protocol}//${parsed.host}${pathPart}`;
+  } catch (_error) {
+    return url.slice(0, 120);
+  }
+}
+
+function startChatGptImageNetworkCapture(client, context = {}) {
+  const startedAt = Date.now();
+  const requests = new Map();
+  const isLikelyImage = (response = {}) => {
+    const mime = String(response.mimeType || '').toLowerCase();
+    const url = String(response.url || '');
+    return mime.startsWith('image/') || /\.(png|jpe?g|webp)(?:[?#]|$)/i.test(url) || /oaiusercontent|oaidalleapiprodscus|openai/i.test(url);
+  };
+  const onResponse = (event = {}) => {
+    const response = event.response || {};
+    if (!event.requestId || !isLikelyImage(response)) return;
+    requests.set(event.requestId, {
+      requestId: event.requestId,
+      mimeType: response.mimeType || '',
+      status: response.status || 0,
+      url: response.url || '',
+      urlSafe: sanitizeAssetUrlForLog(response.url || ''),
+      responseAt: Date.now(),
+      encodedDataLength: 0,
+      finished: false,
+      sceneId: context.sceneId || '',
+    });
+  };
+  const onFinished = (event = {}) => {
+    const item = requests.get(event.requestId);
+    if (!item) return;
+    item.finished = true;
+    item.finishedAt = Date.now();
+    item.encodedDataLength = event.encodedDataLength || item.encodedDataLength || 0;
+  };
+  if (typeof client.on === 'function') {
+    client.on('Network.responseReceived', onResponse);
+    client.on('Network.loadingFinished', onFinished);
+  }
+  return {
+    startedAt,
+    candidates() {
+      return [...requests.values()]
+        .filter((item) => item.responseAt >= startedAt)
+        .sort((a, b) => (b.finishedAt || b.responseAt) - (a.finishedAt || a.responseAt));
+    },
+    summary() {
+      return this.candidates().slice(0, 12).map((item) => ({
+        requestId: item.requestId,
+        mimeType: item.mimeType,
+        status: item.status,
+        url: item.urlSafe,
+        encodedDataLength: item.encodedDataLength || 0,
+        finished: Boolean(item.finished),
+      }));
+    },
+    stop() {
+      if (typeof client.off === 'function') {
+        client.off('Network.responseReceived', onResponse);
+        client.off('Network.loadingFinished', onFinished);
+      } else if (typeof client.removeListener === 'function') {
+        client.removeListener('Network.responseReceived', onResponse);
+        client.removeListener('Network.loadingFinished', onFinished);
+      }
+    },
+  };
+}
+
+async function tryExtractChatGptNetworkImage(client, capture) {
+  if (!capture?.candidates) return { ok: false, mode: 'network-capture-unavailable' };
+  const candidates = capture.candidates().filter((item) => item.finished && /^image\/(png|jpe?g|webp)/i.test(item.mimeType || ''));
+  const rejected = [];
+  for (const item of candidates) {
+    try {
+      const body = await client.Network.getResponseBody({ requestId: item.requestId });
+      const base64 = body.base64Encoded ? body.body : Buffer.from(body.body || '', 'utf8').toString('base64');
+      const buffer = Buffer.from(base64 || '', 'base64');
+      const decoded = decodeImageBufferToPng(buffer, item.mimeType || 'image/png');
+      return {
+        ok: true,
+        base64,
+        contentType: item.mimeType || 'image/png',
+        byteLength: buffer.length,
+        width: decoded.width,
+        height: decoded.height,
+        method: 'network',
+        sourceKind: 'cdp-network-response',
+        rootIndex: null,
+        requestId: item.requestId,
+        urlSafe: item.urlSafe,
+      };
+    } catch (error) {
+      rejected.push({ requestId: item.requestId, url: item.urlSafe, reason: error.message });
+    }
+  }
+  return { ok: false, mode: 'no-valid-network-image', candidateCount: candidates.length, rejected: rejected.slice(0, 8) };
+}
+
+function chatGptImageCandidateSignature(candidate = {}) {
+  return [
+    candidate.method || candidate.sourceKind || '',
+    candidate.rootIndex ?? '',
+    candidate.width || 0,
+    candidate.height || 0,
+    candidate.byteLength || 0,
+    candidate.requestId || '',
+  ].join('|');
+}
+
+function countVisibleChatGptImageCandidates(diagnostics = {}) {
+  const items = Array.isArray(diagnostics.imageCandidates) ? diagnostics.imageCandidates : [];
+  return items.filter((item) => {
+    if (!item?.visible) return false;
+    const box = item.box || {};
+    const boxOk = Number(box.width || box.clientWidth || 0) >= 128 && Number(box.height || box.clientHeight || 0) >= 128;
+    const naturalOk = Number(item.naturalWidth || item.width || 0) >= 256 && Number(item.naturalHeight || item.height || 0) >= 256;
+    return boxOk || naturalOk;
+  }).length;
+}
+
+function hasVisibleChatGptImageCandidate(extracted = {}) {
+  return Boolean(extracted?.screenshotCandidate) || countVisibleChatGptImageCandidates(extracted?.diagnostics) > 0;
+}
+
+function isChatGptActivelyGenerating(snapshot = {}) {
+  return Boolean(snapshot?.stopButtonVisible || snapshot?.composerBusy || snapshot?.streamingIndicator || snapshot?.preparingImage);
+}
+
+function classifyChatGptImageReadiness({ chosen, extracted, snapshot, elapsedMs = 0, stallMs = 120000 } = {}) {
+  const visibleCandidate = hasVisibleChatGptImageCandidate(extracted) || (Array.isArray(snapshot?.urls) && snapshot.urls.length > 0);
+  const activeGeneration = isChatGptActivelyGenerating(snapshot);
+  if (chosen?.ok) return { state: 'image_extractable', visibleCandidate, activeGeneration };
+  if (visibleCandidate) return { state: 'image_visible_but_not_extractable', visibleCandidate, activeGeneration };
+  if (activeGeneration) return { state: 'still_generating', visibleCandidate, activeGeneration };
+  if (elapsedMs >= stallMs) return { state: 'real_stall', visibleCandidate, activeGeneration };
+  return { state: 'no_candidate_yet', visibleCandidate, activeGeneration };
+}
+
+async function captureChatGptImageElementScreenshot(client, candidate = {}, context = {}) {
+  if (!candidate.elementId) return { ok: false, mode: 'missing-element-id' };
+  const target = await evaluateOnCdpPage(client, `(${getChatGptImageCandidateBoxScript.toString()})(${JSON.stringify(candidate.elementId)})`).catch((error) => ({ ok: false, error: error.message }));
+  if (!target?.ok) return { ok: false, mode: 'element-box-unavailable', error: target?.error || 'missing element' };
+  const screenshot = await client.Page.captureScreenshot({
+    format: 'png',
+    clip: {
+      x: Math.max(0, target.box.x),
+      y: Math.max(0, target.box.y),
+      width: Math.max(1, target.box.width),
+      height: Math.max(1, target.box.height),
+      scale: 1,
+    },
+    captureBeyondViewport: true,
+  });
+  const buffer = Buffer.from(screenshot.data || '', 'base64');
+  const decoded = decodeImageBufferToPng(buffer, 'image/png');
+  await appendAppLog(null, {
+    source: 'main',
+    kind: 'running',
+    text: 'chatgptImageExtract: saved image via method=element-screenshot-fallback',
+    details: { sceneId: context.sceneId || '', method: 'element-screenshot-fallback', type: candidate.type || '', rootIndex: candidate.rootIndex, width: decoded.width, height: decoded.height, byteLength: buffer.length },
+  });
+  return {
+    ok: true,
+    base64: buffer.toString('base64'),
+    contentType: 'image/png',
+    byteLength: buffer.length,
+    width: decoded.width,
+    height: decoded.height,
+    method: 'element-screenshot-fallback',
+    sourceKind: `element-${candidate.type || 'candidate'}`,
+    rootIndex: candidate.rootIndex,
+    elementId: candidate.elementId,
+  };
 }
 
 function shouldRecoverFromCacheOrChallenge(state, provider) {
@@ -1907,6 +2479,170 @@ async function waitForGrokUploadSettled(page, sceneId = '') {
   return { ok: false, sceneId, error: 'timeout-waiting-upload-settled' };
 }
 
+function summarizeGrokSendState(state = {}) {
+  return {
+    route: state.route || '',
+    safeUrl: sanitizeGrokUrlForLog(state.safeUrl || state.url || ''),
+    attachmentReady: Boolean(state.attachmentReady),
+    promptReady: Boolean(state.promptReady),
+    promptStable: Boolean(state.promptStable),
+    sendButtonEnabled: Boolean(state.sendButtonEnabled),
+    uploadProgress: Boolean(state.uploading),
+    pageBusy: Boolean(state.pageBusy),
+    errorVisible: Boolean(state.sendErrorVisible),
+    retryAvailable: Boolean(state.retryAvailable),
+    messageBubbleExists: Boolean(state.messageBubbleExists),
+    blockingReason: state.blockingReason || '',
+    failedReasons: state.failedReasons || [],
+    counts: state.counts || {},
+  };
+}
+
+async function logGrokSendPreflight(sceneId = '', state = {}, kind = 'running') {
+  const summary = summarizeGrokSendState(state);
+  await appendAppLog(null, { source: 'main', kind, text: `grokSend: preflight route=${summary.route || 'unknown'}`, details: { sceneId, ...summary } });
+  await appendAppLog(null, { source: 'main', kind, text: `grokSend: attachmentReady=${summary.attachmentReady}`, details: { sceneId, attachmentReady: summary.attachmentReady, counts: summary.counts } });
+  await appendAppLog(null, { source: 'main', kind, text: `grokSend: promptReady=${summary.promptReady}`, details: { sceneId, promptReady: summary.promptReady, promptStable: summary.promptStable, messageBubbleExists: summary.messageBubbleExists } });
+  await appendAppLog(null, { source: 'main', kind, text: `grokSend: sendButtonEnabled=${summary.sendButtonEnabled}`, details: { sceneId, sendButtonEnabled: summary.sendButtonEnabled, blockingReason: summary.blockingReason, failedReasons: summary.failedReasons } });
+}
+
+async function waitForGrokSendPreflight(client, prompt, options = {}) {
+  const sceneId = options.sceneId || '';
+  const requireAttachment = options.requireAttachment !== false;
+  const timeoutMs = Number(options.timeoutMs || 35000);
+  const started = Date.now();
+  let last = null;
+  let lastFingerprint = '';
+  let stableTicks = 0;
+  while (Date.now() - started < timeoutMs) {
+    last = await evaluateOnCdpPage(client, `(${getGrokSendPreflightScript.toString()})(${JSON.stringify(prompt || '')}, ${JSON.stringify({ requireAttachment })})`).catch((error) => ({ ok: false, error: error.message }));
+    const fingerprint = String(last?.composerFingerprint || '');
+    if (last?.promptReady && fingerprint && fingerprint === lastFingerprint) stableTicks += 1;
+    else stableTicks = last?.promptReady ? 1 : 0;
+    lastFingerprint = fingerprint;
+    last = { ...last, promptStable: stableTicks >= 2 };
+    const ready = last?.route === 'imagine_agent_ready'
+      && last.promptReady
+      && last.promptStable
+      && (!requireAttachment || last.attachmentReady)
+      && last.sendButtonEnabled
+      && !last.uploading
+      && !last.pageBusy
+      && !last.blockingModal
+      && !last.sendErrorVisible
+      && !last.loginOrChallenge
+      && !last.normalChatTarget;
+    if (ready) {
+      await logGrokSendPreflight(sceneId, last, 'ok');
+      return { ok: true, state: last };
+    }
+    if (last?.normalChatTarget || last?.loginOrChallenge || last?.rateLimit || last?.safetyBlock) {
+      await logGrokSendPreflight(sceneId, last, 'error');
+      await appendAppLog(null, { source: 'main', kind: 'error', text: `grokSend: blocked send reason=${last.blockingReason || 'unsafe-route-or-modal'}`, details: { sceneId, state: summarizeGrokSendState(last) } });
+      return { ok: false, error: last.blockingReason || 'Grok send preflight blocked.', state: last };
+    }
+    await sleep(1200);
+  }
+  await logGrokSendPreflight(sceneId, last || {}, 'error');
+  await appendAppLog(null, { source: 'main', kind: 'error', text: `grokSend: blocked send reason=${last?.blockingReason || last?.failedReasons?.[0] || 'preflight-timeout'}`, details: { sceneId, state: summarizeGrokSendState(last || {}) } });
+  return { ok: false, error: last?.blockingReason || last?.failedReasons?.join(', ') || 'Grok send preflight timed out.', state: last };
+}
+
+async function clickGrokSendButtonOnce(client, sceneId = '') {
+  const clicked = await evaluateOnCdpPage(client, `(${clickGrokGenerateScript.toString()})()`).catch((error) => ({ ok: false, error: error.message }));
+  if (clicked?.ok && clicked.box) {
+    const x = clicked.box.x + clicked.box.width / 2;
+    const y = clicked.box.y + clicked.box.height / 2;
+    await client.Input.dispatchMouseEvent({ type: 'mouseMoved', x, y, button: 'none' }).catch(() => null);
+    await client.Input.dispatchMouseEvent({ type: 'mousePressed', x, y, button: 'left', clickCount: 1 }).catch(() => null);
+    await client.Input.dispatchMouseEvent({ type: 'mouseReleased', x, y, button: 'left', clickCount: 1 }).catch(() => null);
+    await appendAppLog(null, { source: 'main', kind: 'running', text: 'grokSend: clicked send', details: { sceneId, clicked } });
+    return { ok: true, clicked };
+  }
+  await appendAppLog(null, { source: 'main', kind: 'error', text: `grokSend: blocked send reason=${clicked?.error || 'send-button-missing'}`, details: { sceneId, clicked } });
+  return { ok: false, error: clicked?.error || 'Grok send button missing.', clicked };
+}
+
+async function waitForGrokSendOutcome(client, beforeSubmitState = {}, options = {}) {
+  const sceneId = options.sceneId || '';
+  const started = Date.now();
+  const timeoutMs = Number(options.timeoutMs || 24000);
+  let lastGenerating = null;
+  let lastProblem = null;
+  while (Date.now() - started < timeoutMs) {
+    await sleep(1800);
+    lastGenerating = await evaluateOnCdpPage(client, `(${detectGrokGeneratingStateScript.toString()})(${JSON.stringify(beforeSubmitState || {})})`).catch(() => null);
+    if (lastGenerating?.generating) {
+      await appendAppLog(null, { source: 'main', kind: 'ok', text: 'grokSend: generation started', details: { sceneId, mode: lastGenerating.mode || '', state: lastGenerating } });
+      return { ok: true, mode: lastGenerating.mode || 'generation-started', generating: lastGenerating };
+    }
+    lastProblem = await evaluateOnCdpPage(client, `(${detectGrokGenerationProblemScript.toString()})()`).catch((error) => ({ ok: false, error: error.message }));
+    if (lastProblem?.kind === 'send-failed' || lastProblem?.kind === 'unable-finish') {
+      await appendAppLog(null, { source: 'main', kind: 'error', text: `grokSend: detected error="${lastProblem.kind === 'send-failed' ? "couldn't send message" : 'unable to finish replying'}"`, details: { sceneId, problem: lastProblem } });
+      await appendAppLog(null, { source: 'main', kind: 'running', text: `grokSend: retry available=${Boolean(lastProblem.hasRetry)}`, details: { sceneId, hasRetry: Boolean(lastProblem.hasRetry), retryText: lastProblem.retryText || '' } });
+      return { ok: false, retryable: true, reason: lastProblem.kind, problem: lastProblem, generating: lastGenerating };
+    }
+    if (lastProblem?.kind === 'login-required' || lastProblem?.kind === 'limit' || lastProblem?.kind === 'content-policy') {
+      return { ok: false, retryable: false, reason: lastProblem.kind, problem: lastProblem, generating: lastGenerating };
+    }
+  }
+  return { ok: false, retryable: false, reason: 'no-generation-start', problem: lastProblem, generating: lastGenerating };
+}
+
+async function retryGrokSendFailure(client, prompt, options = {}, firstOutcome = {}) {
+  const sceneId = options.sceneId || '';
+  let outcome = firstOutcome;
+  for (let attempt = 1; attempt <= GROK_SEND_RETRY_LIMIT; attempt += 1) {
+    if (!outcome?.retryable) break;
+    await appendAppLog(null, { source: 'main', kind: 'running', text: 'grokSendRetry: detected retryable error', details: { sceneId, reason: outcome.reason || '', attempt } });
+    await appendAppLog(null, { source: 'main', kind: 'running', text: `grokSendRetry: retry attempt=${attempt}/${GROK_SEND_RETRY_LIMIT}`, details: { sceneId, reason: outcome.reason || '' } });
+    const route = await ensureGrokImagineAgentPage(client, sceneId, options.config || {});
+    if (!route?.ok) {
+      await appendAppLog(null, { source: 'main', kind: 'error', text: `grokSendRetry: failed reason=${route?.error || 'route-not-ready'}`, details: { sceneId, route } });
+      return { ok: false, error: route?.error || 'Grok Imagine Agent route lost during retry.', outcome };
+    }
+    await appendAppLog(null, { source: 'main', kind: 'running', text: 'grokSendRetry: verifying prompt and attachment before retry', details: { sceneId } });
+    const retryState = await evaluateOnCdpPage(client, `(${detectGrokGenerationProblemScript.toString()})()`).catch(() => outcome.problem || null);
+    let preflight = await evaluateOnCdpPage(client, `(${getGrokSendPreflightScript.toString()})(${JSON.stringify(prompt || '')}, ${JSON.stringify({ requireAttachment: true })})`).catch((error) => ({ ok: false, error: error.message }));
+    if (options.imagePath && !preflight?.attachmentReady) {
+      const upload = await uploadFileViaCdp(client, options.imagePath, 'grok').catch((error) => ({ ok: false, error: error.message }));
+      await appendAppLog(null, { source: 'main', kind: upload?.ok ? 'ok' : 'error', text: `grokSendRetry: reupload keyframe ${upload?.ok ? 'ok' : upload?.error || 'failed'}`, details: { sceneId, upload } });
+      preflight = await evaluateOnCdpPage(client, `(${getGrokSendPreflightScript.toString()})(${JSON.stringify(prompt || '')}, ${JSON.stringify({ requireAttachment: true })})`).catch(() => preflight);
+    }
+    if (!retryState?.hasRetry && !preflight?.promptReady && !preflight?.messageBubbleExists) {
+      const domSet = await evaluateOnCdpPage(client, `(${setGrokComposerTextScript.toString()})(${JSON.stringify(prompt || '')})`).catch((error) => ({ ok: false, error: error.message }));
+      await appendAppLog(null, { source: 'main', kind: domSet?.ok ? 'ok' : 'error', text: `grokSendRetry: restored prompt ${domSet?.ok ? 'ok' : domSet?.error || 'failed'}`, details: { sceneId, domSet } });
+    }
+    await sleep(1200 * attempt);
+    if (retryState?.hasRetry) {
+      const clickedRetry = await clickGrokRetryButton(client, retryState).catch((error) => ({ ok: false, error: error.message }));
+      await appendAppLog(null, { source: 'main', kind: clickedRetry?.ok ? 'running' : 'error', text: `grokSend: retry clicked${clickedRetry?.ok ? '' : ` failed=${clickedRetry?.error || ''}`}`, details: { sceneId, attempt, clickedRetry } });
+      if (!clickedRetry?.ok) {
+        outcome = { ok: false, retryable: false, reason: clickedRetry?.error || 'retry-click-failed', problem: retryState };
+        break;
+      }
+    } else {
+      const ready = await waitForGrokSendPreflight(client, prompt, { sceneId, requireAttachment: true, timeoutMs: 15000 });
+      if (!ready?.ok) {
+        outcome = { ok: false, retryable: false, reason: ready?.error || 'retry-preflight-failed', problem: ready?.state };
+        break;
+      }
+      const clicked = await clickGrokSendButtonOnce(client, sceneId);
+      if (!clicked?.ok) {
+        outcome = { ok: false, retryable: false, reason: clicked.error || 'retry-send-click-failed', problem: clicked };
+        break;
+      }
+    }
+    outcome = await waitForGrokSendOutcome(client, {}, { sceneId, timeoutMs: 26000 });
+    if (outcome?.ok) {
+      await appendAppLog(null, { source: 'main', kind: 'ok', text: 'grokSendRetry: success, generation started', details: { sceneId, attempt, outcome } });
+      return { ok: true, retryAttempt: attempt, outcome };
+    }
+  }
+  await appendAppLog(null, { source: 'main', kind: 'error', text: `grokSendRetry: failed reason=${outcome?.reason || 'grok_send_failed_external_error'}`, details: { sceneId, outcome } });
+  return { ok: false, error: 'grok_send_failed_external_error', outcome };
+}
+
 async function clearGrokCanvasSelection(page) {
   await page.Input.dispatchKeyEvent({ type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27 }).catch(() => null);
   await page.Input.dispatchKeyEvent({ type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27 }).catch(() => null);
@@ -1931,7 +2667,7 @@ async function recoverGrokAfterContentPolicy(page, options = {}) {
     return { ok: true, mode: 'new-canvas-safe-retry', safePromptHead: safePrompt.slice(0, 240) };
   }
   await clearGrokCanvasChat(page, sceneId);
-  const sent = await submitGrokVideoPrompt(page, safePrompt, {});
+  const sent = await submitGrokVideoPrompt(page, safePrompt, { sceneId, imagePath: options.imagePath });
   if (!sent?.ok) throw new Error(sent?.error || 'Không gửi lại safe prompt sau content policy.');
   const confirmed = await confirmGrokVideoGenerationIfAsked(page, sceneId);
   return { ok: true, mode: 'same-canvas-safe-retry', sent, confirmed, safePromptHead: safePrompt.slice(0, 240) };
@@ -1947,7 +2683,7 @@ async function recoverGrokCanvasAfterLimit(page, options = {}) {
   const uploadCurrent = await uploadFileViaCdp(page, options.imagePath, 'grok');
   if (!uploadCurrent?.ok) throw new Error(uploadCurrent?.error || 'Không upload lại keyframe scene hiện tại sau limit.');
   const beforeVideos = await evaluateOnCdpPage(page, `(${collectVideoUrlsScript.toString()})()`).catch(() => ({ urls: [] }));
-  const sent = await submitGrokVideoPrompt(page, options.motionPrompt, {});
+  const sent = await submitGrokVideoPrompt(page, options.motionPrompt, { sceneId, imagePath: options.imagePath });
   if (!sent?.ok) throw new Error(sent?.error || 'Không gửi lại motion prompt sau limit.');
   const confirmed = await confirmGrokVideoGenerationIfAsked(page, sceneId);
   return { ok: true, videos, keyframes, uploadCurrent, beforeVideos, sent, confirmed };
@@ -2243,6 +2979,7 @@ async function saveChatGPTGeneratedImageAsset(client, options = {}) {
       height: validation.height,
       byteLength: validation.byteLength,
       contentType: imageAsset.contentType || '',
+      method: imageAsset.method || '',
       sourceKind: imageAsset.sourceKind || '',
       rootIndex: imageAsset.rootIndex,
     },
@@ -2253,10 +2990,20 @@ async function saveChatGPTGeneratedImageAsset(client, options = {}) {
 async function waitForLatestChatGPTGeneratedImage(client, options = {}) {
   const known = new Set(options.existingUrls || []);
   const maxAttempts = 3;
-  const thinkingStallMs = 120000;
+  const realStallMs = 120000;
   const minAssistantRootIndex = Number(options.minAssistantRootIndex || 0);
   let lastSnapshot = null;
   let lastExtract = null;
+  let lastSignature = '';
+  let stableTicks = 0;
+  let lastDiagnostic = null;
+  let lastReadiness = { state: 'no_candidate_yet' };
+  await appendAppLog(null, {
+    source: 'main',
+    kind: 'running',
+    text: `chatgptImageExtract: waiting for latest assistant image for scene ${options.sceneId || ''}`,
+    details: { minAssistantRootIndex, existingUrlCount: known.size },
+  });
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     const attemptStartedAt = Date.now();
     let sawGenerating = false;
@@ -2291,12 +3038,105 @@ async function waitForLatestChatGPTGeneratedImage(client, options = {}) {
         minAssistantRootIndex,
       }).catch((error) => ({ ok: false, error: error.message, mode: 'extract-error' }));
       lastExtract = extracted;
-      if (extracted?.ok) return extracted;
+      if (extracted?.diagnostics) lastDiagnostic = extracted.diagnostics;
 
       const snapshot = await evaluateOnCdpPage(client, `(${readChatGptImageStateScript.toString()})()`);
       lastSnapshot = snapshot;
       if (snapshot?.loggedOut) throw new Error(loginRequiredMessage('chatgpt', snapshot.logoutReason || 'ChatGPT logged out while waiting for NV1 image'));
-      if (snapshot?.generating || snapshot?.preparingImage) {
+      const activeGeneration = isChatGptActivelyGenerating(snapshot);
+      const hasNewAssistantAfterPrompt = Number(snapshot?.assistantCount || 0) > minAssistantRootIndex;
+      const scopedSnapshot = hasNewAssistantAfterPrompt ? snapshot : { ...snapshot, urls: [] };
+      const visibleCandidate = hasVisibleChatGptImageCandidate(extracted) || (Array.isArray(scopedSnapshot?.urls) && scopedSnapshot.urls.length > 0);
+      const networkExtract = !extracted?.ok && (!activeGeneration || visibleCandidate)
+        ? await tryExtractChatGptNetworkImage(client, options.networkCapture).catch((error) => ({ ok: false, mode: 'network-error', error: error.message }))
+        : null;
+      const screenshotExtract = !activeGeneration && !extracted?.ok && !networkExtract?.ok && extracted?.screenshotCandidate
+        ? await captureChatGptImageElementScreenshot(client, extracted.screenshotCandidate, { sceneId: options.sceneId }).catch((error) => ({ ok: false, mode: 'element-screenshot-error', error: error.message }))
+        : null;
+      const chosen = extracted?.ok ? extracted : networkExtract?.ok ? networkExtract : screenshotExtract?.ok ? screenshotExtract : null;
+      const readiness = classifyChatGptImageReadiness({
+        chosen,
+        extracted,
+        snapshot: scopedSnapshot,
+        elapsedMs: Date.now() - attemptStartedAt,
+        stallMs: realStallMs,
+      });
+      lastReadiness = readiness;
+      if (chosen?.ok) {
+        const signature = chatGptImageCandidateSignature(chosen);
+        if (signature && signature === lastSignature) stableTicks += 1;
+        else {
+          lastSignature = signature;
+          stableTicks = 1;
+        }
+        await appendAppLog(null, {
+          source: 'main',
+          kind: stableTicks >= 2 ? 'ok' : 'running',
+          text: `chatgptImageExtract: found candidate type=${chosen.method || chosen.sourceKind || 'image'} stable=${stableTicks}/2`,
+          details: {
+            method: chosen.method || '',
+            sourceKind: chosen.sourceKind || '',
+            width: chosen.width || 0,
+            height: chosen.height || 0,
+            byteLength: chosen.byteLength || 0,
+            rootIndex: chosen.rootIndex,
+            requestId: chosen.requestId || '',
+            readinessState: readiness.state,
+          },
+        });
+        if (stableTicks >= 2) {
+          if (readiness.visibleCandidate) {
+            await appendAppLog(null, {
+              source: 'main',
+              kind: 'ok',
+              text: 'chatgptImageExtract: visible image detected; suppressing thinking-stall',
+              details: { sceneId: options.sceneId || '', readinessState: readiness.state, activeGeneration: readiness.activeGeneration },
+            });
+          }
+          await appendAppLog(null, {
+            source: 'main',
+            kind: 'ok',
+            text: `chatgptImageExtract: saved image via method=${chosen.method || chosen.sourceKind || 'unknown'} for scene ${options.sceneId || ''}`,
+            details: { width: chosen.width || 0, height: chosen.height || 0, byteLength: chosen.byteLength || 0, rootIndex: chosen.rootIndex },
+          });
+          return chosen;
+        }
+        continue;
+      }
+      if (readiness.state === 'image_visible_but_not_extractable') {
+        sawGenerating = true;
+        readyTicks = 0;
+        if (Date.now() - lastLogAt > 10000) {
+          lastLogAt = Date.now();
+          await appendAppLog(null, {
+            source: 'main',
+            kind: 'running',
+            text: 'chatgptImageExtract: visible image detected; suppressing thinking-stall',
+            details: {
+              sceneId: options.sceneId || '',
+              readinessState: readiness.state,
+              diagnostic: { ...(lastDiagnostic || {}), reasonSelected: readiness.state },
+              extractMode: extracted?.mode || '',
+              extractError: extracted?.error || '',
+              network: networkExtract,
+              screenshot: screenshotExtract,
+            },
+          });
+          await appendAppLog(null, {
+            source: 'main',
+            kind: 'error',
+            text: 'chatgptImageExtract: image visible but extraction failed',
+            details: {
+              sceneId: options.sceneId || '',
+              rejected: extracted?.diagnostics?.rejected?.slice?.(0, 8) || [],
+              imageCandidates: extracted?.diagnostics?.imageCandidates?.slice?.(0, 8) || [],
+              networkCandidates: options.networkCapture?.summary?.() || [],
+            },
+          });
+        }
+        continue;
+      }
+      if (readiness.state === 'still_generating') {
         sawGenerating = true;
         readyTicks = 0;
         if (Date.now() - lastLogAt > 15000) {
@@ -2311,13 +3151,13 @@ async function waitForLatestChatGPTGeneratedImage(client, options = {}) {
               assistantCount: snapshot?.assistantCount || 0,
               extractMode: extracted?.mode || '',
               extractError: extracted?.error || '',
+              rejected: extracted?.diagnostics?.rejected?.slice?.(0, 4) || [],
+              imageCandidates: extracted?.diagnostics?.imageCandidates?.slice?.(0, 4) || [],
+              networkCandidates: options.networkCapture?.summary?.() || [],
+              readinessState: readiness.state,
               elapsedMs: Date.now() - attemptStartedAt,
             },
           });
-        }
-        if (!snapshot?.preparingImage && Date.now() - attemptStartedAt > thinkingStallMs) {
-          await resendImagePrompt('thinking-stall', snapshot);
-          break;
         }
         continue;
       }
@@ -2328,6 +3168,26 @@ async function waitForLatestChatGPTGeneratedImage(client, options = {}) {
         && !/preparing image|creating image|generating image|Ä‘ang táº¡o áº£nh|thinking/i.test(String(snapshot?.latestAssistantText || ''))
         && !looksLikeCollapsedUserPrompt(snapshot?.latestAssistantText, 'image');
       if (composerLooksReady) readyTicks += 1;
+      if (Date.now() - lastLogAt > 15000) {
+        lastLogAt = Date.now();
+        await appendAppLog(null, {
+          source: 'main',
+          kind: 'running',
+          text: `chatgptImageExtract: candidate rejected reason=${extracted?.mode || networkExtract?.mode || screenshotExtract?.mode || 'not-ready'}`,
+          details: {
+            sceneId: options.sceneId || '',
+            diagnostic: { ...(lastDiagnostic || {}), reasonSelected: readiness.state },
+            network: networkExtract,
+            screenshot: screenshotExtract,
+            networkCandidates: options.networkCapture?.summary?.() || [],
+            readinessState: readiness.state,
+          },
+        });
+      }
+      if (readiness.state === 'real_stall') {
+        await resendImagePrompt('real_stall', snapshot);
+        break;
+      }
       if ((sawGenerating && composerLooksReady && readyTicks >= 4) || textOnlyAnswer) {
         await resendImagePrompt(textOnlyAnswer ? 'text-only-answer' : 'no-usable-image-asset-after-generating', snapshot);
         break;
@@ -2337,9 +3197,15 @@ async function waitForLatestChatGPTGeneratedImage(client, options = {}) {
   }
   await fs.writeFile(
     path.join(options.sceneDir, `scene_${String(options.sceneId).padStart(3, '0')}_chatgpt_image_wait_failed.json`),
-    JSON.stringify({ lastSnapshot: sanitizeChatGptImageSnapshot(lastSnapshot), lastExtract, existingUrlCount: known.size }, null, 2),
+    JSON.stringify({ lastSnapshot: sanitizeChatGptImageSnapshot(lastSnapshot), lastExtract, readiness: { ...lastReadiness, state: 'timeout' }, diagnostic: { ...(lastDiagnostic || {}), reasonSelected: 'timeout' }, networkCandidates: options.networkCapture?.summary?.() || [], existingUrlCount: known.size }, null, 2),
     'utf8',
   ).catch(() => null);
+  await appendAppLog(null, {
+    source: 'main',
+    kind: 'error',
+    text: `chatgptImageExtract: diagnostic summary for scene ${options.sceneId || ''}`,
+    details: { readiness: { ...lastReadiness, state: 'timeout' }, diagnostic: { ...(lastDiagnostic || {}), reasonSelected: 'timeout' }, lastExtract, lastSnapshot: sanitizeChatGptImageSnapshot(lastSnapshot), networkCandidates: options.networkCapture?.summary?.() || [] },
+  });
   throw new Error('Timed out waiting for a complete ChatGPT generated image asset. Screenshot crop was not saved as keyframe.');
 }
 
@@ -2387,7 +3253,10 @@ async function selectChatGptConversationByTitle(client, title = '') {
       await waitForCdpLoad(client).catch(() => null);
       await sleep(1600);
       const locationState = await evaluateOnCdpPage(client, `({ href: location.href, path: location.pathname, title: document.title })`).catch((error) => ({ error: error.message }));
-      if (String(locationState?.path || '').startsWith('/c/')) return { ...state, location: locationState };
+      if (String(locationState?.path || '').startsWith('/c/')) {
+        updateChatGptConversationIdentity(locationState, wanted);
+        return { ...state, location: locationState };
+      }
       await appendAppLog(null, { source: 'main', kind: 'running', text: `ChatGPT context: đã click "${wanted}" nhưng URL chưa vào /c/... (path=${locationState?.path || ''}), thử lại.`, details: locationState });
     }
     await sleep(600);
@@ -2428,9 +3297,31 @@ async function waitForChatGptRecentItem(page, conversationPath = '', sceneId = '
   return { ok: false, error: 'Timeout waiting for current chat to appear in Recents.', last };
 }
 
-async function checkChatGptCurrentConversationTitle(page, expectedTitle = '') {
+async function checkChatGptCurrentConversationTitle(page, expectedTitle = '', options = {}) {
   const wanted = String(expectedTitle || '').trim();
   if (!wanted) return { ok: false, error: 'missing-expected-title' };
+  const locationState = await getChatGptLocationState(page);
+  const cached = chatGptConversationIdentityCache;
+  if (!options.force && locationState?.conversationId && cached.conversationId === locationState.conversationId && isSameChatTitle(cached.title, wanted)) {
+    await appendAppLog(null, {
+      source: 'main',
+      kind: 'running',
+      text: 'chatTitleCheck: using cached conversation identity',
+      details: { sceneId: options.sceneId || '', reason: options.reason || 'title-check', path: locationState.path || '', title: sanitizeChatTitleForLog(wanted) },
+    });
+    return { ok: true, cached: true, currentTitle: wanted, wanted, mode: 'cache', path: locationState.path || '' };
+  }
+  if (!options.force && cached.lastCheckAt && Date.now() - cached.lastCheckAt < CHAT_TITLE_CHECK_MIN_INTERVAL_MS && isSameChatTitle(cached.title, wanted)) {
+    await appendAppLog(null, {
+      source: 'main',
+      kind: 'running',
+      text: `chatTitleCheck: skipped reason=rate-limit-${options.reason || 'title-check'}`,
+      details: { sceneId: options.sceneId || '', path: locationState?.path || '', title: sanitizeChatTitleForLog(wanted), lastCheckAgoMs: Date.now() - cached.lastCheckAt },
+    });
+    return { ok: false, skipped: true, rateLimited: true, error: 'rate-limited-title-check', path: locationState?.path || '' };
+  }
+  if (options.force) await appendAppLog(null, { source: 'main', kind: 'running', text: `chatTitleCheck: forced reason=${options.reason || 'title-check'}`, details: { sceneId: options.sceneId || '', title: sanitizeChatTitleForLog(wanted) } });
+  cached.lastCheckAt = Date.now();
   const state = await evaluateOnCdpPage(page, `(() => {
     try {
       const wanted = ${JSON.stringify(wanted)};
@@ -2457,6 +3348,12 @@ async function checkChatGptCurrentConversationTitle(page, expectedTitle = '') {
       return { ok: false, error: error && error.message ? error.message : String(error), path: location.pathname };
     }
   })()`).catch((error) => ({ ok: false, error: error.message }));
+  if (state?.ok) {
+    updateChatGptConversationIdentity(state, wanted);
+    await appendAppLog(null, { source: 'main', kind: 'ok', text: `chatTitleCheck: verified title=${sanitizeChatTitleForLog(wanted)}`, details: { sceneId: options.sceneId || '', reason: options.reason || 'title-check', path: state.path || '' } });
+  } else if (!state?.skipped) {
+    await appendAppLog(null, { source: 'main', kind: 'running', text: `chatTitleCheck: skipped reason=${state?.error || 'title-mismatch'}`, details: { sceneId: options.sceneId || '', reason: options.reason || 'title-check', path: state?.path || '', currentTitle: sanitizeChatTitleForLog(state?.currentTitle || '') } });
+  }
   return state;
 }
 
@@ -2473,7 +3370,7 @@ function markChatTitleStable(pathname = '', title = '', ok = false) {
 }
 
 function isChatTitleStable(pathname = '', title = '') {
-  return (chatTitleStableChecks.get(getChatTitleStableKey(pathname, title)) || 0) >= 3;
+  return (chatTitleStableChecks.get(getChatTitleStableKey(pathname, title)) || 0) >= 1;
 }
 
 async function renameChatGptCurrentConversationUntilTitle(page, title = '', { sceneId = '', timeoutMs = 60000, waitForRecent = true } = {}) {
@@ -2481,7 +3378,10 @@ async function renameChatGptCurrentConversationUntilTitle(page, title = '', { sc
   if (!wanted) return { ok: false, error: 'missing-title' };
   const currentPath = await evaluateOnCdpPage(page, `location.pathname`).catch(() => '');
   if (!String(currentPath || '').startsWith('/c/')) return { ok: false, error: 'not-in-conversation', path: currentPath };
-  if (isChatTitleStable(currentPath, wanted)) return { ok: true, skipped: true, stableChecks: 3, title: wanted, path: currentPath };
+  if (isChatTitleStable(currentPath, wanted)) {
+    await appendAppLog(null, { source: 'main', kind: 'running', text: 'chatTitleCheck: using cached conversation identity', details: { sceneId, reason: 'stable-title-cache', path: currentPath, title: sanitizeChatTitleForLog(wanted) } });
+    return { ok: true, skipped: true, stableChecks: 1, title: wanted, path: currentPath };
+  }
   if (waitForRecent) {
     const recentsReady = await waitForChatGptRecentItem(page, currentPath, sceneId);
     await appendAppLog(null, { source: 'main', kind: recentsReady?.ok ? 'running' : 'error', text: `Scene ${sceneId}: Recents ready before rename: ${recentsReady?.ok ? recentsReady.text || recentsReady.mode : recentsReady?.error || 'not-ready'}`, details: recentsReady });
@@ -2491,10 +3391,10 @@ async function renameChatGptCurrentConversationUntilTitle(page, title = '', { sc
   let renameAttempt = 0;
   let renameResult = null;
   while (Date.now() < renameDeadline) {
-    const titleState = await checkChatGptCurrentConversationTitle(page, wanted).catch((error) => ({ ok: false, error: error.message }));
+    const titleState = await checkChatGptCurrentConversationTitle(page, wanted, { sceneId, force: true, reason: 'rename-workflow' }).catch((error) => ({ ok: false, error: error.message }));
     if (titleState?.ok) {
       const stableChecks = markChatTitleStable(titleState.path || currentPath, wanted, true);
-      if (stableChecks >= 3) return { ok: true, alreadyNamed: true, title: wanted, attempts: renameAttempt, stableChecks, titleState };
+      if (stableChecks >= 1) return { ok: true, alreadyNamed: true, title: wanted, attempts: renameAttempt, stableChecks, titleState };
       await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: ChatGPT title đúng ${stableChecks}/3, check thêm để ổn định rồi dừng.`, details: titleState });
       await sleep(700);
       continue;
@@ -2505,10 +3405,10 @@ async function renameChatGptCurrentConversationUntilTitle(page, title = '', { sc
     renameResult = await renameChatGptCurrentConversation(null, wanted).catch((error) => ({ ok: false, error: error.message }));
     await appendAppLog(null, { source: 'main', kind: renameResult?.ok ? 'running' : 'error', text: `Scene ${sceneId}: ChatGPT rename attempt ${renameAttempt} ${renameResult?.ok ? 'sent' : renameResult?.error || 'failed'}`, details: renameResult });
     await sleep(2500);
-    const verifyState = await checkChatGptCurrentConversationTitle(page, wanted).catch((error) => ({ ok: false, error: error.message }));
+    const verifyState = await checkChatGptCurrentConversationTitle(page, wanted, { sceneId, force: true, reason: 'rename-verify' }).catch((error) => ({ ok: false, error: error.message }));
     if (verifyState?.ok) {
       const stableChecks = markChatTitleStable(verifyState.path || currentPath, wanted, true);
-      if (stableChecks >= 3) return { ok: true, title: wanted, attempts: renameAttempt, stableChecks, verifyState };
+      if (stableChecks >= 1) return { ok: true, title: wanted, attempts: renameAttempt, stableChecks, verifyState };
       await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: rename đã khớp ${stableChecks}/3, verify thêm trước khi dừng.`, details: verifyState });
       await sleep(700);
       continue;
@@ -2527,6 +3427,7 @@ async function renameChatGptCurrentConversation(_event, title = '') {
   const currentLocation = await evaluateOnCdpPage(page, `({ href: location.href, path: location.pathname, title: document.title })`).catch((error) => ({ error: error.message }));
   await appendAppLog(null, { source: 'main', kind: 'running', text: `ChatGPT rename start: target="${wanted}" path=${currentLocation?.path || ''}`, details: currentLocation });
   if (!String(currentLocation?.path || '').startsWith('/c/')) {
+    await invalidateChatGptConversationIdentity('rename-opened-new-chat');
     await appendAppLog(null, { source: 'main', kind: 'running', text: 'ChatGPT rename: chưa ở conversation /c/..., mở trang chat mới trước.', details: currentLocation });
     await page.Page.navigate({ url: 'https://chatgpt.com/' }).catch((error) => appendAppLog(null, { source: 'main', kind: 'error', text: `ChatGPT navigate root failed: ${error.message}` }));
     await waitForCdpLoad(page).catch(() => null);
@@ -2574,16 +3475,24 @@ async function renameChatGptCurrentConversation(_event, title = '') {
   await page.Input.dispatchKeyEvent({ type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 }).catch(() => null);
   await page.Input.dispatchKeyEvent({ type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 }).catch(() => null);
   await sleep(1800);
-  const verifyTitle = await evaluateOnCdpPage(page, `({ title: document.title, text: document.body.innerText.slice(0, 2000) })`).catch((error) => ({ error: error.message }));
+  const verifyTitle = await evaluateOnCdpPage(page, `(() => {
+    const expected = ${JSON.stringify(wanted)};
+    const bodyText = document.body?.innerText || '';
+    return { title: document.title || '', path: location.pathname || '', hasExpectedTitle: String(document.title || '').includes(expected), hasExpectedText: bodyText.includes(expected) };
+  })()`).catch((error) => ({ error: error.message }));
   const expectedTitle = wanted;
-  const verified = String(verifyTitle?.title || '').includes(expectedTitle) || String(verifyTitle?.text || '').includes(expectedTitle);
+  const verified = Boolean(verifyTitle?.hasExpectedTitle || verifyTitle?.hasExpectedText);
+  if (verified) {
+    updateChatGptConversationIdentity({ path: verifyTitle?.path || currentLocation?.path || '' }, wanted);
+    await appendAppLog(null, { source: 'main', kind: 'ok', text: `chatTitleCheck: verified title=${sanitizeChatTitleForLog(wanted)}`, details: { reason: 'explicit-rename-result', path: verifyTitle?.path || '' } });
+  }
   return { ok: verified, title: wanted, previousTitle: state.text, verified, verifyTitle };
 }
 
 async function waitForChatGptImageOrRetry(client, existingUrls = [], prompt, sceneDir, sceneId) {
   const known = new Set(existingUrls);
   const maxAttempts = 3;
-  const thinkingStallMs = 120000;
+  const realStallMs = 120000;
   let lastSnapshot = null;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     const attemptStartedAt = Date.now();
@@ -2596,7 +3505,7 @@ async function waitForChatGptImageOrRetry(client, existingUrls = [], prompt, sce
         JSON.stringify({ reason, snapshot, attempt, elapsedMs: Date.now() - attemptStartedAt }, null, 2),
         'utf8',
       ).catch(() => null);
-      await notifyRenderer('chatgpt-image-retry', `Scene ${sceneId}: ChatGPT ${reason === 'thinking-stall' ? 'kẹt Thinking quá lâu' : 'không trả ảnh'}, tool sẽ dừng lượt cũ và gửi lại NV1.`, { sceneId, attempt, reason });
+      await notifyRenderer('chatgpt-image-retry', `Scene ${sceneId}: ChatGPT ${reason === 'real_stall' ? 'kẹt thật sự quá lâu' : 'không trả ảnh'}, tool sẽ dừng lượt cũ và gửi lại NV1.`, { sceneId, attempt, reason });
       if (attempt >= maxAttempts) {
         throw new Error(`ChatGPT không trả ảnh sau ${maxAttempts} lần gửi NV1 (${reason}).`);
       }
@@ -2624,8 +3533,8 @@ async function waitForChatGptImageOrRetry(client, existingUrls = [], prompt, sce
           lastLogAt = Date.now();
           await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: đang chờ ChatGPT hoàn tất NV1/tạo ảnh (${snapshot?.preparingImage ? 'preparing-image' : 'thinking'}).`, details: { mode: snapshot?.assistantMode, urls: snapshot?.urls?.length || 0, assistantCount: snapshot?.assistantCount || 0, elapsedMs: Date.now() - attemptStartedAt } });
         }
-        if (!snapshot?.preparingImage && Date.now() - attemptStartedAt > thinkingStallMs) {
-          await resendImagePrompt('thinking-stall', snapshot);
+        if (!snapshot?.preparingImage && Date.now() - attemptStartedAt > realStallMs) {
+          await resendImagePrompt('real_stall', snapshot);
           break;
         }
         continue;
@@ -2669,6 +3578,7 @@ async function waitForNewVideoUrl(client, existingUrls = [], options = {}) {
     if (provider === 'grok') {
       const grokState = await evaluateOnCdpPage(client, `(${detectGrokGenerationProblemScript.toString()})()`).catch((error) => ({ ok: false, error: error.message }));
       if (grokState?.kind === 'login-required') throw new Error(loginRequiredMessage('grok', grokState.reason || 'Grok logged out while generating video'));
+      if (grokState?.kind === 'send-failed') throw new Error('grok_send_failed_external_error');
       if (grokState?.kind === 'unable-finish' && retryCount < 3) {
         retryCount += 1;
         await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: Grok unable to finish replying, tự bấm Retry lần ${retryCount}/3.`, details: grokState });
@@ -2735,6 +3645,8 @@ async function downloadBrowserAsset(client, url, outputPath) {
 
 async function captureLatestImageElement(client, outputPath, expectedRef = '') {
   throw new Error('Screenshot crop keyframe saving is disabled; use generated image asset extraction.');
+}
+/*
   const target = await evaluateOnCdpPage(client, `(${getLatestImageBoxScript.toString()})(${JSON.stringify(expectedRef)})`);
   if (!target?.ok) {
     throw new Error(target?.error || 'Không tìm thấy ảnh mới để chụp screenshot.');
@@ -2754,6 +3666,7 @@ async function captureLatestImageElement(client, outputPath, expectedRef = '') {
   return outputPath;
 }
 
+*/
 async function pathExists(filePath) {
   if (!filePath) return false;
   try {
@@ -2837,6 +3750,10 @@ async function setFirstFileInput(client, filePath) {
 
 async function uploadFileViaCdp(client, filePath, provider = 'grok') {
   if (provider === 'grok') {
+    const route = await ensureGrokImagineAgentPage(client, '', {});
+    if (!route?.ok) return { ok: false, error: route?.error || 'Grok Imagine Agent is not ready before image upload.', route };
+    const guard = await assertGrokImagineAgentReady(client, 'image-upload', '');
+    if (!guard?.ok) return { ok: false, error: guard?.error || 'Grok route guard blocked image upload.', guard };
     await appendAppLog(null, { source: 'main', kind: 'running', text: 'Grok: copy ảnh vào clipboard, click workspace Empty Canvas rồi Ctrl+V trực tiếp.' });
     await pasteImageViaClipboard(client, filePath, 'workspace');
     let accepted = await waitForGrokUploadedAsset(client, 18000);
@@ -2934,6 +3851,11 @@ async function submitPixVersePrompt(client, prompt, config = {}) {
 }
 
 async function submitGrokVideoPrompt(client, prompt, config = {}) {
+  const sceneId = config.sceneId || '';
+  const route = await ensureGrokImagineAgentPage(client, sceneId, config);
+  if (!route?.ok) return { ok: false, error: route?.error || 'Grok Imagine Agent is not ready before prompt paste.', route };
+  const guard = await assertGrokImagineAgentReady(client, 'prompt-paste', sceneId);
+  if (!guard?.ok) return { ok: false, error: guard?.error || 'Grok route guard blocked prompt paste.', guard };
   const cleanup = await evaluateOnCdpPage(client, `(${dismissGrokConnectorsScript.toString()})()`).catch((error) => ({ ok: false, error: error.message }));
   await appendAppLog(null, { source: 'main', kind: cleanup?.ok ? 'ok' : 'running', text: `Grok cleanup connectors: ${cleanup?.actions?.join(', ') || cleanup?.error || 'checked'}`, details: cleanup });
   const forcedMode = await evaluateOnCdpPage(client, `(${forceGrokVideoModeScript.toString()})()`).catch((error) => ({ ok: false, error: error.message }));
@@ -2943,6 +3865,14 @@ async function submitGrokVideoPrompt(client, prompt, config = {}) {
   await appendAppLog(null, { source: 'main', kind: prepared?.ok ? 'ok' : 'running', text: `Grok config: ${prepared?.ok ? JSON.stringify(prepared.config || {}) : prepared?.error || 'không đọc được'}`, details: prepared });
   await sleep(500);
   const focused = await evaluateOnCdpPage(client, `(${focusGrokComposerScript.toString()})()`);
+  if (focused?.box) {
+    const x = focused.box.x + (focused.box.width || focused.box.w || 0) / 2;
+    const y = focused.box.y + (focused.box.height || focused.box.h || 0) / 2;
+    await client.Input.dispatchMouseEvent({ type: 'mouseMoved', x, y, button: 'none' }).catch(() => null);
+    await client.Input.dispatchMouseEvent({ type: 'mousePressed', x, y, button: 'left', clickCount: 1 }).catch(() => null);
+    await client.Input.dispatchMouseEvent({ type: 'mouseReleased', x, y, button: 'left', clickCount: 1 }).catch(() => null);
+    await sleep(250);
+  }
   if (!focused?.ok) return { ok: false, error: focused?.error || 'Không focus được ô nhập Grok.' };
   await client.Input.dispatchKeyEvent({ type: 'keyDown', key: 'Control', code: 'ControlLeft', windowsVirtualKeyCode: 17, nativeVirtualKeyCode: 17, modifiers: 2 }).catch(() => null);
   await client.Input.dispatchKeyEvent({ type: 'keyDown', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, nativeVirtualKeyCode: 65, modifiers: 2 }).catch(() => null);
@@ -2964,7 +3894,18 @@ async function submitGrokVideoPrompt(client, prompt, config = {}) {
   if (!verified?.text || !verified.text.includes(prompt.slice(0, Math.min(24, prompt.length)))) {
     return { ok: false, error: `Grok chưa nhận đúng motion prompt trong composer đang focus. Text hiện tại: ${String(verified?.text || '').slice(0, 160)}` };
   }
+  const preSubmitGuard = await assertGrokImagineAgentReady(client, 'prompt-submit', sceneId);
+  if (!preSubmitGuard?.ok) return { ok: false, error: preSubmitGuard?.error || 'Grok route guard blocked prompt submit.', preSubmitGuard };
   const beforeSubmitState = await evaluateOnCdpPage(client, `(${captureGrokSubmitStateScript.toString()})()`).catch(() => null);
+  const preflight = await waitForGrokSendPreflight(client, prompt, { sceneId, requireAttachment: true, timeoutMs: 42000 });
+  if (!preflight?.ok) return { ok: false, error: preflight?.error || 'Grok send preflight failed.', preflight };
+  const sendClick = await clickGrokSendButtonOnce(client, sceneId);
+  if (!sendClick?.ok) return { ok: false, error: sendClick?.error || 'Grok send button could not be clicked.', clicked: sendClick, preflight };
+  const sendOutcome = await waitForGrokSendOutcome(client, beforeSubmitState || {}, { sceneId, timeoutMs: 26000 });
+  if (sendOutcome?.ok) return { ok: true, mode: 'grok-generation-started', selector: sendClick.clicked?.selector || '', preflight: summarizeGrokSendState(preflight.state), outcome: sendOutcome };
+  const sendRetry = await retryGrokSendFailure(client, prompt, { sceneId, imagePath: config.imagePath, config }, sendOutcome);
+  if (sendRetry?.ok) return { ok: true, mode: 'grok-generation-started-after-retry', selector: sendClick.clicked?.selector || '', preflight: summarizeGrokSendState(preflight.state), retry: sendRetry };
+  return { ok: false, error: sendRetry?.error || sendOutcome?.reason || 'grok_send_failed_external_error', mode: 'grok_send_failed_external_error', preflight: summarizeGrokSendState(preflight.state), outcome: sendOutcome, retry: sendRetry };
   const pressEnterToSubmit = async () => {
     await client.Input.dispatchKeyEvent({ type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 }).catch(() => null);
     await client.Input.dispatchKeyEvent({ type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 }).catch(() => null);
@@ -3359,12 +4300,12 @@ function collectGeneratedImageUrlsScript() {
 function countChatGptAssistantRootsScript() {
   const roleNodes = [...document.querySelectorAll('[data-message-author-role="assistant"]')];
   if (roleNodes.length) return { count: roleNodes.length, mode: 'assistant-role' };
-  const fallbackNodes = [...document.querySelectorAll('article, .message, [class*="response"], [class*="markdown"]')]
+  const fallbackNodes = [...document.querySelectorAll('[data-testid*="conversation-turn"], [data-message-id], article, .message, [class*="response"], [class*="markdown"]')]
     .filter((node) => {
       if (node.closest?.('[data-message-author-role="user"]')) return false;
       if (node.querySelector?.('[data-message-author-role="user"]')) return false;
       const text = (node.innerText || '').trim();
-      return text.length > 20 || node.querySelector?.('img, picture source');
+      return text.length > 20 || node.querySelector?.('img, picture source, canvas, a[href], button');
     });
   return { count: fallbackNodes.length, mode: 'fallback-non-user' };
 }
@@ -3372,105 +4313,200 @@ function countChatGptAssistantRootsScript() {
 async function extractLatestChatGPTGeneratedImageBytesScript(existingUrls = [], minAssistantRootIndex = 0) {
   const known = new Set(Array.isArray(existingUrls) ? existingUrls : []);
   const minRoot = Number(minAssistantRootIndex || 0);
-  const visible = (node) => {
+  const minNatural = 256;
+  const minBox = 128;
+  const sanitizeUrl = (value = '') => {
+    const url = String(value || '');
+    if (!url) return '';
+    if (url.startsWith('data:')) return `data:${url.slice(5, 32)}...`;
+    if (url.startsWith('blob:')) return 'blob:...';
+    try {
+      const parsed = new URL(url, location.href);
+      return `${parsed.protocol}//${parsed.host}${parsed.pathname.slice(0, 90)}`;
+    } catch (_error) {
+      return url.slice(0, 100);
+    }
+  };
+  const rectInfo = (node) => {
     const rect = node.getBoundingClientRect?.();
-    if (!rect || rect.width < 128 || rect.height < 128) return false;
+    return rect ? {
+      x: Math.round(rect.x),
+      y: Math.round(rect.y),
+      width: Math.round(rect.width),
+      height: Math.round(rect.height),
+      clientWidth: Math.round(node.clientWidth || rect.width || 0),
+      clientHeight: Math.round(node.clientHeight || rect.height || 0),
+    } : null;
+  };
+  const isVisible = (node, relaxed = false) => {
+    const rect = node.getBoundingClientRect?.();
+    if (!rect || rect.width < (relaxed ? 48 : minBox) || rect.height < (relaxed ? 48 : minBox)) return false;
     const style = window.getComputedStyle?.(node);
     if (style && (style.visibility === 'hidden' || style.display === 'none' || Number(style.opacity || 1) === 0)) return false;
     if (node.closest?.('header, nav, aside')) return false;
     return true;
   };
-  const textOf = (node) => `${node.alt || ''} ${node.title || ''} ${node.getAttribute?.('aria-label') || ''} ${node.className || ''} ${node.src || ''}`.trim();
-  const isPlaceholder = (node, src = '') => {
-    const text = textOf(node);
-    if (/avatar|profile|logo|icon|emoji|spinner|loading|placeholder|thumbnail|user/i.test(text)) return true;
-    if (/avatar|profile|logo|icon|spinner|placeholder|thumbnail/i.test(src)) return true;
-    const rect = node.getBoundingClientRect?.();
-    if (!rect || rect.width < 128 || rect.height < 128) return true;
-    if (node.tagName === 'IMG' && (!node.complete || node.naturalWidth < 256 || node.naturalHeight < 256)) return true;
-    return false;
-  };
-  const assistantRoots = (() => {
+  const nodeText = (node) => `${node.alt || ''} ${node.title || ''} ${node.getAttribute?.('aria-label') || ''} ${node.getAttribute?.('data-testid') || ''} ${node.className || ''}`.trim();
+  const hasSpinner = (node) => /loading|spinner|progress|preparing|generating|creating image|đang tạo ảnh/i.test(`${nodeText(node)} ${node.innerText || ''}`);
+  const sourceFromSrcset = (srcset = '') => String(srcset || '').split(',').map((part) => part.trim().split(/\s+/)[0]).filter(Boolean).at(-1) || '';
+  const rootsFrom = () => {
     const roleNodes = [...document.querySelectorAll('[data-message-author-role="assistant"]')];
-    if (roleNodes.length) return roleNodes.map((node, index) => ({ node, index, mode: 'assistant-role' }));
-    return [...document.querySelectorAll('article, .message, [class*="response"], [class*="markdown"]')]
+    const nodes = roleNodes.length ? roleNodes : [...document.querySelectorAll('[data-testid*="conversation-turn"], [data-message-id], article, .message, [class*="response"], [class*="markdown"]')]
       .filter((node) => {
         if (node.closest?.('[data-message-author-role="user"]')) return false;
         if (node.querySelector?.('[data-message-author-role="user"]')) return false;
         const text = (node.innerText || '').trim();
-        return text.length > 20 || node.querySelector?.('img, picture source');
-      })
-      .map((node, index) => ({ node, index, mode: 'fallback-non-user' }));
-  })();
-  const roots = assistantRoots.length ? assistantRoots : [{ node: document.body, index: 0, mode: 'document-fallback' }];
+        return text.length > 20 || node.querySelector?.('img, picture source, canvas, a[href], button');
+      });
+    const unique = [...new Set(nodes)].sort((a, b) => (a.getBoundingClientRect?.().y || 0) - (b.getBoundingClientRect?.().y || 0));
+    return unique.map((node, index) => ({ node, index, mode: roleNodes.length ? 'assistant-role' : 'fallback-assistant-root' }));
+  };
+  const assistantRoots = rootsFrom();
+  const selectedRoots = assistantRoots.filter((root) => root.index >= minRoot);
+  const waitingForNewAssistantRoot = minRoot > 0 && !selectedRoots.length && assistantRoots.length;
+  const usingLatestRootFallback = false;
+  const roots = selectedRoots.length ? selectedRoots : waitingForNewAssistantRoot ? [] : [{ node: document.body, index: 0, mode: 'document-fallback' }];
+  const rejected = [];
   const candidates = [];
+  const visibleButtons = [...document.querySelectorAll('button, [role="button"]')].filter((node) => isVisible(node, true));
+  const stopVisible = visibleButtons.some((node) => /stop generating|stop responding|stop|cancel|dừng/i.test(`${node.textContent || ''} ${node.getAttribute?.('aria-label') || ''}`));
+  const composerBusy = [...document.querySelectorAll('#prompt-textarea, textarea, [contenteditable="true"], [role="textbox"], [data-testid="composer"]')]
+    .filter((node) => isVisible(node, true))
+    .some((node) => node.disabled || node.getAttribute('aria-disabled') === 'true' || node.getAttribute('aria-busy') === 'true');
+  const streamingIndicator = stopVisible || [...document.querySelectorAll('[aria-busy="true"], [role="progressbar"], [data-testid*="loading"], [data-testid*="spinner"], [class*="result-streaming"]')].some((node) => isVisible(node, true));
+  const diagnostics = {
+    assistantRootCount: assistantRoots.length,
+    selectedRootCount: roots.length,
+    minAssistantRootIndex: minRoot,
+    usingLatestRootFallback,
+    waitingForNewAssistantRoot,
+    stopVisible,
+    composerBusy,
+    streamingIndicator,
+    imgElementCount: 0,
+    canvasElementCount: 0,
+    backgroundImageCandidateCount: 0,
+    imageLikeLinkCount: 0,
+    roots: [],
+    imageCandidates: [],
+    rejected,
+  };
+  const addElementId = (node, type) => {
+    const id = `vidora-img-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    node.setAttribute('data-vidora-image-extract-id', id);
+    node.setAttribute('data-vidora-image-extract-type', type);
+    return id;
+  };
+  const pushUrlCandidate = (node, root, type, src, extra = {}) => {
+    const rect = rectInfo(node);
+    const visible = isVisible(node, type === 'download');
+    const summary = { type, rootIndex: root.index, src: sanitizeUrl(src), currentSrc: sanitizeUrl(node.currentSrc || ''), complete: node.complete ?? null, naturalWidth: node.naturalWidth || 0, naturalHeight: node.naturalHeight || 0, box: rect, visible, loading: node.loading || '', text: nodeText(node).slice(0, 120), ...extra };
+    diagnostics.imageCandidates.push(summary);
+    if (!src) return rejected.push({ ...summary, reason: 'missing-src' });
+    if (usingLatestRootFallback && known.has(src)) return rejected.push({ ...summary, reason: 'known-existing-url-on-fallback-root' });
+    if (!/^https?:|^blob:|^data:image\//i.test(src)) return rejected.push({ ...summary, reason: 'unsupported-src' });
+    if (!visible) return rejected.push({ ...summary, reason: 'not-visible' });
+    if (hasSpinner(node)) return rejected.push({ ...summary, reason: 'loading-placeholder-text' });
+    if (type === 'img' && (!node.complete || node.naturalWidth < minNatural || node.naturalHeight < minNatural)) return rejected.push({ ...summary, reason: 'img-not-complete-or-too-small' });
+    candidates.push({ node, rootIndex: root.index, rootMode: root.mode, type, method: type, sourceKind: src.startsWith('data:') ? 'data-url' : src.startsWith('blob:') ? 'blob-url' : 'remote-url', src, width: node.naturalWidth || rect?.width || 0, height: node.naturalHeight || rect?.height || 0, area: (rect?.width || 1) * (rect?.height || 1), y: (rect?.y || 0) + window.scrollY, elementId: addElementId(node, type), summary });
+  };
   for (const root of roots) {
-    if (root.index < minRoot && assistantRoots.length) continue;
-    const images = [...root.node.querySelectorAll('img')];
-    for (const img of images) {
-      const src = img.currentSrc || img.src || img.getAttribute('src') || '';
-      if (!src || known.has(src) || !/^https?:|^blob:|^data:image\//i.test(src)) continue;
-      if (!visible(img) || isPlaceholder(img, src)) continue;
-      const rect = img.getBoundingClientRect();
-      candidates.push({
-        src,
-        rootIndex: root.index,
-        rootMode: root.mode,
-        sourceKind: src.startsWith('data:') ? 'data-url' : src.startsWith('blob:') ? 'blob-url' : 'remote-url',
-        width: img.naturalWidth || Math.round(rect.width),
-        height: img.naturalHeight || Math.round(rect.height),
-        area: rect.width * rect.height,
-        y: rect.y + window.scrollY,
-      });
+    const rootText = String(root.node.innerText || '').trim();
+    diagnostics.roots.push({
+      index: root.index,
+      mode: root.mode,
+      textLength: rootText.length,
+      imgCount: root.node.querySelectorAll('img').length,
+      canvasCount: root.node.querySelectorAll('canvas').length,
+      sourceCount: root.node.querySelectorAll('picture source, source[srcset], source[src]').length,
+      downloadLikeCount: [...root.node.querySelectorAll('a[href], button')].filter((node) => /download|open|view|image|ảnh|share|copy/i.test(`${node.textContent || ''} ${node.getAttribute?.('aria-label') || ''} ${node.getAttribute?.('href') || ''}`)).length,
+      box: rectInfo(root.node),
+    });
+    diagnostics.imgElementCount += root.node.querySelectorAll('img').length;
+    diagnostics.canvasElementCount += root.node.querySelectorAll('canvas').length;
+    diagnostics.imageLikeLinkCount += [...root.node.querySelectorAll('a[href], button')].filter((node) => /download|open|view|image|ảnh|share|copy/i.test(`${node.textContent || ''} ${node.getAttribute?.('aria-label') || ''} ${node.getAttribute?.('href') || ''}`)).length;
+    for (const img of root.node.querySelectorAll('img')) {
+      pushUrlCandidate(img, root, 'img', img.currentSrc || img.src || img.getAttribute('src') || sourceFromSrcset(img.getAttribute('srcset')));
     }
-    const sources = [...root.node.querySelectorAll('picture source')]
-      .map((source) => source.src || source.getAttribute('srcset') || '')
-      .filter(Boolean);
-    for (const srcset of sources) {
-      const src = String(srcset).split(',').map((part) => part.trim().split(/\s+/)[0]).filter(Boolean).at(-1) || '';
-      if (!src || known.has(src) || !/^https?:|^blob:|^data:image\//i.test(src)) continue;
-      candidates.push({
-        src,
-        rootIndex: root.index,
-        rootMode: root.mode,
-        sourceKind: src.startsWith('data:') ? 'data-url' : src.startsWith('blob:') ? 'blob-url' : 'remote-url',
-        width: 0,
-        height: 0,
-        area: 1,
-        y: root.node.getBoundingClientRect?.().y || 0,
-      });
+    for (const source of root.node.querySelectorAll('picture source, source[srcset], source[src]')) {
+      const src = source.src || source.getAttribute('src') || sourceFromSrcset(source.getAttribute('srcset'));
+      pushUrlCandidate(source.parentElement || source, root, 'source', src, { sourceCount: 1 });
+    }
+    for (const canvas of root.node.querySelectorAll('canvas')) {
+      const rect = rectInfo(canvas);
+      const summary = { type: 'canvas', rootIndex: root.index, width: canvas.width || 0, height: canvas.height || 0, box: rect, visible: isVisible(canvas), text: nodeText(canvas).slice(0, 120) };
+      diagnostics.imageCandidates.push(summary);
+      if (!isVisible(canvas)) { rejected.push({ ...summary, reason: 'canvas-not-visible' }); continue; }
+      if ((canvas.width || 0) < minNatural || (canvas.height || 0) < minNatural) { rejected.push({ ...summary, reason: 'canvas-too-small' }); continue; }
+      if (hasSpinner(canvas.parentElement || canvas)) { rejected.push({ ...summary, reason: 'canvas-loading-placeholder' }); continue; }
+      candidates.push({ node: canvas, rootIndex: root.index, rootMode: root.mode, type: 'canvas', method: 'canvas', sourceKind: 'canvas', width: canvas.width, height: canvas.height, area: (rect?.width || 1) * (rect?.height || 1), y: (rect?.y || 0) + window.scrollY, elementId: addElementId(canvas, 'canvas'), summary });
+    }
+    for (const node of root.node.querySelectorAll('div, button, a, span, [role="img"]')) {
+      const style = window.getComputedStyle?.(node);
+      const bg = style?.backgroundImage || '';
+      const match = bg.match(/url\(["']?([^"')]+)["']?\)/i);
+      if (match) {
+        diagnostics.backgroundImageCandidateCount += 1;
+        pushUrlCandidate(node, root, 'background', match[1], { backgroundImage: sanitizeUrl(match[1]) });
+      }
+    }
+    for (const link of root.node.querySelectorAll('a[href]')) {
+      const href = link.href || link.getAttribute('href') || '';
+      const looksImage = /^https?:|^blob:|^data:image\//i.test(href) && (/image|download|open|view|asset|oaiusercontent|oaidalle|png|jpe?g|webp/i.test(href + ' ' + nodeText(link) + ' ' + (link.textContent || '')));
+      if (looksImage) pushUrlCandidate(link, root, 'download', href);
     }
   }
   candidates.sort((a, b) => (b.rootIndex - a.rootIndex) || (b.y - a.y) || (b.area - a.area));
-  const best = candidates[0];
-  if (!best) return { ok: false, mode: 'no-complete-generated-image', rootCount: assistantRoots.length, minAssistantRootIndex: minRoot };
-  const response = await fetch(best.src, { credentials: 'omit', cache: 'no-store' });
-  if (!response.ok) return { ok: false, mode: 'fetch-failed', status: response.status, rootIndex: best.rootIndex };
-  const contentType = response.headers.get('content-type') || '';
-  if (!/^image\/(png|jpe?g|webp)/i.test(contentType)) return { ok: false, mode: 'not-image-content-type', contentType, rootIndex: best.rootIndex };
-  const blob = await response.blob();
-  if (!blob || blob.size < 4096) return { ok: false, mode: 'image-too-small', size: blob?.size || 0, rootIndex: best.rootIndex };
-  const bitmap = await createImageBitmap(blob).catch(() => null);
-  if (!bitmap || bitmap.width < 256 || bitmap.height < 256) {
-    return { ok: false, mode: 'decode-or-dimension-failed', width: bitmap?.width || best.width || 0, height: bitmap?.height || best.height || 0, rootIndex: best.rootIndex };
-  }
-  const base64 = await new Promise((resolve, reject) => {
+  const readBlobBase64 = (blob) => new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result || '').split(',')[1] || '');
     reader.onerror = () => reject(new Error('FileReader failed for generated image blob.'));
     reader.readAsDataURL(blob);
   });
-  if (!base64 || base64.length < 4000) return { ok: false, mode: 'base64-too-small', rootIndex: best.rootIndex };
+  for (const candidate of candidates) {
+    try {
+      if (candidate.type === 'canvas') {
+        const dataUrl = candidate.node.toDataURL('image/png');
+        const base64 = String(dataUrl || '').split(',')[1] || '';
+        if (base64.length < 4000) throw new Error('canvas-base64-too-small');
+        return { ok: true, base64, contentType: 'image/png', byteLength: Math.floor(base64.length * 0.75), width: candidate.width, height: candidate.height, rootIndex: candidate.rootIndex, rootMode: candidate.rootMode, sourceKind: candidate.sourceKind, method: 'canvas', elementId: candidate.elementId, diagnostics };
+      }
+      const response = await fetch(candidate.src, { credentials: 'include', cache: 'no-store' });
+      if (!response.ok) throw new Error(`fetch-failed-${response.status}`);
+      const contentType = response.headers.get('content-type') || '';
+      if (!/^image\/(png|jpe?g|webp)/i.test(contentType)) throw new Error(`not-image-content-type-${contentType}`);
+      const blob = await response.blob();
+      if (!blob || blob.size < 4096) throw new Error(`image-too-small-${blob?.size || 0}`);
+      const bitmap = await createImageBitmap(blob).catch(() => null);
+      if (!bitmap || bitmap.width < minNatural || bitmap.height < minNatural) throw new Error(`decode-or-dimension-failed-${bitmap?.width || 0}x${bitmap?.height || 0}`);
+      const base64 = await readBlobBase64(blob);
+      if (!base64 || base64.length < 4000) throw new Error('base64-too-small');
+      return { ok: true, base64, contentType, byteLength: blob.size, width: bitmap.width, height: bitmap.height, rootIndex: candidate.rootIndex, rootMode: candidate.rootMode, sourceKind: candidate.sourceKind, method: candidate.method, elementId: candidate.elementId, diagnostics };
+    } catch (error) {
+      rejected.push({ ...candidate.summary, reason: `fetch-or-decode-failed:${error.message}` });
+    }
+  }
+  const screenshotCandidate = candidates.find((candidate) => candidate.elementId && candidate.width >= minNatural && candidate.height >= minNatural);
+  return { ok: false, mode: candidates.length ? 'candidate-fetch-failed' : 'no-complete-generated-image', rootCount: assistantRoots.length, minAssistantRootIndex: minRoot, screenshotCandidate: screenshotCandidate ? { type: screenshotCandidate.type, elementId: screenshotCandidate.elementId, rootIndex: screenshotCandidate.rootIndex, width: screenshotCandidate.width, height: screenshotCandidate.height } : null, diagnostics };
+}
+
+function getChatGptImageCandidateBoxScript(elementId = '') {
+  const selector = `[data-vidora-image-extract-id="${String(elementId).replace(/"/g, '\\"')}"]`;
+  const node = document.querySelector(selector);
+  if (!node) return { ok: false, error: 'candidate-element-not-found' };
+  const rect = node.getBoundingClientRect?.();
+  if (!rect || rect.width < 128 || rect.height < 128) return { ok: false, error: 'candidate-element-too-small' };
+  const style = window.getComputedStyle?.(node);
+  if (style && (style.visibility === 'hidden' || style.display === 'none' || Number(style.opacity || 1) === 0)) return { ok: false, error: 'candidate-element-hidden' };
+  const text = `${node.innerText || ''} ${node.getAttribute?.('aria-label') || ''} ${node.className || ''}`;
+  if (/loading|spinner|progress|preparing|generating|creating image|đang tạo ảnh/i.test(text)) return { ok: false, error: 'candidate-still-loading' };
+  node.scrollIntoView({ block: 'center', inline: 'center' });
+  const box = node.getBoundingClientRect();
   return {
     ok: true,
-    base64,
-    contentType,
-    byteLength: blob.size,
-    width: bitmap.width,
-    height: bitmap.height,
-    rootIndex: best.rootIndex,
-    rootMode: best.rootMode,
-    sourceKind: best.sourceKind,
+    elementId,
+    type: node.getAttribute('data-vidora-image-extract-type') || node.tagName,
+    box: { x: box.x + window.scrollX, y: box.y + window.scrollY, width: box.width, height: box.height },
   };
 }
 
@@ -3571,6 +4607,90 @@ function getGrokReadyStateScript() {
     url: location.href,
     title: document.title,
     sampleText: bodyText.slice(0, 800),
+  };
+}
+
+function getGrokRouteStateScript() {
+  const path = location.pathname || '';
+  const host = location.hostname || '';
+  const isGrok = host === 'grok.com';
+  const isImagineAgent = path === '/imagine/agent' || path.startsWith('/imagine/agent/');
+  const isAgentCanvas = path.startsWith('/imagine/agent/') && path.length > '/imagine/agent/'.length;
+  const bodyText = document.body?.innerText || '';
+  const title = document.title || '';
+  const visible = (node) => {
+    const rect = node.getBoundingClientRect?.();
+    return rect && rect.width > 8 && rect.height > 8 && rect.bottom > 0 && rect.right > 0;
+  };
+  const textOf = (node) => `${node.getAttribute?.('placeholder') || ''} ${node.getAttribute?.('aria-label') || ''} ${node.title || ''} ${node.textContent || ''}`.replace(/\s+/g, ' ').trim();
+  const textboxes = [...document.querySelectorAll('textarea, [contenteditable="true"], [role="textbox"], input')]
+    .filter(visible)
+    .map((node) => {
+      const rect = node.getBoundingClientRect();
+      const label = textOf(node);
+      const isComposerLabel = /what would|what do you want|type to imagine|imagine|describe|create|prompt|ask/i.test(label);
+      const isLikelyComposerBox = isAgentCanvas && rect.left > window.innerWidth * 0.45 && rect.top > window.innerHeight * 0.35 && rect.width > 120;
+      return { rect, isComposerLabel, isLikelyComposerBox };
+    });
+  const buttons = [...document.querySelectorAll('button, [role="button"], label, a')]
+    .filter(visible)
+    .map((node) => {
+      const rect = node.getBoundingClientRect();
+      const label = textOf(node);
+      return { node, rect, label, disabled: Boolean(node.disabled || node.getAttribute?.('aria-disabled') === 'true') };
+    });
+  const fileInputs = [...document.querySelectorAll('input[type="file"]')];
+  const hasComposer = textboxes.some((item) => item.isComposerLabel || item.isLikelyComposerBox);
+  const hasNormalChatComposer = !isImagineAgent && /What do you want to know\?|Ask anything|Message Grok|What can I help/i.test(bodyText);
+  const hasEmptyCanvas = buttons.some((item) => /(^|\s)Empty\s*Canvas(\s|$)/i.test(item.label));
+  const hasGallery = /Featured Templates|Discover|Upload Images|Create Worlds|Historical Stories|Empty Canvas|Type to imagine/i.test(bodyText);
+  const hasUploadTarget = fileInputs.length > 0 || buttons.some((item) => /upload\s*image|add\s*image|image|photo|picture|attach|\+/i.test(item.label) && item.rect.left < window.innerWidth * 0.82);
+  const hasWorkspace = [...document.querySelectorAll('canvas, [class*="canvas" i], [class*="workspace" i], [class*="stage" i], main')]
+    .some((node) => {
+      const rect = node.getBoundingClientRect?.();
+      return rect && rect.width > window.innerWidth * 0.3 && rect.height > window.innerHeight * 0.3;
+    });
+  const hasSendButton = buttons.some((item) => {
+    if (item.disabled) return false;
+    if (item.rect.left < window.innerWidth * 0.6 || item.rect.top < window.innerHeight * 0.45) return false;
+    return /generate|create|send|submit|imagine|arrow-up/i.test(item.label + ' ' + (item.node.innerHTML || ''));
+  });
+  const challenge = /cloudflare|performing security verification|verify you are human|checking if the site connection is secure|just a moment|Ray ID/i.test(`${bodyText} ${title}`);
+  const login = /(^|\n)\s*(Log in|Sign in|Sign up|Đăng nhập|Get started)\s*($|\n)|continue with google|sign up for free/i.test(bodyText)
+    && !/SuperGrok|Imagine|Private|What do you want to know\?|Type to imagine/i.test(bodyText);
+  const busy = /Generating|Creating|Thinking|Uploading|Đang tải|processing/i.test(bodyText)
+    || [...document.querySelectorAll('[aria-busy="true"], [class*="spinner" i], [class*="loading" i]')].some(visible);
+  let route = 'unknown';
+  if (!isGrok) route = 'external';
+  else if (challenge || login) route = 'login_or_challenge';
+  else if (!isImagineAgent) route = hasNormalChatComposer || path === '/' ? 'normal_chat' : 'wrong_grok_route';
+  else if (isAgentCanvas && (hasComposer || hasUploadTarget || hasWorkspace)) route = 'imagine_agent_ready';
+  else if (!isAgentCanvas && (hasComposer || (hasUploadTarget && hasSendButton) || (hasEmptyCanvas && hasWorkspace))) route = 'imagine_agent_ready';
+  else if (!isAgentCanvas && (hasEmptyCanvas || hasGallery || hasComposer)) route = 'imagine_agent_gallery';
+  else route = 'imagine_agent_loading';
+  return {
+    ok: true,
+    route,
+    url: location.href,
+    safeUrl: `${location.origin}${path}`,
+    path,
+    isImagineAgent,
+    isAgentCanvas,
+    hasComposer,
+    hasNormalChatComposer,
+    hasEmptyCanvas,
+    hasGallery,
+    hasUploadTarget,
+    hasWorkspace,
+    hasSendButton,
+    busy,
+    challenge,
+    login,
+    counts: {
+      textboxes: textboxes.length,
+      fileInputs: fileInputs.length,
+      buttons: buttons.length,
+    },
   };
 }
 
@@ -3921,13 +5041,15 @@ function focusGrokComposerScript() {
     'textarea',
   ];
   const bodyText = document.body?.innerText || '';
+  const isImagineAgent = (location.pathname || '').startsWith('/imagine/agent');
   const candidates = selectors
     .flatMap((selector) => [...document.querySelectorAll(selector)])
     .filter((node) => {
       const rect = node.getBoundingClientRect?.();
       if (!rect || rect.width <= 80 || rect.height <= 16) return false;
       if (rect.bottom < window.innerHeight * 0.35) return false;
-      if (rect.left < window.innerWidth * 0.18 || rect.right > window.innerWidth * 0.95) return false;
+      const allowedRightPanelComposer = isImagineAgent && rect.left > window.innerWidth * 0.55 && rect.right <= window.innerWidth + 12 && rect.top > window.innerHeight * 0.45;
+      if (rect.left < window.innerWidth * 0.18 || (rect.right > window.innerWidth * 0.95 && !allowedRightPanelComposer)) return false;
       const text = (node.innerText || node.textContent || node.value || '').trim();
       if (text.length > 1200) return false;
       const all = `${node.getAttribute?.('placeholder') || ''} ${node.getAttribute?.('aria-label') || ''} ${text}`;
@@ -4056,9 +5178,10 @@ function detectUploadedAssetScript() {
   const fileInputs = [...document.querySelectorAll('input[type="file"]')].map((input) => ({ files: input.files?.length || 0, accept: input.accept || '' }));
   const hasFileName = /\.png|\.jpe?g|\.mp4|\.webm|\.mov|image uploaded|video uploaded|upload complete|remove image|remove video|attached|ảnh|video/i.test(bodyText);
   const canvasImages = images.filter((item) => item.left < window.innerWidth * 0.78 || item.tag === 'CANVAS');
-  const hasPreview = canvasImages.length > 0;
+  const previewImages = canvasImages.filter((item) => item.tag !== 'CANVAS' && item.width >= 48 && item.height >= 48);
+  const hasPreview = previewImages.length > 0 || (hasFileName && canvasImages.length > 0);
   const hasInputFile = fileInputs.some((input) => input.files > 0);
-  if (hasPreview || hasInputFile || hasFileName) return { ok: true, hasPreview, hasInputFile, hasFileName, images, canvasImages, fileInputs };
+  if (hasPreview || hasInputFile || hasFileName) return { ok: true, hasPreview, hasInputFile, hasFileName, images, canvasImages, previewImages, fileInputs };
   return { ok: false, error: 'Chưa thấy ảnh được paste vào workspace/canvas Grok sau Ctrl+V.', images, fileInputs, sampleText: bodyText.slice(-1000) };
 }
 
@@ -4122,7 +5245,136 @@ function detectGrokConfirmationQuestionScript() {
     echoedMotionPrompt,
     hasVideo,
     reason: asked ? 'asked-confirmation' : echoedMotionPrompt ? 'echoed-motion-prompt' : hasVideo ? 'video-present' : 'no-confirm-needed',
-    tail,
+    tailSnippet: tail.slice(-360),
+  };
+}
+
+function getGrokSendPreflightScript(expectedPrompt = '', options = {}) {
+  const path = location.pathname || '';
+  const isImagineAgent = location.hostname === 'grok.com' && (path === '/imagine/agent' || path.startsWith('/imagine/agent/'));
+  const isAgentCanvas = path.startsWith('/imagine/agent/') && path.length > '/imagine/agent/'.length;
+  const bodyText = document.body?.innerText || '';
+  const visible = (node) => {
+    const rect = node.getBoundingClientRect?.();
+    if (!rect || rect.width < 6 || rect.height < 6 || rect.bottom <= 0 || rect.right <= 0) return false;
+    const style = window.getComputedStyle?.(node);
+    return !(style && (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity || 1) === 0));
+  };
+  const boxOf = (node) => {
+    const rect = node?.getBoundingClientRect?.();
+    return rect ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height, top: rect.top, left: rect.left, bottom: rect.bottom, right: rect.right } : null;
+  };
+  const textOf = (node) => `${node?.value || ''} ${node?.innerText || node?.textContent || ''} ${node?.getAttribute?.('placeholder') || ''} ${node?.getAttribute?.('aria-label') || ''} ${node?.title || ''}`.replace(/\s+/g, ' ').trim();
+  const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+  const expected = normalize(expectedPrompt);
+  const expectedHead = expected.slice(0, Math.min(36, expected.length));
+  const selectors = 'textarea, [contenteditable="true"], [role="textbox"], input';
+  const composerItems = [...document.querySelectorAll(selectors)]
+    .filter(visible)
+    .map((node) => ({ node, box: boxOf(node), text: normalize(node.value || node.innerText || node.textContent || ''), label: textOf(node) }))
+    .filter((item) => item.box && item.box.left > window.innerWidth * 0.52 && item.box.top > window.innerHeight * 0.38 && item.box.width > 80)
+    .sort((a, b) => b.box.bottom - a.box.bottom);
+  const composer = composerItems[0] || null;
+  const composerText = composer?.text || '';
+  const promptReady = Boolean(expectedHead && composerText.includes(expectedHead));
+  const messageBubbleExists = Boolean(expectedHead && normalize(bodyText).includes(expectedHead));
+  const active = document.activeElement;
+  const activeComposer = Boolean(composer?.node && (active === composer.node || composer.node.contains?.(active) || active?.contains?.(composer.node)));
+  const media = [...document.querySelectorAll('img, canvas, video')]
+    .filter(visible)
+    .map((node) => ({ tag: node.tagName, box: boxOf(node), src: node.currentSrc || node.src || '', className: String(node.className || '').slice(0, 80) }))
+    .filter((item) => item.box && item.box.top > 40 && item.box.width >= 24 && item.box.height >= 24 && item.box.left < window.innerWidth * 0.88);
+  const fileInputs = [...document.querySelectorAll('input[type="file"]')].map((input) => ({ files: input.files?.length || 0, accept: input.accept || '' }));
+  const uploadTextReady = /image uploaded|upload complete|remove image|attached|anh|ảnh|video uploaded|remove video/i.test(bodyText);
+  const attachmentMedia = media.filter((item) => item.tag !== 'CANVAS' && item.box.width >= 48 && item.box.height >= 48);
+  const attachmentReady = (isAgentCanvas && attachmentMedia.length > 0) || fileInputs.some((input) => input.files > 0) || uploadTextReady;
+  const uploading = /Uploading|uploading|Dang tai|Đang tải|Äang táº£i|processing upload/i.test(bodyText)
+    || [...document.querySelectorAll('[aria-busy="true"], [class*="spinner" i], [class*="loading" i], [role="progressbar"]')].some(visible);
+  const uploadError = /upload failed|could not upload|khong upload|không upload|upload error/i.test(bodyText);
+  const buttons = [...document.querySelectorAll('button, [role="button"]')]
+    .filter(visible)
+    .map((node) => ({ node, box: boxOf(node), text: textOf(node), html: node.innerHTML || '', disabled: Boolean(node.disabled || node.getAttribute?.('aria-disabled') === 'true') }));
+  const button = buttons.find((item) => {
+    if (item.disabled || !item.box) return false;
+    const nearComposer = composer?.box
+      ? item.box.top > composer.box.top - 90 && item.box.top < composer.box.bottom + 90 && item.box.left > composer.box.left - 40
+      : item.box.left > window.innerWidth * 0.72 && item.box.top > window.innerHeight * 0.68;
+    if (!nearComposer) return false;
+    if (/Agent\s*\(?Beta\)?|Create\s*Worlds|Historical\s*Stories|Short\s*Film|UGC\s*Product|^\s*(Image|Video|480p|720p|6s|10s)\s*$/i.test(item.text)) return false;
+    const hasSendIcon = /arrow-up|send-icon|paper-plane/i.test(item.html);
+    return /^(Generate|Create|Start|Send|Submit|gửi|Imagine)$/i.test(item.text) || (item.text === '' && hasSendIcon);
+  }) || buttons
+    .filter((item) => !item.disabled && item.box && item.box.left > window.innerWidth * 0.84 && item.box.top > window.innerHeight * 0.72 && !/microphone|voice|audio|attach|add|upload|\+|new chat/i.test(item.text))
+    .sort((a, b) => b.box.left - a.box.left)[0];
+  let covered = false;
+  if (button?.box) {
+    const cx = button.box.x + button.box.width / 2;
+    const cy = button.box.y + button.box.height / 2;
+    const top = document.elementFromPoint(cx, cy);
+    const topButton = top?.closest?.('button, [role="button"]');
+    covered = Boolean(top && top !== button.node && !button.node.contains(top) && topButton !== button.node);
+  }
+  const sendErrorVisible = /couldn['’]?t send message|could not send message|message failed to send/i.test(bodyText);
+  const retryAvailable = buttons.some((item) => /(^|\s)(Retry|Try again|Thu lai|Thử lại|Gửi lại)(\s|$)/i.test(item.text));
+  const unableFinish = /Grok was unable to finish replying|unable to finish replying|couldn['’]?t finish/i.test(bodyText);
+  const rateLimit = /rate limit|too many requests|quota|usage limit|try again later|come back later/i.test(bodyText);
+  const safetyBlock = /content policy|blocked by content policy|triggered moderation|cannot generate/i.test(bodyText);
+  const loginOrChallenge = /cloudflare|verify you are human|security verification|just a moment|Log in|Sign in|Sign up|continue with google/i.test(bodyText)
+    && !/SuperGrok|Imagine|Type to imagine|Private|Grok can make mistakes/i.test(bodyText);
+  const normalChatTarget = !isImagineAgent && /What do you want to know\?|Ask anything|Message Grok/i.test(bodyText);
+  const pageBusy = /Generating|Creating|Thinking about your request/i.test(bodyText);
+  let route = 'unknown';
+  if (loginOrChallenge) route = 'login_or_challenge';
+  else if (normalChatTarget) route = 'normal_chat';
+  else if (isImagineAgent && (isAgentCanvas || composer || attachmentReady || button)) route = 'imagine_agent_ready';
+  else if (isImagineAgent) route = 'imagine_agent_loading';
+  const failedReasons = [];
+  if (route !== 'imagine_agent_ready') failedReasons.push(`route-${route}`);
+  if (!promptReady) failedReasons.push('prompt-not-ready');
+  if (!attachmentReady && options.requireAttachment !== false) failedReasons.push('attachment-not-ready');
+  if (uploading) failedReasons.push('uploading');
+  if (uploadError) failedReasons.push('upload-error');
+  if (!button) failedReasons.push('send-button-missing');
+  if (button?.disabled) failedReasons.push('send-button-disabled');
+  if (covered) failedReasons.push('send-button-covered');
+  if (pageBusy) failedReasons.push('page-busy');
+  if (sendErrorVisible) failedReasons.push('send-error-visible');
+  if (loginOrChallenge) failedReasons.push('login-or-challenge');
+  if (rateLimit) failedReasons.push('rate-limit');
+  if (safetyBlock) failedReasons.push('safety-block');
+  return {
+    ok: true,
+    route,
+    url: location.href,
+    safeUrl: `${location.origin}${path}`,
+    isImagineAgent,
+    isAgentCanvas,
+    normalChatTarget,
+    loginOrChallenge,
+    promptReady,
+    promptStable: false,
+    activeComposer,
+    composerFingerprint: `${composerText.length}:${composerText.slice(0, 48)}:${composerText.slice(-48)}`,
+    composerBox: composer?.box || null,
+    attachmentReady,
+    uploadTextReady,
+    uploading,
+    uploadError,
+    sendButtonEnabled: Boolean(button && !button.disabled && !covered),
+    sendButtonBox: button?.box || null,
+    sendButtonText: button?.text || '',
+    sendButtonCovered: covered,
+    pageBusy,
+    blockingModal: false,
+    sendErrorVisible,
+    unableFinish,
+    retryAvailable,
+    rateLimit,
+    safetyBlock,
+    messageBubbleExists,
+    blockingReason: failedReasons[0] || '',
+    failedReasons,
+    counts: { composer: composerItems.length, media: attachmentMedia.length, fileInputs: fileInputs.length, buttons: buttons.length },
   };
 }
 
@@ -4224,7 +5476,11 @@ function detectGrokGeneratingStateScript(before = {}) {
     .filter((item) => item.rect && item.rect.width > 10 && item.rect.height > 10);
   const stopButton = buttons.find((item) => {
     const nearComposer = item.rect.left > window.innerWidth * 0.72 && item.rect.top > window.innerHeight * 0.68;
-    return nearComposer && (/stop|cancel|square/i.test(item.text) || /rect|square|stop/i.test(item.html));
+    const label = item.text || '';
+    const html = item.html || '';
+    const explicitStop = /(^|\s)(stop|cancel|abort)(\s|$)/i.test(label);
+    const squareIconOnly = !/send|submit|generate|create|imagine|arrow-up|paper-plane/i.test(`${label} ${html}`) && /rect|square|stop/i.test(html);
+    return nearComposer && (explicitStop || squareIconOnly);
   });
   const thinking = /Thinking|Thinking about your request|Đang suy nghĩ|Generating|Creating/i.test(tail);
   return {
@@ -4234,7 +5490,7 @@ function detectGrokGeneratingStateScript(before = {}) {
     stopText: stopButton?.text || '',
     url: location.href,
     beforeUrl: before?.url || '',
-    tail,
+    tailSnippet: tail.slice(-360),
   };
 }
 
@@ -4249,6 +5505,7 @@ function detectGrokGenerationProblemScript() {
     })
     .filter((item) => item.rect && item.rect.width > 10 && item.rect.height > 10);
   const retry = buttons.find((item) => /(^|\s)(Retry|Try again|Thử lại|Gửi lại)(\s|$)/i.test(item.text));
+  const sendFailed = /couldn['’]?t send message|could not send message|message failed to send/i.test(tail);
   const unable = /Grok was unable to finish replying|unable to finish replying|couldn'?t finish|Something went wrong|try again/i.test(tail);
   const contentPolicy = /content policy|blocked by content policy|triggered moderation|cannot generate or retry|I cannot generate|adjust the prompt significantly|chặn.*content|vi phạm.*chính sách/i.test(tail);
   const limit = /Video generation hiện đang gặp giới hạn|generation.*limit|rate limit|too many requests|limit được reset|quota|usage limit|come back later|try again later/i.test(tail);
@@ -4256,12 +5513,14 @@ function detectGrokGenerationProblemScript() {
     && !/SuperGrok|Imagine|Private|What do you want to know\?|Grok can make mistakes/i.test(bodyText);
   return {
     ok: true,
-    kind: loginRequired ? 'login-required' : contentPolicy ? 'content-policy' : limit ? 'limit' : unable || retry ? 'unable-finish' : '',
+    kind: loginRequired ? 'login-required' : contentPolicy ? 'content-policy' : limit ? 'limit' : sendFailed ? 'send-failed' : unable || retry ? 'unable-finish' : '',
     reason: loginRequired ? 'Grok page is showing login/sign-up controls.' : '',
+    sendFailed,
+    unable,
     hasRetry: Boolean(retry),
     retryBox: retry?.rect ? { x: retry.rect.x, y: retry.rect.y, width: retry.rect.width, height: retry.rect.height } : null,
     retryText: retry?.text || '',
-    tail,
+    tailSnippet: tail.slice(-420),
   };
 }
 
@@ -4310,20 +5569,14 @@ function clickGrokGenerateScript() {
     if (bottomRightSend) {
       bottomRightSend.scrollIntoView({ block: 'center', inline: 'center' });
       bottomRightSend.focus();
-      bottomRightSend.click();
       const rect = bottomRightSend.getBoundingClientRect();
       return { ok: true, selector: bottomRightSend.textContent || bottomRightSend.getAttribute('aria-label') || 'grok-bottom-right-send', box: { x: rect.x, y: rect.y, width: rect.width, height: rect.height } };
     }
-    if (input) {
-      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true }));
-      input.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', bubbles: true }));
-      return { ok: true, selector: 'enter-fallback' };
-    }
+    if (input) return { ok: false, error: 'send-button-missing-enter-fallback-disabled' };
     return { ok: false, error: 'Không tìm thấy nút Generate/Create/Send Grok đang enabled.' };
   }
   button.scrollIntoView({ block: 'center', inline: 'center' });
   button.focus();
-  button.click();
   const rect = button.getBoundingClientRect();
   return { ok: true, selector: button.textContent || button.getAttribute('aria-label') || 'Grok generate', box: { x: rect.x, y: rect.y, width: rect.width, height: rect.height } };
 }
@@ -4442,12 +5695,28 @@ function findChatGptConversationScript(title = '') {
 function readChatGptImageStateScript() {
   const bodyText = document.body?.innerText || '';
   const bodyTail = bodyText.slice(-4000);
-  const buttonText = [...document.querySelectorAll('button')]
-    .map((button) => `${button.textContent || ''} ${button.getAttribute('aria-label') || ''} ${button.title || ''}`.trim())
-    .filter(Boolean)
-    .join(' | ');
+  const visible = (node) => {
+    const rect = node.getBoundingClientRect?.();
+    if (!rect || rect.width < 4 || rect.height < 4) return false;
+    const style = window.getComputedStyle?.(node);
+    return !(style && (style.visibility === 'hidden' || style.display === 'none' || Number(style.opacity || 1) === 0));
+  };
+  const buttons = [...document.querySelectorAll('button, [role="button"]')]
+    .map((button) => ({
+      node: button,
+      rect: button.getBoundingClientRect?.(),
+      text: `${button.textContent || ''} ${button.getAttribute('aria-label') || ''} ${button.title || ''} ${button.getAttribute('data-testid') || ''}`.trim(),
+      html: String(button.innerHTML || '').slice(0, 500),
+    }))
+    .filter((item) => item.rect && item.rect.width > 4 && item.rect.height > 4);
+  const buttonText = buttons.map((item) => item.text).filter(Boolean).join(' | ');
+  const stopButton = buttons.find((item) => /stop generating|stop responding|stop|cancel|dừng/i.test(item.text) || (/rect|square|stop/i.test(item.html) && item.rect.left > window.innerWidth * 0.55 && item.rect.top > window.innerHeight * 0.55));
+  const stopButtonVisible = Boolean(stopButton);
+  const streamingIndicator = stopButtonVisible || [...document.querySelectorAll('[aria-busy="true"], [role="progressbar"], [data-testid*="loading"], [data-testid*="spinner"], [class*="result-streaming"]')].some(visible);
+  const composerNodes = [...document.querySelectorAll('#prompt-textarea, textarea, [contenteditable="true"], [role="textbox"], [data-testid="composer"]')]
+    .filter(visible);
+  const composerBusy = composerNodes.some((node) => node.disabled || node.getAttribute('aria-disabled') === 'true' || node.getAttribute('aria-busy') === 'true');
   const thinking = /Thinking|Thinking about your request|Đang suy nghĩ|Generating|Creating/i.test(bodyTail);
-  const generating = /stop|dừng|generating/i.test(buttonText) || thinking;
   const preparingImage = /preparing image|creating image|generating image|đang tạo ảnh|đang chuẩn bị ảnh/i.test(bodyText);
   const voiceReady = /voice|mic|microphone|record|dictate/i.test(buttonText);
   const loggedOut = /(^|\n)\s*(sign in|log in|đăng nhập|sign up)\s*($|\n)|sign up to keep chatting|continue with google/i.test(bodyText)
@@ -4475,6 +5744,8 @@ function readChatGptImageStateScript() {
     .map((node) => `chatgpt-custom-box-y${Math.round(node.getBoundingClientRect().y)}`);
 
   urls.push(...customBoxes);
+  const hasVisibleMedia = urls.length > 0;
+  const generating = stopButtonVisible || streamingIndicator || composerBusy || preparingImage || (thinking && !hasVisibleMedia);
   const roleAssistantNodes = [...document.querySelectorAll('[data-message-author-role="assistant"]')]
     .filter((node) => (node.innerText || '').trim().length > 20);
   const fallbackAssistantNodes = [...document.querySelectorAll('article, .message, [class*="response"], [class*="markdown"]')]
@@ -4491,6 +5762,9 @@ function readChatGptImageStateScript() {
   return {
     generating,
     preparingImage,
+    stopButtonVisible,
+    composerBusy,
+    streamingIndicator,
     loggedOut,
     logoutReason: loggedOut ? 'ChatGPT page is showing sign-in/sign-up while waiting for image.' : '',
     voiceReady,
@@ -4561,6 +5835,15 @@ app.whenReady().then(() => {
   ipcMain.handle('project:create-session-file', createProjectSessionFile);
   ipcMain.handle('project:open-session-file', openProjectSessionFile);
   ipcMain.handle('project:ensure-scene-folders', ensureProjectSceneFolders);
+
+  ensureUserPromptFile(HARD_PROMPT_FILENAME).catch((error) => {
+    appendAppLog(null, {
+      source: 'main',
+      kind: 'error',
+      text: `promptFile: startup ensure failed; expected external file=${path.join(getUserPromptDir(), HARD_PROMPT_FILENAME)}`,
+      details: { error: error.message },
+    }).catch(() => null);
+  });
 
   buildAppMenu();
   createWindow();
