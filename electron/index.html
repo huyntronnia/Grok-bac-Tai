@@ -461,8 +461,33 @@
       </section>
 
       <section class="settings-section">
+        <h3>Continuity references</h3>
+        <label class="auto-review-toggle settings-toggle">
+          <input id="continuity-refs-toggle" type="checkbox" checked />
+          <span>Use previous video references for continuity</span>
+        </label>
+        <div class="settings-grid">
+          <label>
+            Max key frames
+            <select id="continuity-max-keyframes-select">
+              <option value="2">2</option>
+              <option value="3" selected>3</option>
+            </select>
+          </label>
+          <label class="auto-review-toggle settings-toggle">
+            <input id="continuity-chatgpt-toggle" type="checkbox" checked />
+            <span>Send references to ChatGPT</span>
+          </label>
+          <label class="auto-review-toggle settings-toggle">
+            <input id="continuity-grok-toggle" type="checkbox" />
+            <span>Send extra references to Grok</span>
+          </label>
+        </div>
+      </section>
+
+      <section class="settings-section">
         <h3>Prompt cứng</h3>
-        <p class="settings-help">Mở file 2 NHIỆM VỤ BẰNG PROMPT.txt được đóng kèm trong app để xem/chỉnh prompt nền.</p>
+        <p class="settings-help">Mở file 2 NHIỆM VỤ BẰNG PROMPT.txt trong thư mục dữ liệu app để xem/chỉnh prompt nền.</p>
         <button id="open-hard-prompt-btn" class="ghost" type="button">Mở 2 NHIỆM VỤ BẰNG PROMPT.txt</button>
       </section>
 

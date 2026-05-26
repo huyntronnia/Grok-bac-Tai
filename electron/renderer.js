@@ -38,6 +38,10 @@ const skipReviewToggle = document.querySelector('#skip-review-toggle');
 const skipPromptReviewToggle = document.querySelector('#skip-prompt-review-toggle');
 const skipImageReviewToggle = document.querySelector('#skip-image-review-toggle');
 const skipVideoReviewToggle = document.querySelector('#skip-video-review-toggle');
+const continuityRefsToggle = document.querySelector('#continuity-refs-toggle');
+const continuityMaxKeyframesSelect = document.querySelector('#continuity-max-keyframes-select');
+const continuityChatgptToggle = document.querySelector('#continuity-chatgpt-toggle');
+const continuityGrokToggle = document.querySelector('#continuity-grok-toggle');
 const settingsDialog = document.querySelector('#settings-dialog');
 const settingsSaveBtn = document.querySelector('#settings-save-btn');
 const openHardPromptBtn = document.querySelector('#open-hard-prompt-btn');
@@ -233,6 +237,24 @@ function applyReviewSettings(settings = {}) {
   if (skipVideoReviewToggle) skipVideoReviewToggle.checked = Boolean(settings.skipVideo);
 }
 
+function getContinuityReferenceSettings() {
+  const maxKeyFrames = Math.max(0, Math.min(3, Number(continuityMaxKeyframesSelect?.value || 3) || 3));
+  return {
+    enabled: continuityRefsToggle?.checked !== false,
+    includeLastFrame: true,
+    maxKeyFrames,
+    sendToChatGPT: continuityChatgptToggle?.checked !== false,
+    sendToGrok: Boolean(continuityGrokToggle?.checked),
+  };
+}
+
+function applyContinuityReferenceSettings(settings = {}) {
+  if (continuityRefsToggle) continuityRefsToggle.checked = settings.enabled !== false;
+  if (continuityMaxKeyframesSelect) continuityMaxKeyframesSelect.value = String(Math.max(0, Math.min(3, Number(settings.maxKeyFrames ?? 3) || 3)));
+  if (continuityChatgptToggle) continuityChatgptToggle.checked = settings.sendToChatGPT !== false;
+  if (continuityGrokToggle) continuityGrokToggle.checked = settings.sendToGrok === true;
+}
+
 function getImageGenerationSettings() {
   return {
     method: imageGenerationMethodSelect?.value || 'web',
@@ -329,6 +351,7 @@ function createProject(event) {
     scenes,
     batchSize: clamp(Number(batchSizeInput.value) || 10, 1, 10),
     durationSec: applySceneDurationValue(durationInput.value),
+    continuityReferences: getContinuityReferenceSettings(),
     createdAt: new Date().toISOString(),
   };
   activeBatchIds = [];
@@ -685,6 +708,7 @@ async function runFullPipeline() {
         accountRouterEnabled: Boolean(grokRouterEnabledToggle?.checked),
         videoConfig: getVideoProviderConfig(),
         imageProvider: getImageGenerationSettings(),
+        continuityReferences: getContinuityReferenceSettings(),
         chatContextTitle: project.chatContextTitle ?? project.name ?? projectNameInput?.value?.trim() ?? '',
         pendingChatRenameTitle: project.pendingChatRenameTitle || '',
         scriptText: storyInput?.value?.trim() || project?.story || '',
@@ -704,6 +728,9 @@ async function runFullPipeline() {
       scene.videoPath = resultVideoPath && String(resultVideoPath).includes(sceneFolderToken) ? resultVideoPath : scene.videoPath || '';
       scene.videoProvider = result.videoProvider || videoPlatform.value;
       scene.videoStatus = result.videoStatus || '';
+      scene.continuityReferencePaths = result.continuityReferencePaths || scene.continuityReferencePaths || [];
+      scene.continuityReferenceSourceScene = result.continuityReferenceSourceScene || scene.continuityReferenceSourceScene || null;
+      scene.generatedContinuityReferences = result.generatedContinuityReferences || scene.generatedContinuityReferences || null;
       const resultLoginProvider = parseLoginRequiredError(`${result.videoError || ''}\n${result.videoStatus || ''}`, scene);
       if (resultLoginProvider) {
         await recoverLoginAndRetryScene(resultLoginProvider, scene, result.videoError || result.videoStatus || '');
@@ -1737,6 +1764,7 @@ function getRuntimeSnapshot() {
       ...getImageGenerationSettings(),
       apiKey: '',
     },
+    continuityReferences: getContinuityReferenceSettings(),
   };
 }
 
@@ -1751,6 +1779,9 @@ function getSceneFileRecord(scene, index) {
     motionPrompt: scene.motionPrompt || '',
     imagePath: scene.imagePath || '',
     videoPath: scene.videoPath || '',
+    continuityReferencePaths: Array.isArray(scene.continuityReferencePaths) ? scene.continuityReferencePaths : [],
+    continuityReferenceSourceScene: scene.continuityReferenceSourceScene || null,
+    generatedContinuityReferences: scene.generatedContinuityReferences || null,
     errorClassification: scene.errorClassification || (scene.error ? 'scene_error' : null),
     updatedAt: scene.updatedAt || new Date().toISOString(),
   };
@@ -1814,6 +1845,7 @@ function getProjectSessionPayload() {
       description: project?.description || '',
       updatedAt: new Date().toISOString(),
       scenes,
+      continuityReferences: getContinuityReferenceSettings(),
       finalTimeline: previewTimeline,
     },
     inputs: {
@@ -1835,6 +1867,7 @@ function getProjectSessionPayload() {
         ...getImageGenerationSettings(),
         apiKey: '',
       },
+      continuityReferences: getContinuityReferenceSettings(),
       selectedModels: {
         script: modelInput?.value || '',
         image: providerSelect?.value || '',
@@ -1865,6 +1898,7 @@ function getProjectSessionPayload() {
         preview: Boolean(pixversePreviewToggle?.checked),
         audio: Boolean(pixverseAudioToggle?.checked),
       },
+      continuityReferences: getContinuityReferenceSettings(),
       grokRouter: getGrokRouterSettings(),
       activePreviewTimeline: previewTimeline,
       autoRun: false,
@@ -1896,6 +1930,9 @@ function normalizeRendererScene(scene = {}, index = 0) {
     imageDataUrl: scene.imageDataUrl || '',
     videoPath: scene.videoPath || '',
     videoStatus: scene.videoStatus || '',
+    continuityReferencePaths: Array.isArray(scene.continuityReferencePaths) ? scene.continuityReferencePaths : [],
+    continuityReferenceSourceScene: scene.continuityReferenceSourceScene || null,
+    generatedContinuityReferences: scene.generatedContinuityReferences || null,
     reviewType: scene.reviewType || '',
     progressStep: scene.progressStep || '',
     updatedAt: scene.updatedAt || new Date().toISOString(),
@@ -1915,6 +1952,7 @@ function normalizeProjectSessionForRenderer(payload = {}) {
     scenes,
     batchSize: sourceProject.batchSize || payload.config?.batchSize || 10,
     durationSec: normalizeSceneDuration(sourceProject.durationSec || payload.config?.sceneDurationSeconds || 10),
+    continuityReferences: sourceProject.continuityReferences || payload.runtime?.continuityReferences || payload.config?.continuityReferences || {},
     finalVideoPath: sourceProject.finalVideoPath || payload.assets?.finalOutputs?.[0]?.path || '',
     finalTimeline: Array.isArray(payload.previewTimeline) && payload.previewTimeline.length
       ? payload.previewTimeline
@@ -1986,6 +2024,7 @@ function applyProjectSessionPayload(payload = {}, filePath = '') {
   setControlValue(videoPlatformSelect, payload.runtime?.videoPlatform || payload.config?.videoProvider);
   applyImageGenerationSettings(payload.runtime?.imageGeneration || payload.config?.imageGeneration);
   applyReviewSettings(payload.runtime?.reviewSettings || { skipReview: payload.runtime?.skipReview });
+  applyContinuityReferenceSettings(payload.runtime?.continuityReferences || payload.config?.continuityReferences || project?.continuityReferences || {});
   setControlValue(pixverseResolutionSelect, payload.runtime?.pixverse?.resolution);
   setControlValue(pixverseRatioSelect, payload.runtime?.pixverse?.ratio);
   setControlValue(pixverseDurationSelect, payload.runtime?.pixverse?.duration);
@@ -2220,7 +2259,7 @@ async function openProjectSessionFlow() {
 }
 
 function persist() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify({ project, activeBatchIds, paused, outputFolder, currentProjectFilePath, projectDirty, projectRuntime, grokRouter: getGrokRouterSettings(), reviewSettings: getReviewSettings(), imageGeneration: getImageGenerationSettings() }));
+  localStorage.setItem(STORAGE_KEY, JSON.stringify({ project, activeBatchIds, paused, outputFolder, currentProjectFilePath, projectDirty, projectRuntime, grokRouter: getGrokRouterSettings(), reviewSettings: getReviewSettings(), imageGeneration: getImageGenerationSettings(), continuityReferences: getContinuityReferenceSettings() }));
 }
 
 async function reconcileSavedAssets() {
@@ -2282,6 +2321,7 @@ function restore() {
     outputFolder = saved.outputFolder || '';
     applyImageGenerationSettings(saved.imageGeneration || {});
     applyReviewSettings(saved.reviewSettings || { skipReview: saved.skipReview });
+    applyContinuityReferenceSettings(saved.continuityReferences || saved.project?.continuityReferences || {});
     currentProjectFilePath = saved.currentProjectFilePath || '';
     projectDirty = Boolean(saved.projectDirty);
     projectRuntime = { ...projectRuntime, ...(saved.projectRuntime || {}) };
