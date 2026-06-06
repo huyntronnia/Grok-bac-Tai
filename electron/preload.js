@@ -24,6 +24,11 @@ contextBridge.exposeInMainWorld('videoPlannerAPI', {
     ipcRenderer.on('pipeline:notice', listener);
     return () => ipcRenderer.removeListener('pipeline:notice', listener);
   },
+  onPipelineLogEntry: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on('pipeline:log-entry', listener);
+    return () => ipcRenderer.removeListener('pipeline:log-entry', listener);
+  },
   openWebLogin: (provider) => ipcRenderer.invoke('browser:open-login', provider),
   checkWebLogin: (provider, options) => ipcRenderer.invoke('browser:check-login', provider, options),
   chooseOutputFolder: () => ipcRenderer.invoke('output:choose-folder'),

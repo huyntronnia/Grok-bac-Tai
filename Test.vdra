@@ -1,0 +1,363 @@
+{
+  "schemaVersion": 1,
+  "appVersion": "electron-phase2",
+  "savedAt": "2026-06-06T09:01:47.302Z",
+  "project": {
+    "id": "23350213-25d2-49d7-87d7-0584dbaa2ea3",
+    "name": "Test",
+    "story": "",
+    "chatContextTitle": "Test",
+    "scenes": [
+      {
+        "id": 1,
+        "original": "SCENE 01 1 : SCENE 01: Thùng cá trượt khỏi xe đẩy ở chợ sáng Shirokawa, lao về phía xe nôi em bé và bé mèo ginger penguin lao ra chặn lại.\n2 : Continuity : Bé mèo con ginger mini 1 tháng tuổi, lông cam thật mềm, mắt to sáng, đi bằng 2 chân, mặc bộ cosplay chim cánh cụt xanh navy xuyên suốt, mũ ôm tai, hai vây nhỏ hai bên, dáng cực nhỏ so với thùng cá và xe nôi; vẫn là mèo thật 100%, không biến thành người.\n3 : NHÂN VẬT : Bé mèo ginger đang ở dưới mép sạp cá, tư thế cúi thấp chuẩn bị bật ra; ông chủ sạp cá đứng cạnh xe đẩy bị lệch bánh; một người mẹ đứng cạnh xe nôi ở cuối dốc đá; em bé nằm trong xe nôi, không hành động chính.\n4 : NỘI DUNG CHUYỂN ĐỘNG CHÍNH CỦA SCENE : Bánh xe đẩy cá cán qua viên đá nhỏ, thùng cá nặng trượt khỏi xe và lao xuống dốc lát đá; bé mèo lập tức bật ra, chạy hai chân cực nhanh, hai vây penguin lật phật, lao tới tì cả hai paw vào cạnh thùng; thùng cá đẩy bé trượt ngược vài gang tay, móng chân cào trên đá phát ra tiếng két nhỏ, nước cá sóng sánh bắn nhẹ, rồi thùng dừng trước xe nôi.\n5 : NHỮNG YẾU TỐ CHUYỂN ĐỘNG CÒN LẠI: Chợ cá Nhật buổi sáng đông vừa đủ, người bán hàng giật mình né sang hai bên, cá trong thùng rung lách tách, vải bạt sạp cá phập phồng nhẹ; ánh sáng ban ngày trắng sạch 6000K–6500K phủ đều toàn khung hình, không vàng, không cam.",
+        "previous": "",
+        "next": "SCENE 02 1 : SCENE 02: Sau khi cứu xe nôi, bé mèo được ông chủ sạp cá thưởng đồng xu và tự lau người vì bị dính nước cá.\n2 : Continuity : Bé mèo ginger vẫn mặc bộ penguin xanh navy, phần bụng áo hơi ướt nước cá, mũ penguin lệch nhẹ, ria mép dính vài giọt nước; dáng vẫn nhỏ xíu nhưng đứng thẳng bằng 2 chân như người.\n3 : NHÂN VẬT : Bé mèo đứng sát chân sạp cá, hai paw đặt trước ngực; ông chủ sạp cá cúi thấp ngang tầm bé, một tay cầm đồng xu, một tay cầm khăn nhỏ; người mẹ đứng phía sau xe nôi, cúi đầu cảm ơn.\n4 : NỘI DUNG CHUYỂN ĐỘNG CHÍNH CỦA SCENE : Ông chủ sạp cá đặt đồng xu sáng vào hai paw của bé, rồi đưa khăn nhỏ; bé mèo kẹp đồng xu vào túi áo penguin, cầm khăn lau mặt rất nghiêm túc nhưng lau ngược chiều lông làm ria mép xù lên; bé ngẩng mặt “meo!” tự hào, đuôi vẫy nhanh, người mẹ đẩy xe nôi đi qua và cúi đầu cảm ơn.\n5 : NHỮNG YẾU TỐ CHUYỂN ĐỘNG CÒN LẠI: Nước từ thùng cá nhỏ từng giọt xuống nền đá, cá trong sạp quẫy nhẹ, khách chợ phía sau tiếp tục đi lại chậm; âm thanh có tiếng khăn chà nhẹ lên lông, tiếng xu chạm túi áo, tiếng xe nôi lăn xa dần.",
+        "status": "queued",
+        "imagePrompt": "",
+        "motionPrompt": "",
+        "provider": "",
+        "account": "",
+        "updatedAt": "2026-06-06T09:01:47.298Z",
+        "sceneId": "1",
+        "sceneIndex": 0,
+        "rawSceneText": "SCENE 01 1 : SCENE 01: Thùng cá trượt khỏi xe đẩy ở chợ sáng Shirokawa, lao về phía xe nôi em bé và bé mèo ginger penguin lao ra chặn lại.\n2 : Continuity : Bé mèo con ginger mini 1 tháng tuổi, lông cam thật mềm, mắt to sáng, đi bằng 2 chân, mặc bộ cosplay chim cánh cụt xanh navy xuyên suốt, mũ ôm tai, hai vây nhỏ hai bên, dáng cực nhỏ so với thùng cá và xe nôi; vẫn là mèo thật 100%, không biến thành người.\n3 : NHÂN VẬT : Bé mèo ginger đang ở dưới mép sạp cá, tư thế cúi thấp chuẩn bị bật ra; ông chủ sạp cá đứng cạnh xe đẩy bị lệch bánh; một người mẹ đứng cạnh xe nôi ở cuối dốc đá; em bé nằm trong xe nôi, không hành động chính.\n4 : NỘI DUNG CHUYỂN ĐỘNG CHÍNH CỦA SCENE : Bánh xe đẩy cá cán qua viên đá nhỏ, thùng cá nặng trượt khỏi xe và lao xuống dốc lát đá; bé mèo lập tức bật ra, chạy hai chân cực nhanh, hai vây penguin lật phật, lao tới tì cả hai paw vào cạnh thùng; thùng cá đẩy bé trượt ngược vài gang tay, móng chân cào trên đá phát ra tiếng két nhỏ, nước cá sóng sánh bắn nhẹ, rồi thùng dừng trước xe nôi.\n5 : NHỮNG YẾU TỐ CHUYỂN ĐỘNG CÒN LẠI: Chợ cá Nhật buổi sáng đông vừa đủ, người bán hàng giật mình né sang hai bên, cá trong thùng rung lách tách, vải bạt sạp cá phập phồng nhẹ; ánh sáng ban ngày trắng sạch 6000K–6500K phủ đều toàn khung hình, không vàng, không cam.",
+        "imagePath": "",
+        "videoPath": "",
+        "continuityReferencePaths": [],
+        "continuityReferenceSourceScene": null,
+        "generatedContinuityReferences": null,
+        "errorClassification": null
+      },
+      {
+        "id": 2,
+        "original": "SCENE 02 1 : SCENE 02: Sau khi cứu xe nôi, bé mèo được ông chủ sạp cá thưởng đồng xu và tự lau người vì bị dính nước cá.\n2 : Continuity : Bé mèo ginger vẫn mặc bộ penguin xanh navy, phần bụng áo hơi ướt nước cá, mũ penguin lệch nhẹ, ria mép dính vài giọt nước; dáng vẫn nhỏ xíu nhưng đứng thẳng bằng 2 chân như người.\n3 : NHÂN VẬT : Bé mèo đứng sát chân sạp cá, hai paw đặt trước ngực; ông chủ sạp cá cúi thấp ngang tầm bé, một tay cầm đồng xu, một tay cầm khăn nhỏ; người mẹ đứng phía sau xe nôi, cúi đầu cảm ơn.\n4 : NỘI DUNG CHUYỂN ĐỘNG CHÍNH CỦA SCENE : Ông chủ sạp cá đặt đồng xu sáng vào hai paw của bé, rồi đưa khăn nhỏ; bé mèo kẹp đồng xu vào túi áo penguin, cầm khăn lau mặt rất nghiêm túc nhưng lau ngược chiều lông làm ria mép xù lên; bé ngẩng mặt “meo!” tự hào, đuôi vẫy nhanh, người mẹ đẩy xe nôi đi qua và cúi đầu cảm ơn.\n5 : NHỮNG YẾU TỐ CHUYỂN ĐỘNG CÒN LẠI: Nước từ thùng cá nhỏ từng giọt xuống nền đá, cá trong sạp quẫy nhẹ, khách chợ phía sau tiếp tục đi lại chậm; âm thanh có tiếng khăn chà nhẹ lên lông, tiếng xu chạm túi áo, tiếng xe nôi lăn xa dần.",
+        "previous": "SCENE 01 1 : SCENE 01: Thùng cá trượt khỏi xe đẩy ở chợ sáng Shirokawa, lao về phía xe nôi em bé và bé mèo ginger penguin lao ra chặn lại.\n2 : Continuity : Bé mèo con ginger mini 1 tháng tuổi, lông cam thật mềm, mắt to sáng, đi bằng 2 chân, mặc bộ cosplay chim cánh cụt xanh navy xuyên suốt, mũ ôm tai, hai vây nhỏ hai bên, dáng cực nhỏ so với thùng cá và xe nôi; vẫn là mèo thật 100%, không biến thành người.\n3 : NHÂN VẬT : Bé mèo ginger đang ở dưới mép sạp cá, tư thế cúi thấp chuẩn bị bật ra; ông chủ sạp cá đứng cạnh xe đẩy bị lệch bánh; một người mẹ đứng cạnh xe nôi ở cuối dốc đá; em bé nằm trong xe nôi, không hành động chính.\n4 : NỘI DUNG CHUYỂN ĐỘNG CHÍNH CỦA SCENE : Bánh xe đẩy cá cán qua viên đá nhỏ, thùng cá nặng trượt khỏi xe và lao xuống dốc lát đá; bé mèo lập tức bật ra, chạy hai chân cực nhanh, hai vây penguin lật phật, lao tới tì cả hai paw vào cạnh thùng; thùng cá đẩy bé trượt ngược vài gang tay, móng chân cào trên đá phát ra tiếng két nhỏ, nước cá sóng sánh bắn nhẹ, rồi thùng dừng trước xe nôi.\n5 : NHỮNG YẾU TỐ CHUYỂN ĐỘNG CÒN LẠI: Chợ cá Nhật buổi sáng đông vừa đủ, người bán hàng giật mình né sang hai bên, cá trong thùng rung lách tách, vải bạt sạp cá phập phồng nhẹ; ánh sáng ban ngày trắng sạch 6000K–6500K phủ đều toàn khung hình, không vàng, không cam.",
+        "next": "SCENE 03 1 : SCENE 03: Bé mèo dùng đồng xu chạy đến quầy mochi taiyaki mini, vừa chuẩn bị ăn thì nhìn thấy xe trang trí lễ hội ở quảng trường bắt đầu lảo đảo va vào cột chuông.\n2 : Continuity : Bé mèo ginger mini vẫn mặc bộ penguin xanh navy, áo còn hơi ẩm ở bụng, ria mép vừa được lau xù nhẹ, đồng xu nằm trong túi áo trước ngực; bé di chuyển nhanh bằng 2 chân, hai vây áo rung liên tục.\n3 : NHÂN VẬT : Bé mèo đứng trước quầy mochi, hai paw nâng đồng xu; bà chủ tiệm mochi đứng sau quầy, tay cầm chiếc taiyaki mini nóng; ở nền xa cùng khung hình, một nhân viên lễ hội đang đẩy xe trang trí có treo dây ruy băng gần cột chuông.\n4 : NỘI DUNG CHUYỂN ĐỘNG CHÍNH CỦA SCENE : Bé mèo đặt đồng xu lên khay, nhận chiếc taiyaki mini bốc hơi, ôm bánh bằng hai paw và đưa gần miệng; phía sau, bánh xe trang trí lễ hội cán lên mép dây ruy băng rơi dưới đất, xe nghiêng, một chậu hoa trên xe trượt sang bên và va vào chân cột treo chuông; bé mèo nhìn thấy chuyển động đó, dừng cắn bánh, tai dựng lên, mắt mở to.\n5 : NHỮNG YẾU TỐ CHUYỂN ĐỘNG CÒN LẠI: Hơi nóng từ taiyaki bay trắng nhẹ, rèm vải tiệm mochi lay động, khách quanh quầy quay đầu theo hướng xe trang trí; âm thanh đến từ hành động nhìn thấy rõ: bánh xe lộc cộc trên đá, chậu hoa cọ vào kim loại, ruy băng kéo lê dưới bánh xe.",
+        "status": "queued",
+        "imagePrompt": "",
+        "motionPrompt": "",
+        "provider": "",
+        "account": "",
+        "updatedAt": "2026-06-06T09:01:47.298Z",
+        "sceneId": "2",
+        "sceneIndex": 1,
+        "rawSceneText": "SCENE 02 1 : SCENE 02: Sau khi cứu xe nôi, bé mèo được ông chủ sạp cá thưởng đồng xu và tự lau người vì bị dính nước cá.\n2 : Continuity : Bé mèo ginger vẫn mặc bộ penguin xanh navy, phần bụng áo hơi ướt nước cá, mũ penguin lệch nhẹ, ria mép dính vài giọt nước; dáng vẫn nhỏ xíu nhưng đứng thẳng bằng 2 chân như người.\n3 : NHÂN VẬT : Bé mèo đứng sát chân sạp cá, hai paw đặt trước ngực; ông chủ sạp cá cúi thấp ngang tầm bé, một tay cầm đồng xu, một tay cầm khăn nhỏ; người mẹ đứng phía sau xe nôi, cúi đầu cảm ơn.\n4 : NỘI DUNG CHUYỂN ĐỘNG CHÍNH CỦA SCENE : Ông chủ sạp cá đặt đồng xu sáng vào hai paw của bé, rồi đưa khăn nhỏ; bé mèo kẹp đồng xu vào túi áo penguin, cầm khăn lau mặt rất nghiêm túc nhưng lau ngược chiều lông làm ria mép xù lên; bé ngẩng mặt “meo!” tự hào, đuôi vẫy nhanh, người mẹ đẩy xe nôi đi qua và cúi đầu cảm ơn.\n5 : NHỮNG YẾU TỐ CHUYỂN ĐỘNG CÒN LẠI: Nước từ thùng cá nhỏ từng giọt xuống nền đá, cá trong sạp quẫy nhẹ, khách chợ phía sau tiếp tục đi lại chậm; âm thanh có tiếng khăn chà nhẹ lên lông, tiếng xu chạm túi áo, tiếng xe nôi lăn xa dần.",
+        "imagePath": "",
+        "videoPath": "",
+        "continuityReferencePaths": [],
+        "continuityReferenceSourceScene": null,
+        "generatedContinuityReferences": null,
+        "errorClassification": null
+      },
+      {
+        "id": 3,
+        "original": "SCENE 03 1 : SCENE 03: Bé mèo dùng đồng xu chạy đến quầy mochi taiyaki mini, vừa chuẩn bị ăn thì nhìn thấy xe trang trí lễ hội ở quảng trường bắt đầu lảo đảo va vào cột chuông.\n2 : Continuity : Bé mèo ginger mini vẫn mặc bộ penguin xanh navy, áo còn hơi ẩm ở bụng, ria mép vừa được lau xù nhẹ, đồng xu nằm trong túi áo trước ngực; bé di chuyển nhanh bằng 2 chân, hai vây áo rung liên tục.\n3 : NHÂN VẬT : Bé mèo đứng trước quầy mochi, hai paw nâng đồng xu; bà chủ tiệm mochi đứng sau quầy, tay cầm chiếc taiyaki mini nóng; ở nền xa cùng khung hình, một nhân viên lễ hội đang đẩy xe trang trí có treo dây ruy băng gần cột chuông.\n4 : NỘI DUNG CHUYỂN ĐỘNG CHÍNH CỦA SCENE : Bé mèo đặt đồng xu lên khay, nhận chiếc taiyaki mini bốc hơi, ôm bánh bằng hai paw và đưa gần miệng; phía sau, bánh xe trang trí lễ hội cán lên mép dây ruy băng rơi dưới đất, xe nghiêng, một chậu hoa trên xe trượt sang bên và va vào chân cột treo chuông; bé mèo nhìn thấy chuyển động đó, dừng cắn bánh, tai dựng lên, mắt mở to.\n5 : NHỮNG YẾU TỐ CHUYỂN ĐỘNG CÒN LẠI: Hơi nóng từ taiyaki bay trắng nhẹ, rèm vải tiệm mochi lay động, khách quanh quầy quay đầu theo hướng xe trang trí; âm thanh đến từ hành động nhìn thấy rõ: bánh xe lộc cộc trên đá, chậu hoa cọ vào kim loại, ruy băng kéo lê dưới bánh xe.",
+        "previous": "SCENE 02 1 : SCENE 02: Sau khi cứu xe nôi, bé mèo được ông chủ sạp cá thưởng đồng xu và tự lau người vì bị dính nước cá.\n2 : Continuity : Bé mèo ginger vẫn mặc bộ penguin xanh navy, phần bụng áo hơi ướt nước cá, mũ penguin lệch nhẹ, ria mép dính vài giọt nước; dáng vẫn nhỏ xíu nhưng đứng thẳng bằng 2 chân như người.\n3 : NHÂN VẬT : Bé mèo đứng sát chân sạp cá, hai paw đặt trước ngực; ông chủ sạp cá cúi thấp ngang tầm bé, một tay cầm đồng xu, một tay cầm khăn nhỏ; người mẹ đứng phía sau xe nôi, cúi đầu cảm ơn.\n4 : NỘI DUNG CHUYỂN ĐỘNG CHÍNH CỦA SCENE : Ông chủ sạp cá đặt đồng xu sáng vào hai paw của bé, rồi đưa khăn nhỏ; bé mèo kẹp đồng xu vào túi áo penguin, cầm khăn lau mặt rất nghiêm túc nhưng lau ngược chiều lông làm ria mép xù lên; bé ngẩng mặt “meo!” tự hào, đuôi vẫy nhanh, người mẹ đẩy xe nôi đi qua và cúi đầu cảm ơn.\n5 : NHỮNG YẾU TỐ CHUYỂN ĐỘNG CÒN LẠI: Nước từ thùng cá nhỏ từng giọt xuống nền đá, cá trong sạp quẫy nhẹ, khách chợ phía sau tiếp tục đi lại chậm; âm thanh có tiếng khăn chà nhẹ lên lông, tiếng xu chạm túi áo, tiếng xe nôi lăn xa dần.",
+        "next": "SCENE 04 1 : SCENE 04: Xe trang trí lễ hội va vào cột, chiếc chuông gió thủy tinh trắng rơi xuống tấm vải đệm nhưng vẫn nứt; bé gái xe lăn nhìn thấy chiếc chuông bị hỏng.\n2 : Continuity : Bé mèo ginger vẫn ôm chiếc taiyaki mini chưa ăn, bộ penguin xanh navy hơi ẩm, mũ còn lệch nhẹ; thân hình bé rất nhỏ khi chạy vào quảng trường rộng và đứng gần mảnh chuông lớn hơn paw của bé.\n3 : NHÂN VẬT : Bé mèo chạy từ rìa quầy mochi vào quảng trường; nhân viên lễ hội đứng cạnh xe trang trí, hai tay giữ xe lại; bé gái ngồi trên xe lăn gần mẹ, tay cầm tấm thiệp vẽ chuông gió; người thợ thủy tinh già đứng gần cột treo.\n4 : NỘI DUNG CHUYỂN ĐỘNG CHÍNH CỦA SCENE : Xe trang trí húc nhẹ vào cột, móc treo rung mạnh, chuông gió thủy tinh trắng tuột xuống tấm vải đệm dưới chân cột; khi rơi, lõi thủy tinh đập vào thành chuông làm vết nứt lan ra như sợi chỉ trắng; bé gái siết tấm thiệp trong tay, vai chùng xuống; bé mèo chạy tới, đặt taiyaki xuống mép vải, cúi sát nhìn vết nứt.\n5 : NHỮNG YẾU TỐ CHUYỂN ĐỘNG CÒN LẠI: Ruy băng lễ hội quấn lỏng quanh bánh xe trang trí, vài cánh hoa rơi khỏi chậu và lăn trên nền đá; âm thanh có tiếng móc kim loại rung, tiếng thủy tinh chạm vải đệm, tiếng bánh xe lăn khựng lại.",
+        "status": "queued",
+        "imagePrompt": "",
+        "motionPrompt": "",
+        "provider": "",
+        "account": "",
+        "updatedAt": "2026-06-06T09:01:47.298Z",
+        "sceneId": "3",
+        "sceneIndex": 2,
+        "rawSceneText": "SCENE 03 1 : SCENE 03: Bé mèo dùng đồng xu chạy đến quầy mochi taiyaki mini, vừa chuẩn bị ăn thì nhìn thấy xe trang trí lễ hội ở quảng trường bắt đầu lảo đảo va vào cột chuông.\n2 : Continuity : Bé mèo ginger mini vẫn mặc bộ penguin xanh navy, áo còn hơi ẩm ở bụng, ria mép vừa được lau xù nhẹ, đồng xu nằm trong túi áo trước ngực; bé di chuyển nhanh bằng 2 chân, hai vây áo rung liên tục.\n3 : NHÂN VẬT : Bé mèo đứng trước quầy mochi, hai paw nâng đồng xu; bà chủ tiệm mochi đứng sau quầy, tay cầm chiếc taiyaki mini nóng; ở nền xa cùng khung hình, một nhân viên lễ hội đang đẩy xe trang trí có treo dây ruy băng gần cột chuông.\n4 : NỘI DUNG CHUYỂN ĐỘNG CHÍNH CỦA SCENE : Bé mèo đặt đồng xu lên khay, nhận chiếc taiyaki mini bốc hơi, ôm bánh bằng hai paw và đưa gần miệng; phía sau, bánh xe trang trí lễ hội cán lên mép dây ruy băng rơi dưới đất, xe nghiêng, một chậu hoa trên xe trượt sang bên và va vào chân cột treo chuông; bé mèo nhìn thấy chuyển động đó, dừng cắn bánh, tai dựng lên, mắt mở to.\n5 : NHỮNG YẾU TỐ CHUYỂN ĐỘNG CÒN LẠI: Hơi nóng từ taiyaki bay trắng nhẹ, rèm vải tiệm mochi lay động, khách quanh quầy quay đầu theo hướng xe trang trí; âm thanh đến từ hành động nhìn thấy rõ: bánh xe lộc cộc trên đá, chậu hoa cọ vào kim loại, ruy băng kéo lê dưới bánh xe.",
+        "imagePath": "",
+        "videoPath": "",
+        "continuityReferencePaths": [],
+        "continuityReferenceSourceScene": null,
+        "generatedContinuityReferences": null,
+        "errorClassification": null
+      },
+      {
+        "id": 4,
+        "original": "SCENE 04 1 : SCENE 04: Xe trang trí lễ hội va vào cột, chiếc chuông gió thủy tinh trắng rơi xuống tấm vải đệm nhưng vẫn nứt; bé gái xe lăn nhìn thấy chiếc chuông bị hỏng.\n2 : Continuity : Bé mèo ginger vẫn ôm chiếc taiyaki mini chưa ăn, bộ penguin xanh navy hơi ẩm, mũ còn lệch nhẹ; thân hình bé rất nhỏ khi chạy vào quảng trường rộng và đứng gần mảnh chuông lớn hơn paw của bé.\n3 : NHÂN VẬT : Bé mèo chạy từ rìa quầy mochi vào quảng trường; nhân viên lễ hội đứng cạnh xe trang trí, hai tay giữ xe lại; bé gái ngồi trên xe lăn gần mẹ, tay cầm tấm thiệp vẽ chuông gió; người thợ thủy tinh già đứng gần cột treo.\n4 : NỘI DUNG CHUYỂN ĐỘNG CHÍNH CỦA SCENE : Xe trang trí húc nhẹ vào cột, móc treo rung mạnh, chuông gió thủy tinh trắng tuột xuống tấm vải đệm dưới chân cột; khi rơi, lõi thủy tinh đập vào thành chuông làm vết nứt lan ra như sợi chỉ trắng; bé gái siết tấm thiệp trong tay, vai chùng xuống; bé mèo chạy tới, đặt taiyaki xuống mép vải, cúi sát nhìn vết nứt.\n5 : NHỮNG YẾU TỐ CHUYỂN ĐỘNG CÒN LẠI: Ruy băng lễ hội quấn lỏng quanh bánh xe trang trí, vài cánh hoa rơi khỏi chậu và lăn trên nền đá; âm thanh có tiếng móc kim loại rung, tiếng thủy tinh chạm vải đệm, tiếng bánh xe lăn khựng lại.",
+        "previous": "SCENE 03 1 : SCENE 03: Bé mèo dùng đồng xu chạy đến quầy mochi taiyaki mini, vừa chuẩn bị ăn thì nhìn thấy xe trang trí lễ hội ở quảng trường bắt đầu lảo đảo va vào cột chuông.\n2 : Continuity : Bé mèo ginger mini vẫn mặc bộ penguin xanh navy, áo còn hơi ẩm ở bụng, ria mép vừa được lau xù nhẹ, đồng xu nằm trong túi áo trước ngực; bé di chuyển nhanh bằng 2 chân, hai vây áo rung liên tục.\n3 : NHÂN VẬT : Bé mèo đứng trước quầy mochi, hai paw nâng đồng xu; bà chủ tiệm mochi đứng sau quầy, tay cầm chiếc taiyaki mini nóng; ở nền xa cùng khung hình, một nhân viên lễ hội đang đẩy xe trang trí có treo dây ruy băng gần cột chuông.\n4 : NỘI DUNG CHUYỂN ĐỘNG CHÍNH CỦA SCENE : Bé mèo đặt đồng xu lên khay, nhận chiếc taiyaki mini bốc hơi, ôm bánh bằng hai paw và đưa gần miệng; phía sau, bánh xe trang trí lễ hội cán lên mép dây ruy băng rơi dưới đất, xe nghiêng, một chậu hoa trên xe trượt sang bên và va vào chân cột treo chuông; bé mèo nhìn thấy chuyển động đó, dừng cắn bánh, tai dựng lên, mắt mở to.\n5 : NHỮNG YẾU TỐ CHUYỂN ĐỘNG CÒN LẠI: Hơi nóng từ taiyaki bay trắng nhẹ, rèm vải tiệm mochi lay động, khách quanh quầy quay đầu theo hướng xe trang trí; âm thanh đến từ hành động nhìn thấy rõ: bánh xe lộc cộc trên đá, chậu hoa cọ vào kim loại, ruy băng kéo lê dưới bánh xe.",
+        "next": "SCENE 05 1 : SCENE 05: Bé mèo từ bỏ chiếc taiyaki mình muốn ăn, đặt đồng xu lên bàn sửa chuông và ra hiệu nhận nhiệm vụ sửa chuông cho bé gái.\n2 : Continuity : Bé mèo ginger mini vẫn mặc bộ penguin xanh navy xuyên suốt, hai paw hơi dính vụn bánh do vừa ôm taiyaki, mắt nhìn qua lại giữa chiếc bánh và bé gái; tạo hình vẫn là mèo con thật, cảm xúc thể hiện qua tai cụp, mắt long lanh, đuôi vẫy chậm.\n3 : NHÂN VẬT : Bé mèo đứng giữa quầy mochi nhỏ và bàn sửa chuông tạm thời ở quảng trường; bà chủ tiệm mochi đứng cạnh khay bánh; người thợ thủy tinh già ngồi sau bàn, trước mặt là chuông nứt; bé gái xe lăn ở bên cạnh mẹ, nhìn theo bé mèo.\n4 : NỘI DUNG CHUYỂN ĐỘNG CHÍNH CỦA SCENE : Bé mèo nhìn chiếc taiyaki, nuốt khan, rồi dùng hai paw đẩy bánh trở lại khay của bà chủ; bé móc đồng xu trong túi áo penguin, đặt lên bàn sửa chuông, sau đó chỉ vào chuông nứt, chỉ sang bé gái, rồi vỗ paw lên ngực “meo!” như hứa sẽ làm; người thợ già xoay bảng chi phí sửa chuông về phía bé, đặt ngón tay lên phần cần thêm tiền và vật liệu.\n5 : NHỮNG YẾU TỐ CHUYỂN ĐỘNG CÒN LẠI: Hơi bánh taiyaki vẫn bay lên nhưng bé không ăn, tạo cảm giác hy sinh rõ bằng hình ảnh; ánh sáng trắng sạch phản chiếu trên mảnh thủy tinh nứt, giấy thiệp trong tay bé gái hơi run theo chuyển động tay.",
+        "status": "queued",
+        "imagePrompt": "",
+        "motionPrompt": "",
+        "provider": "",
+        "account": "",
+        "updatedAt": "2026-06-06T09:01:47.298Z",
+        "sceneId": "4",
+        "sceneIndex": 3,
+        "rawSceneText": "SCENE 04 1 : SCENE 04: Xe trang trí lễ hội va vào cột, chiếc chuông gió thủy tinh trắng rơi xuống tấm vải đệm nhưng vẫn nứt; bé gái xe lăn nhìn thấy chiếc chuông bị hỏng.\n2 : Continuity : Bé mèo ginger vẫn ôm chiếc taiyaki mini chưa ăn, bộ penguin xanh navy hơi ẩm, mũ còn lệch nhẹ; thân hình bé rất nhỏ khi chạy vào quảng trường rộng và đứng gần mảnh chuông lớn hơn paw của bé.\n3 : NHÂN VẬT : Bé mèo chạy từ rìa quầy mochi vào quảng trường; nhân viên lễ hội đứng cạnh xe trang trí, hai tay giữ xe lại; bé gái ngồi trên xe lăn gần mẹ, tay cầm tấm thiệp vẽ chuông gió; người thợ thủy tinh già đứng gần cột treo.\n4 : NỘI DUNG CHUYỂN ĐỘNG CHÍNH CỦA SCENE : Xe trang trí húc nhẹ vào cột, móc treo rung mạnh, chuông gió thủy tinh trắng tuột xuống tấm vải đệm dưới chân cột; khi rơi, lõi thủy tinh đập vào thành chuông làm vết nứt lan ra như sợi chỉ trắng; bé gái siết tấm thiệp trong tay, vai chùng xuống; bé mèo chạy tới, đặt taiyaki xuống mép vải, cúi sát nhìn vết nứt.\n5 : NHỮNG YẾU TỐ CHUYỂN ĐỘNG CÒN LẠI: Ruy băng lễ hội quấn lỏng quanh bánh xe trang trí, vài cánh hoa rơi khỏi chậu và lăn trên nền đá; âm thanh có tiếng móc kim loại rung, tiếng thủy tinh chạm vải đệm, tiếng bánh xe lăn khựng lại.",
+        "imagePath": "",
+        "videoPath": "",
+        "continuityReferencePaths": [],
+        "continuityReferenceSourceScene": null,
+        "generatedContinuityReferences": null,
+        "errorClassification": null
+      },
+      {
+        "id": 5,
+        "original": "SCENE 05 1 : SCENE 05: Bé mèo từ bỏ chiếc taiyaki mình muốn ăn, đặt đồng xu lên bàn sửa chuông và ra hiệu nhận nhiệm vụ sửa chuông cho bé gái.\n2 : Continuity : Bé mèo ginger mini vẫn mặc bộ penguin xanh navy xuyên suốt, hai paw hơi dính vụn bánh do vừa ôm taiyaki, mắt nhìn qua lại giữa chiếc bánh và bé gái; tạo hình vẫn là mèo con thật, cảm xúc thể hiện qua tai cụp, mắt long lanh, đuôi vẫy chậm.\n3 : NHÂN VẬT : Bé mèo đứng giữa quầy mochi nhỏ và bàn sửa chuông tạm thời ở quảng trường; bà chủ tiệm mochi đứng cạnh khay bánh; người thợ thủy tinh già ngồi sau bàn, trước mặt là chuông nứt; bé gái xe lăn ở bên cạnh mẹ, nhìn theo bé mèo.\n4 : NỘI DUNG CHUYỂN ĐỘNG CHÍNH CỦA SCENE : Bé mèo nhìn chiếc taiyaki, nuốt khan, rồi dùng hai paw đẩy bánh trở lại khay của bà chủ; bé móc đồng xu trong túi áo penguin, đặt lên bàn sửa chuông, sau đó chỉ vào chuông nứt, chỉ sang bé gái, rồi vỗ paw lên ngực “meo!” như hứa sẽ làm; người thợ già xoay bảng chi phí sửa chuông về phía bé, đặt ngón tay lên phần cần thêm tiền và vật liệu.\n5 : NHỮNG YẾU TỐ CHUYỂN ĐỘNG CÒN LẠI: Hơi bánh taiyaki vẫn bay lên nhưng bé không ăn, tạo cảm giác hy sinh rõ bằng hình ảnh; ánh sáng trắng sạch phản chiếu trên mảnh thủy tinh nứt, giấy thiệp trong tay bé gái hơi run theo chuyển động tay.",
+        "previous": "SCENE 04 1 : SCENE 04: Xe trang trí lễ hội va vào cột, chiếc chuông gió thủy tinh trắng rơi xuống tấm vải đệm nhưng vẫn nứt; bé gái xe lăn nhìn thấy chiếc chuông bị hỏng.\n2 : Continuity : Bé mèo ginger vẫn ôm chiếc taiyaki mini chưa ăn, bộ penguin xanh navy hơi ẩm, mũ còn lệch nhẹ; thân hình bé rất nhỏ khi chạy vào quảng trường rộng và đứng gần mảnh chuông lớn hơn paw của bé.\n3 : NHÂN VẬT : Bé mèo chạy từ rìa quầy mochi vào quảng trường; nhân viên lễ hội đứng cạnh xe trang trí, hai tay giữ xe lại; bé gái ngồi trên xe lăn gần mẹ, tay cầm tấm thiệp vẽ chuông gió; người thợ thủy tinh già đứng gần cột treo.\n4 : NỘI DUNG CHUYỂN ĐỘNG CHÍNH CỦA SCENE : Xe trang trí húc nhẹ vào cột, móc treo rung mạnh, chuông gió thủy tinh trắng tuột xuống tấm vải đệm dưới chân cột; khi rơi, lõi thủy tinh đập vào thành chuông làm vết nứt lan ra như sợi chỉ trắng; bé gái siết tấm thiệp trong tay, vai chùng xuống; bé mèo chạy tới, đặt taiyaki xuống mép vải, cúi sát nhìn vết nứt.\n5 : NHỮNG YẾU TỐ CHUYỂN ĐỘNG CÒN LẠI: Ruy băng lễ hội quấn lỏng quanh bánh xe trang trí, vài cánh hoa rơi khỏi chậu và lăn trên nền đá; âm thanh có tiếng móc kim loại rung, tiếng thủy tinh chạm vải đệm, tiếng bánh xe lăn khựng lại.",
+        "next": "SCENE 06 1 : SCENE 06: Người thợ thủy tinh đặt các vật cần sửa lên bàn và chú cảnh sát giao thông gấp bản đồ giúp bé mèo bắt đầu hành trình.\n2 : Continuity : Bé mèo ginger vẫn là mèo con 1 tháng tuổi rất nhỏ, mặc bộ penguin xanh navy, túi áo trước ngực đã trống đồng xu; bé đứng kiễng hai chân để nhìn lên mặt bàn cao, mũ penguin vẫn lệch nhẹ sau các va chạm trước.\n3 : NHÂN VẬT : Bé mèo đứng sát chân bàn sửa chuông; người thợ thủy tinh già ngồi sau bàn, tay đặt từng món đồ ra trước mặt bé; chú cảnh sát giao thông đứng bên cạnh quảng trường, cúi xuống ngang tầm bé.\n4 : NỘI DUNG CHUYỂN ĐỘNG CHÍNH CỦA SCENE : Người thợ già lần lượt đặt khung chuông bị cong, mảnh thủy tinh còn dùng được và tấm bản đồ giấy lớn lên bàn; bé mèo kéo bản đồ xuống nhưng bản đồ bung rộng che kín cả người, làm bé loạng choạng lùi lại; chú cảnh sát cúi xuống, gấp bản đồ thành miếng nhỏ vừa túi áo penguin, chỉ tay về hướng con phố dẫn tới xưởng thủy tinh; bé mèo nhét bản đồ vào túi, cúi đầu cảm ơn và xoay người chuẩn bị chạy.\n5 : NHỮNG YẾU TỐ CHUYỂN ĐỘNG CÒN LẠI: Cờ lễ hội ở quảng trường bay nhẹ, xe trang trí được nhân viên kéo lùi khỏi cột, khách chợ đi vòng qua bàn sửa; âm thanh có tiếng giấy bản đồ sột soạt, tiếng khung kim loại chạm bàn, tiếng còi giao thông nhỏ khi cảnh sát ra hiệu cho người đi bộ dừng.",
+        "status": "queued",
+        "imagePrompt": "",
+        "motionPrompt": "",
+        "provider": "",
+        "account": "",
+        "updatedAt": "2026-06-06T09:01:47.298Z",
+        "sceneId": "5",
+        "sceneIndex": 4,
+        "rawSceneText": "SCENE 05 1 : SCENE 05: Bé mèo từ bỏ chiếc taiyaki mình muốn ăn, đặt đồng xu lên bàn sửa chuông và ra hiệu nhận nhiệm vụ sửa chuông cho bé gái.\n2 : Continuity : Bé mèo ginger mini vẫn mặc bộ penguin xanh navy xuyên suốt, hai paw hơi dính vụn bánh do vừa ôm taiyaki, mắt nhìn qua lại giữa chiếc bánh và bé gái; tạo hình vẫn là mèo con thật, cảm xúc thể hiện qua tai cụp, mắt long lanh, đuôi vẫy chậm.\n3 : NHÂN VẬT : Bé mèo đứng giữa quầy mochi nhỏ và bàn sửa chuông tạm thời ở quảng trường; bà chủ tiệm mochi đứng cạnh khay bánh; người thợ thủy tinh già ngồi sau bàn, trước mặt là chuông nứt; bé gái xe lăn ở bên cạnh mẹ, nhìn theo bé mèo.\n4 : NỘI DUNG CHUYỂN ĐỘNG CHÍNH CỦA SCENE : Bé mèo nhìn chiếc taiyaki, nuốt khan, rồi dùng hai paw đẩy bánh trở lại khay của bà chủ; bé móc đồng xu trong túi áo penguin, đặt lên bàn sửa chuông, sau đó chỉ vào chuông nứt, chỉ sang bé gái, rồi vỗ paw lên ngực “meo!” như hứa sẽ làm; người thợ già xoay bảng chi phí sửa chuông về phía bé, đặt ngón tay lên phần cần thêm tiền và vật liệu.\n5 : NHỮNG YẾU TỐ CHUYỂN ĐỘNG CÒN LẠI: Hơi bánh taiyaki vẫn bay lên nhưng bé không ăn, tạo cảm giác hy sinh rõ bằng hình ảnh; ánh sáng trắng sạch phản chiếu trên mảnh thủy tinh nứt, giấy thiệp trong tay bé gái hơi run theo chuyển động tay.",
+        "imagePath": "",
+        "videoPath": "",
+        "continuityReferencePaths": [],
+        "continuityReferenceSourceScene": null,
+        "generatedContinuityReferences": null,
+        "errorClassification": null
+      },
+      {
+        "id": 6,
+        "original": "SCENE 06 1 : SCENE 06: Người thợ thủy tinh đặt các vật cần sửa lên bàn và chú cảnh sát giao thông gấp bản đồ giúp bé mèo bắt đầu hành trình.\n2 : Continuity : Bé mèo ginger vẫn là mèo con 1 tháng tuổi rất nhỏ, mặc bộ penguin xanh navy, túi áo trước ngực đã trống đồng xu; bé đứng kiễng hai chân để nhìn lên mặt bàn cao, mũ penguin vẫn lệch nhẹ sau các va chạm trước.\n3 : NHÂN VẬT : Bé mèo đứng sát chân bàn sửa chuông; người thợ thủy tinh già ngồi sau bàn, tay đặt từng món đồ ra trước mặt bé; chú cảnh sát giao thông đứng bên cạnh quảng trường, cúi xuống ngang tầm bé.\n4 : NỘI DUNG CHUYỂN ĐỘNG CHÍNH CỦA SCENE : Người thợ già lần lượt đặt khung chuông bị cong, mảnh thủy tinh còn dùng được và tấm bản đồ giấy lớn lên bàn; bé mèo kéo bản đồ xuống nhưng bản đồ bung rộng che kín cả người, làm bé loạng choạng lùi lại; chú cảnh sát cúi xuống, gấp bản đồ thành miếng nhỏ vừa túi áo penguin, chỉ tay về hướng con phố dẫn tới xưởng thủy tinh; bé mèo nhét bản đồ vào túi, cúi đầu cảm ơn và xoay người chuẩn bị chạy.\n5 : NHỮNG YẾU TỐ CHUYỂN ĐỘNG CÒN LẠI: Cờ lễ hội ở quảng trường bay nhẹ, xe trang trí được nhân viên kéo lùi khỏi cột, khách chợ đi vòng qua bàn sửa; âm thanh có tiếng giấy bản đồ sột soạt, tiếng khung kim loại chạm bàn, tiếng còi giao thông nhỏ khi cảnh sát ra hiệu cho người đi bộ dừng.",
+        "previous": "SCENE 05 1 : SCENE 05: Bé mèo từ bỏ chiếc taiyaki mình muốn ăn, đặt đồng xu lên bàn sửa chuông và ra hiệu nhận nhiệm vụ sửa chuông cho bé gái.\n2 : Continuity : Bé mèo ginger mini vẫn mặc bộ penguin xanh navy xuyên suốt, hai paw hơi dính vụn bánh do vừa ôm taiyaki, mắt nhìn qua lại giữa chiếc bánh và bé gái; tạo hình vẫn là mèo con thật, cảm xúc thể hiện qua tai cụp, mắt long lanh, đuôi vẫy chậm.\n3 : NHÂN VẬT : Bé mèo đứng giữa quầy mochi nhỏ và bàn sửa chuông tạm thời ở quảng trường; bà chủ tiệm mochi đứng cạnh khay bánh; người thợ thủy tinh già ngồi sau bàn, trước mặt là chuông nứt; bé gái xe lăn ở bên cạnh mẹ, nhìn theo bé mèo.\n4 : NỘI DUNG CHUYỂN ĐỘNG CHÍNH CỦA SCENE : Bé mèo nhìn chiếc taiyaki, nuốt khan, rồi dùng hai paw đẩy bánh trở lại khay của bà chủ; bé móc đồng xu trong túi áo penguin, đặt lên bàn sửa chuông, sau đó chỉ vào chuông nứt, chỉ sang bé gái, rồi vỗ paw lên ngực “meo!” như hứa sẽ làm; người thợ già xoay bảng chi phí sửa chuông về phía bé, đặt ngón tay lên phần cần thêm tiền và vật liệu.\n5 : NHỮNG YẾU TỐ CHUYỂN ĐỘNG CÒN LẠI: Hơi bánh taiyaki vẫn bay lên nhưng bé không ăn, tạo cảm giác hy sinh rõ bằng hình ảnh; ánh sáng trắng sạch phản chiếu trên mảnh thủy tinh nứt, giấy thiệp trong tay bé gái hơi run theo chuyển động tay.",
+        "next": "SCENE 07 1 : SCENE 07: Bé mèo giúp bà lão bán đậu phụ nâng thùng nước đậu nành nặng lên quầy để kiếm thêm tiền sửa chuông.\n2 : Continuity : Bé mèo ginger mini mặc bộ penguin xanh navy, túi áo có bản đồ gấp nhỏ nhô ra, hai paw sạch nhưng phần mũ vẫn hơi xù; bé rất thấp so với quầy đậu phụ và thùng nước đậu nành lớn.\n3 : NHÂN VẬT : Bé mèo chạy tới trước quầy đậu phụ; bà lão bán đậu phụ đứng phía sau quầy, hai tay đang cố kéo thùng nước đậu nành; một cậu bé khách hàng đứng bên cạnh quầy, ôm túi vải, quan sát.\n4 : NỘI DUNG CHUYỂN ĐỘNG CHÍNH CỦA SCENE : Bà lão kéo thùng nước đậu nành lên nhưng thùng trượt xuống mép quầy, nước bên trong sóng sánh nặng; bé mèo thấy tấm bảng nhỏ “cần phụ nâng hàng”, lập tức chạy tới, chèn hai chân xuống nền, ôm hai paw quanh thùng, hít mạnh rồi nâng bổng thùng lên quầy; thùng đặt xuống chắc chắn, mặt quầy rung nhẹ, bà lão mở hộp tiền và trao cho bé vài đồng xu.\n5 : NHỮNG YẾU TỐ CHUYỂN ĐỘNG CÒN LẠI: Hơi nước đậu nành trắng bay lên trong ánh sáng sạch, khăn vải trên quầy rung khi thùng đặt xuống, cốc đậu phụ nhỏ lắc nhẹ; âm thanh có tiếng nước lắc trong thùng, tiếng gỗ quầy kêu cộp, tiếng xu rơi vào paw bé.",
+        "status": "queued",
+        "imagePrompt": "",
+        "motionPrompt": "",
+        "provider": "",
+        "account": "",
+        "updatedAt": "2026-06-06T09:01:47.298Z",
+        "sceneId": "6",
+        "sceneIndex": 5,
+        "rawSceneText": "SCENE 06 1 : SCENE 06: Người thợ thủy tinh đặt các vật cần sửa lên bàn và chú cảnh sát giao thông gấp bản đồ giúp bé mèo bắt đầu hành trình.\n2 : Continuity : Bé mèo ginger vẫn là mèo con 1 tháng tuổi rất nhỏ, mặc bộ penguin xanh navy, túi áo trước ngực đã trống đồng xu; bé đứng kiễng hai chân để nhìn lên mặt bàn cao, mũ penguin vẫn lệch nhẹ sau các va chạm trước.\n3 : NHÂN VẬT : Bé mèo đứng sát chân bàn sửa chuông; người thợ thủy tinh già ngồi sau bàn, tay đặt từng món đồ ra trước mặt bé; chú cảnh sát giao thông đứng bên cạnh quảng trường, cúi xuống ngang tầm bé.\n4 : NỘI DUNG CHUYỂN ĐỘNG CHÍNH CỦA SCENE : Người thợ già lần lượt đặt khung chuông bị cong, mảnh thủy tinh còn dùng được và tấm bản đồ giấy lớn lên bàn; bé mèo kéo bản đồ xuống nhưng bản đồ bung rộng che kín cả người, làm bé loạng choạng lùi lại; chú cảnh sát cúi xuống, gấp bản đồ thành miếng nhỏ vừa túi áo penguin, chỉ tay về hướng con phố dẫn tới xưởng thủy tinh; bé mèo nhét bản đồ vào túi, cúi đầu cảm ơn và xoay người chuẩn bị chạy.\n5 : NHỮNG YẾU TỐ CHUYỂN ĐỘNG CÒN LẠI: Cờ lễ hội ở quảng trường bay nhẹ, xe trang trí được nhân viên kéo lùi khỏi cột, khách chợ đi vòng qua bàn sửa; âm thanh có tiếng giấy bản đồ sột soạt, tiếng khung kim loại chạm bàn, tiếng còi giao thông nhỏ khi cảnh sát ra hiệu cho người đi bộ dừng.",
+        "imagePath": "",
+        "videoPath": "",
+        "continuityReferencePaths": [],
+        "continuityReferenceSourceScene": null,
+        "generatedContinuityReferences": null,
+        "errorClassification": null
+      },
+      {
+        "id": 7,
+        "original": "SCENE 07 1 : SCENE 07: Bé mèo giúp bà lão bán đậu phụ nâng thùng nước đậu nành nặng lên quầy để kiếm thêm tiền sửa chuông.\n2 : Continuity : Bé mèo ginger mini mặc bộ penguin xanh navy, túi áo có bản đồ gấp nhỏ nhô ra, hai paw sạch nhưng phần mũ vẫn hơi xù; bé rất thấp so với quầy đậu phụ và thùng nước đậu nành lớn.\n3 : NHÂN VẬT : Bé mèo chạy tới trước quầy đậu phụ; bà lão bán đậu phụ đứng phía sau quầy, hai tay đang cố kéo thùng nước đậu nành; một cậu bé khách hàng đứng bên cạnh quầy, ôm túi vải, quan sát.\n4 : NỘI DUNG CHUYỂN ĐỘNG CHÍNH CỦA SCENE : Bà lão kéo thùng nước đậu nành lên nhưng thùng trượt xuống mép quầy, nước bên trong sóng sánh nặng; bé mèo thấy tấm bảng nhỏ “cần phụ nâng hàng”, lập tức chạy tới, chèn hai chân xuống nền, ôm hai paw quanh thùng, hít mạnh rồi nâng bổng thùng lên quầy; thùng đặt xuống chắc chắn, mặt quầy rung nhẹ, bà lão mở hộp tiền và trao cho bé vài đồng xu.\n5 : NHỮNG YẾU TỐ CHUYỂN ĐỘNG CÒN LẠI: Hơi nước đậu nành trắng bay lên trong ánh sáng sạch, khăn vải trên quầy rung khi thùng đặt xuống, cốc đậu phụ nhỏ lắc nhẹ; âm thanh có tiếng nước lắc trong thùng, tiếng gỗ quầy kêu cộp, tiếng xu rơi vào paw bé.",
+        "previous": "SCENE 06 1 : SCENE 06: Người thợ thủy tinh đặt các vật cần sửa lên bàn và chú cảnh sát giao thông gấp bản đồ giúp bé mèo bắt đầu hành trình.\n2 : Continuity : Bé mèo ginger vẫn là mèo con 1 tháng tuổi rất nhỏ, mặc bộ penguin xanh navy, túi áo trước ngực đã trống đồng xu; bé đứng kiễng hai chân để nhìn lên mặt bàn cao, mũ penguin vẫn lệch nhẹ sau các va chạm trước.\n3 : NHÂN VẬT : Bé mèo đứng sát chân bàn sửa chuông; người thợ thủy tinh già ngồi sau bàn, tay đặt từng món đồ ra trước mặt bé; chú cảnh sát giao thông đứng bên cạnh quảng trường, cúi xuống ngang tầm bé.\n4 : NỘI DUNG CHUYỂN ĐỘNG CHÍNH CỦA SCENE : Người thợ già lần lượt đặt khung chuông bị cong, mảnh thủy tinh còn dùng được và tấm bản đồ giấy lớn lên bàn; bé mèo kéo bản đồ xuống nhưng bản đồ bung rộng che kín cả người, làm bé loạng choạng lùi lại; chú cảnh sát cúi xuống, gấp bản đồ thành miếng nhỏ vừa túi áo penguin, chỉ tay về hướng con phố dẫn tới xưởng thủy tinh; bé mèo nhét bản đồ vào túi, cúi đầu cảm ơn và xoay người chuẩn bị chạy.\n5 : NHỮNG YẾU TỐ CHUYỂN ĐỘNG CÒN LẠI: Cờ lễ hội ở quảng trường bay nhẹ, xe trang trí được nhân viên kéo lùi khỏi cột, khách chợ đi vòng qua bàn sửa; âm thanh có tiếng giấy bản đồ sột soạt, tiếng khung kim loại chạm bàn, tiếng còi giao thông nhỏ khi cảnh sát ra hiệu cho người đi bộ dừng.",
+        "next": "SCENE 08 1 : SCENE 08: Payoff hài sau khi nâng thùng: miếng đậu phụ mềm nảy lên dính vào mũ penguin của bé mèo mà bé không biết.\n2 : Continuity : Bé mèo ginger vẫn mặc bộ penguin xanh navy, túi áo có bản đồ gấp và vài đồng xu mới nhận, dáng đứng tự hào; trên đầu bé chuẩn bị có miếng đậu phụ mềm dính vào mũ, nhưng tạo hình mèo và trang phục không thay đổi.\n3 : NHÂN VẬT : Bé mèo đứng nghiêm trước quầy, hai paw đặt sát hông như chào kiểu anh hùng; bà lão bán đậu phụ đứng sau quầy, tay vẫn cầm nắp thùng; cậu bé khách hàng đứng bên cạnh, một tay chỉ lên đầu bé.\n4 : NỘI DUNG CHUYỂN ĐỘNG CHÍNH CỦA SCENE : Mặt quầy còn rung từ cú đặt thùng trước đó, một miếng đậu phụ mềm trên đĩa nảy nhẹ lên và rơi “phụp” lên mũ penguin của bé; bé mèo không biết, vẫn ưỡn ngực chào bà lão; cậu bé chỉ lên đầu bé và cười, bé sờ thử, phát hiện miếng đậu phụ, mắt tròn xoe, nhẹ nhàng gỡ xuống bằng hai paw rồi đặt lại vào đĩa phụ, tai cụp xấu hổ nhưng đuôi vẫy vui.\n5 : NHỮNG YẾU TỐ CHUYỂN ĐỘNG CÒN LẠI: Bà lão che miệng cười, rèm vải quầy đậu phụ lay nhẹ, hơi nước tiếp tục bốc lên; âm thanh có tiếng đậu phụ mềm rơi, tiếng cậu bé cười nhỏ, tiếng bé mèo “meo…” ngượng ngùng.",
+        "status": "queued",
+        "imagePrompt": "",
+        "motionPrompt": "",
+        "provider": "",
+        "account": "",
+        "updatedAt": "2026-06-06T09:01:47.298Z",
+        "sceneId": "7",
+        "sceneIndex": 6,
+        "rawSceneText": "SCENE 07 1 : SCENE 07: Bé mèo giúp bà lão bán đậu phụ nâng thùng nước đậu nành nặng lên quầy để kiếm thêm tiền sửa chuông.\n2 : Continuity : Bé mèo ginger mini mặc bộ penguin xanh navy, túi áo có bản đồ gấp nhỏ nhô ra, hai paw sạch nhưng phần mũ vẫn hơi xù; bé rất thấp so với quầy đậu phụ và thùng nước đậu nành lớn.\n3 : NHÂN VẬT : Bé mèo chạy tới trước quầy đậu phụ; bà lão bán đậu phụ đứng phía sau quầy, hai tay đang cố kéo thùng nước đậu nành; một cậu bé khách hàng đứng bên cạnh quầy, ôm túi vải, quan sát.\n4 : NỘI DUNG CHUYỂN ĐỘNG CHÍNH CỦA SCENE : Bà lão kéo thùng nước đậu nành lên nhưng thùng trượt xuống mép quầy, nước bên trong sóng sánh nặng; bé mèo thấy tấm bảng nhỏ “cần phụ nâng hàng”, lập tức chạy tới, chèn hai chân xuống nền, ôm hai paw quanh thùng, hít mạnh rồi nâng bổng thùng lên quầy; thùng đặt xuống chắc chắn, mặt quầy rung nhẹ, bà lão mở hộp tiền và trao cho bé vài đồng xu.\n5 : NHỮNG YẾU TỐ CHUYỂN ĐỘNG CÒN LẠI: Hơi nước đậu nành trắng bay lên trong ánh sáng sạch, khăn vải trên quầy rung khi thùng đặt xuống, cốc đậu phụ nhỏ lắc nhẹ; âm thanh có tiếng nước lắc trong thùng, tiếng gỗ quầy kêu cộp, tiếng xu rơi vào paw bé.",
+        "imagePath": "",
+        "videoPath": "",
+        "continuityReferencePaths": [],
+        "continuityReferenceSourceScene": null,
+        "generatedContinuityReferences": null,
+        "errorClassification": null
+      },
+      {
+        "id": 8,
+        "original": "SCENE 08 1 : SCENE 08: Payoff hài sau khi nâng thùng: miếng đậu phụ mềm nảy lên dính vào mũ penguin của bé mèo mà bé không biết.\n2 : Continuity : Bé mèo ginger vẫn mặc bộ penguin xanh navy, túi áo có bản đồ gấp và vài đồng xu mới nhận, dáng đứng tự hào; trên đầu bé chuẩn bị có miếng đậu phụ mềm dính vào mũ, nhưng tạo hình mèo và trang phục không thay đổi.\n3 : NHÂN VẬT : Bé mèo đứng nghiêm trước quầy, hai paw đặt sát hông như chào kiểu anh hùng; bà lão bán đậu phụ đứng sau quầy, tay vẫn cầm nắp thùng; cậu bé khách hàng đứng bên cạnh, một tay chỉ lên đầu bé.\n4 : NỘI DUNG CHUYỂN ĐỘNG CHÍNH CỦA SCENE : Mặt quầy còn rung từ cú đặt thùng trước đó, một miếng đậu phụ mềm trên đĩa nảy nhẹ lên và rơi “phụp” lên mũ penguin của bé; bé mèo không biết, vẫn ưỡn ngực chào bà lão; cậu bé chỉ lên đầu bé và cười, bé sờ thử, phát hiện miếng đậu phụ, mắt tròn xoe, nhẹ nhàng gỡ xuống bằng hai paw rồi đặt lại vào đĩa phụ, tai cụp xấu hổ nhưng đuôi vẫy vui.\n5 : NHỮNG YẾU TỐ CHUYỂN ĐỘNG CÒN LẠI: Bà lão che miệng cười, rèm vải quầy đậu phụ lay nhẹ, hơi nước tiếp tục bốc lên; âm thanh có tiếng đậu phụ mềm rơi, tiếng cậu bé cười nhỏ, tiếng bé mèo “meo…” ngượng ngùng.",
+        "previous": "SCENE 07 1 : SCENE 07: Bé mèo giúp bà lão bán đậu phụ nâng thùng nước đậu nành nặng lên quầy để kiếm thêm tiền sửa chuông.\n2 : Continuity : Bé mèo ginger mini mặc bộ penguin xanh navy, túi áo có bản đồ gấp nhỏ nhô ra, hai paw sạch nhưng phần mũ vẫn hơi xù; bé rất thấp so với quầy đậu phụ và thùng nước đậu nành lớn.\n3 : NHÂN VẬT : Bé mèo chạy tới trước quầy đậu phụ; bà lão bán đậu phụ đứng phía sau quầy, hai tay đang cố kéo thùng nước đậu nành; một cậu bé khách hàng đứng bên cạnh quầy, ôm túi vải, quan sát.\n4 : NỘI DUNG CHUYỂN ĐỘNG CHÍNH CỦA SCENE : Bà lão kéo thùng nước đậu nành lên nhưng thùng trượt xuống mép quầy, nước bên trong sóng sánh nặng; bé mèo thấy tấm bảng nhỏ “cần phụ nâng hàng”, lập tức chạy tới, chèn hai chân xuống nền, ôm hai paw quanh thùng, hít mạnh rồi nâng bổng thùng lên quầy; thùng đặt xuống chắc chắn, mặt quầy rung nhẹ, bà lão mở hộp tiền và trao cho bé vài đồng xu.\n5 : NHỮNG YẾU TỐ CHUYỂN ĐỘNG CÒN LẠI: Hơi nước đậu nành trắng bay lên trong ánh sáng sạch, khăn vải trên quầy rung khi thùng đặt xuống, cốc đậu phụ nhỏ lắc nhẹ; âm thanh có tiếng nước lắc trong thùng, tiếng gỗ quầy kêu cộp, tiếng xu rơi vào paw bé.",
+        "next": "SCENE 09 1 : SCENE 09: Bé mèo đến trạm xe kéo mini Shiba Inu để di chuyển sang xưởng thủy tinh ven kênh.\n2 : Continuity : Bé mèo ginger vẫn mặc bộ penguin xanh navy, túi áo phồng vì có bản đồ và đồng xu, mũ penguin đã sạch khỏi miếng đậu phụ nhưng còn hơi ẩm; bé ôm khung chuông cong bằng hai paw, kích thước khung gần bằng nửa người bé.\n3 : NHÂN VẬT : Bé mèo đứng trước trạm xe kéo mini; chú Shiba Inu trắng đeo yên kéo xe nhỏ, đứng cạnh xe và cúi đầu ngửi bé; chủ trạm xe kéo đứng bên tay cầm dây cương, nhìn đồng xu trong paw bé.\n4 : NỘI DUNG CHUYỂN ĐỘNG CHÍNH CỦA SCENE : Bé mèo chạy tới, đặt đồng xu vào khay vé nhỏ, rồi cố leo lên bậc xe kéo mini; Shiba Inu cúi xuống ngửi bộ penguin, mũi chạm vào vây áo làm bé nhột, bé giật mình lùi một bước suýt ngã nhưng vẫn ôm chặt khung chuông; chủ trạm đỡ nhẹ mép xe, bé leo lên ghế, đặt khung chuông vào lòng, Shiba lắc đuôi chuẩn bị kéo.\n5 : NHỮNG YẾU TỐ CHUYỂN ĐỘNG CÒN LẠI: Trạm xe kéo nằm ở đầu chợ, có bảng gỗ tiếng Nhật, bánh xe nhỏ lăn thử trên nền đá, vài người đi chợ tránh sang một bên; âm thanh có tiếng móng Shiba gõ nhẹ xuống đá, tiếng xe kéo kẽo kẹt, tiếng đồng xu chạm khay vé.",
+        "status": "queued",
+        "imagePrompt": "",
+        "motionPrompt": "",
+        "provider": "",
+        "account": "",
+        "updatedAt": "2026-06-06T09:01:47.298Z",
+        "sceneId": "8",
+        "sceneIndex": 7,
+        "rawSceneText": "SCENE 08 1 : SCENE 08: Payoff hài sau khi nâng thùng: miếng đậu phụ mềm nảy lên dính vào mũ penguin của bé mèo mà bé không biết.\n2 : Continuity : Bé mèo ginger vẫn mặc bộ penguin xanh navy, túi áo có bản đồ gấp và vài đồng xu mới nhận, dáng đứng tự hào; trên đầu bé chuẩn bị có miếng đậu phụ mềm dính vào mũ, nhưng tạo hình mèo và trang phục không thay đổi.\n3 : NHÂN VẬT : Bé mèo đứng nghiêm trước quầy, hai paw đặt sát hông như chào kiểu anh hùng; bà lão bán đậu phụ đứng sau quầy, tay vẫn cầm nắp thùng; cậu bé khách hàng đứng bên cạnh, một tay chỉ lên đầu bé.\n4 : NỘI DUNG CHUYỂN ĐỘNG CHÍNH CỦA SCENE : Mặt quầy còn rung từ cú đặt thùng trước đó, một miếng đậu phụ mềm trên đĩa nảy nhẹ lên và rơi “phụp” lên mũ penguin của bé; bé mèo không biết, vẫn ưỡn ngực chào bà lão; cậu bé chỉ lên đầu bé và cười, bé sờ thử, phát hiện miếng đậu phụ, mắt tròn xoe, nhẹ nhàng gỡ xuống bằng hai paw rồi đặt lại vào đĩa phụ, tai cụp xấu hổ nhưng đuôi vẫy vui.\n5 : NHỮNG YẾU TỐ CHUYỂN ĐỘNG CÒN LẠI: Bà lão che miệng cười, rèm vải quầy đậu phụ lay nhẹ, hơi nước tiếp tục bốc lên; âm thanh có tiếng đậu phụ mềm rơi, tiếng cậu bé cười nhỏ, tiếng bé mèo “meo…” ngượng ngùng.",
+        "imagePath": "",
+        "videoPath": "",
+        "continuityReferencePaths": [],
+        "continuityReferenceSourceScene": null,
+        "generatedContinuityReferences": null,
+        "errorClassification": null
+      },
+      {
+        "id": 9,
+        "original": "SCENE 09 1 : SCENE 09: Bé mèo đến trạm xe kéo mini Shiba Inu để di chuyển sang xưởng thủy tinh ven kênh.\n2 : Continuity : Bé mèo ginger vẫn mặc bộ penguin xanh navy, túi áo phồng vì có bản đồ và đồng xu, mũ penguin đã sạch khỏi miếng đậu phụ nhưng còn hơi ẩm; bé ôm khung chuông cong bằng hai paw, kích thước khung gần bằng nửa người bé.\n3 : NHÂN VẬT : Bé mèo đứng trước trạm xe kéo mini; chú Shiba Inu trắng đeo yên kéo xe nhỏ, đứng cạnh xe và cúi đầu ngửi bé; chủ trạm xe kéo đứng bên tay cầm dây cương, nhìn đồng xu trong paw bé.\n4 : NỘI DUNG CHUYỂN ĐỘNG CHÍNH CỦA SCENE : Bé mèo chạy tới, đặt đồng xu vào khay vé nhỏ, rồi cố leo lên bậc xe kéo mini; Shiba Inu cúi xuống ngửi bộ penguin, mũi chạm vào vây áo làm bé nhột, bé giật mình lùi một bước suýt ngã nhưng vẫn ôm chặt khung chuông; chủ trạm đỡ nhẹ mép xe, bé leo lên ghế, đặt khung chuông vào lòng, Shiba lắc đuôi chuẩn bị kéo.\n5 : NHỮNG YẾU TỐ CHUYỂN ĐỘNG CÒN LẠI: Trạm xe kéo nằm ở đầu chợ, có bảng gỗ tiếng Nhật, bánh xe nhỏ lăn thử trên nền đá, vài người đi chợ tránh sang một bên; âm thanh có tiếng móng Shiba gõ nhẹ xuống đá, tiếng xe kéo kẽo kẹt, tiếng đồng xu chạm khay vé.",
+        "previous": "SCENE 08 1 : SCENE 08: Payoff hài sau khi nâng thùng: miếng đậu phụ mềm nảy lên dính vào mũ penguin của bé mèo mà bé không biết.\n2 : Continuity : Bé mèo ginger vẫn mặc bộ penguin xanh navy, túi áo có bản đồ gấp và vài đồng xu mới nhận, dáng đứng tự hào; trên đầu bé chuẩn bị có miếng đậu phụ mềm dính vào mũ, nhưng tạo hình mèo và trang phục không thay đổi.\n3 : NHÂN VẬT : Bé mèo đứng nghiêm trước quầy, hai paw đặt sát hông như chào kiểu anh hùng; bà lão bán đậu phụ đứng sau quầy, tay vẫn cầm nắp thùng; cậu bé khách hàng đứng bên cạnh, một tay chỉ lên đầu bé.\n4 : NỘI DUNG CHUYỂN ĐỘNG CHÍNH CỦA SCENE : Mặt quầy còn rung từ cú đặt thùng trước đó, một miếng đậu phụ mềm trên đĩa nảy nhẹ lên và rơi “phụp” lên mũ penguin của bé; bé mèo không biết, vẫn ưỡn ngực chào bà lão; cậu bé chỉ lên đầu bé và cười, bé sờ thử, phát hiện miếng đậu phụ, mắt tròn xoe, nhẹ nhàng gỡ xuống bằng hai paw rồi đặt lại vào đĩa phụ, tai cụp xấu hổ nhưng đuôi vẫy vui.\n5 : NHỮNG YẾU TỐ CHUYỂN ĐỘNG CÒN LẠI: Bà lão che miệng cười, rèm vải quầy đậu phụ lay nhẹ, hơi nước tiếp tục bốc lên; âm thanh có tiếng đậu phụ mềm rơi, tiếng cậu bé cười nhỏ, tiếng bé mèo “meo…” ngượng ngùng.",
+        "next": "SCENE 10 1 : SCENE 10: Xe kéo Shiba đi qua đường lát đá thì bánh sau mắc vào rãnh thoát nước, bé mèo nhảy xuống dùng sức nâng xe ra.\n2 : Continuity : Bé mèo ginger mini vẫn mặc bộ penguin xanh navy, ôm khung chuông cong, túi áo có bản đồ và đồng xu còn lại; sau khi nhảy xuống, bộ penguin rung mạnh, hai paw bám vào bánh xe, tạo cảm giác bé cực nhỏ nhưng có sức mạnh phi thường.\n3 : NHÂN VẬT : Bé mèo ngồi trên xe kéo rồi nhảy xuống cạnh bánh sau; Shiba Inu trắng đứng phía trước dây kéo, tư thế rướn người; chủ trạm đứng bên hông xe, hai tay giữ thành xe để tránh lật.\n4 : NỘI DUNG CHUYỂN ĐỘNG CHÍNH CỦA SCENE : Xe kéo chạy qua con đường lát đá sạch, bánh sau lọt vào rãnh thoát nước và khựng lại; Shiba rướn người kéo nhưng dây căng mà xe không nhúc nhích; bé mèo đặt khung chuông lên ghế xe, nhảy xuống, chèn vai nhỏ vào mép bánh, hai chân đạp chắc xuống nền, nâng một bên xe lên; bánh bật khỏi rãnh, xe lăn ra ngoài, lực bật làm bé xoay một vòng như con quay penguin rồi đứng lại bằng hai chân.\n5 : NHỮNG YẾU TỐ CHUYỂN ĐỘNG CÒN LẠI: Hai bên đường là cửa gỗ Nhật, bảng hiệu nhỏ, xe đạp dựng sát tường; nước mưa cũ trong rãnh rung nhẹ khi bánh bật ra, bóng đổ rõ dưới xe và chân bé; âm thanh có tiếng bánh gỗ kẹt vào rãnh, tiếng dây kéo căng, tiếng bánh bật “cộc” ra khỏi khe đá, tiếng Shiba thở phì nhẹ.",
+        "status": "queued",
+        "imagePrompt": "",
+        "motionPrompt": "",
+        "provider": "",
+        "account": "",
+        "updatedAt": "2026-06-06T09:01:47.298Z",
+        "sceneId": "9",
+        "sceneIndex": 8,
+        "rawSceneText": "SCENE 09 1 : SCENE 09: Bé mèo đến trạm xe kéo mini Shiba Inu để di chuyển sang xưởng thủy tinh ven kênh.\n2 : Continuity : Bé mèo ginger vẫn mặc bộ penguin xanh navy, túi áo phồng vì có bản đồ và đồng xu, mũ penguin đã sạch khỏi miếng đậu phụ nhưng còn hơi ẩm; bé ôm khung chuông cong bằng hai paw, kích thước khung gần bằng nửa người bé.\n3 : NHÂN VẬT : Bé mèo đứng trước trạm xe kéo mini; chú Shiba Inu trắng đeo yên kéo xe nhỏ, đứng cạnh xe và cúi đầu ngửi bé; chủ trạm xe kéo đứng bên tay cầm dây cương, nhìn đồng xu trong paw bé.\n4 : NỘI DUNG CHUYỂN ĐỘNG CHÍNH CỦA SCENE : Bé mèo chạy tới, đặt đồng xu vào khay vé nhỏ, rồi cố leo lên bậc xe kéo mini; Shiba Inu cúi xuống ngửi bộ penguin, mũi chạm vào vây áo làm bé nhột, bé giật mình lùi một bước suýt ngã nhưng vẫn ôm chặt khung chuông; chủ trạm đỡ nhẹ mép xe, bé leo lên ghế, đặt khung chuông vào lòng, Shiba lắc đuôi chuẩn bị kéo.\n5 : NHỮNG YẾU TỐ CHUYỂN ĐỘNG CÒN LẠI: Trạm xe kéo nằm ở đầu chợ, có bảng gỗ tiếng Nhật, bánh xe nhỏ lăn thử trên nền đá, vài người đi chợ tránh sang một bên; âm thanh có tiếng móng Shiba gõ nhẹ xuống đá, tiếng xe kéo kẽo kẹt, tiếng đồng xu chạm khay vé.",
+        "imagePath": "",
+        "videoPath": "",
+        "continuityReferencePaths": [],
+        "continuityReferenceSourceScene": null,
+        "generatedContinuityReferences": null,
+        "errorClassification": null
+      },
+      {
+        "id": 10,
+        "original": "SCENE 10 1 : SCENE 10: Xe kéo Shiba đi qua đường lát đá thì bánh sau mắc vào rãnh thoát nước, bé mèo nhảy xuống dùng sức nâng xe ra.\n2 : Continuity : Bé mèo ginger mini vẫn mặc bộ penguin xanh navy, ôm khung chuông cong, túi áo có bản đồ và đồng xu còn lại; sau khi nhảy xuống, bộ penguin rung mạnh, hai paw bám vào bánh xe, tạo cảm giác bé cực nhỏ nhưng có sức mạnh phi thường.\n3 : NHÂN VẬT : Bé mèo ngồi trên xe kéo rồi nhảy xuống cạnh bánh sau; Shiba Inu trắng đứng phía trước dây kéo, tư thế rướn người; chủ trạm đứng bên hông xe, hai tay giữ thành xe để tránh lật.\n4 : NỘI DUNG CHUYỂN ĐỘNG CHÍNH CỦA SCENE : Xe kéo chạy qua con đường lát đá sạch, bánh sau lọt vào rãnh thoát nước và khựng lại; Shiba rướn người kéo nhưng dây căng mà xe không nhúc nhích; bé mèo đặt khung chuông lên ghế xe, nhảy xuống, chèn vai nhỏ vào mép bánh, hai chân đạp chắc xuống nền, nâng một bên xe lên; bánh bật khỏi rãnh, xe lăn ra ngoài, lực bật làm bé xoay một vòng như con quay penguin rồi đứng lại bằng hai chân.\n5 : NHỮNG YẾU TỐ CHUYỂN ĐỘNG CÒN LẠI: Hai bên đường là cửa gỗ Nhật, bảng hiệu nhỏ, xe đạp dựng sát tường; nước mưa cũ trong rãnh rung nhẹ khi bánh bật ra, bóng đổ rõ dưới xe và chân bé; âm thanh có tiếng bánh gỗ kẹt vào rãnh, tiếng dây kéo căng, tiếng bánh bật “cộc” ra khỏi khe đá, tiếng Shiba thở phì nhẹ.",
+        "previous": "SCENE 09 1 : SCENE 09: Bé mèo đến trạm xe kéo mini Shiba Inu để di chuyển sang xưởng thủy tinh ven kênh.\n2 : Continuity : Bé mèo ginger vẫn mặc bộ penguin xanh navy, túi áo phồng vì có bản đồ và đồng xu, mũ penguin đã sạch khỏi miếng đậu phụ nhưng còn hơi ẩm; bé ôm khung chuông cong bằng hai paw, kích thước khung gần bằng nửa người bé.\n3 : NHÂN VẬT : Bé mèo đứng trước trạm xe kéo mini; chú Shiba Inu trắng đeo yên kéo xe nhỏ, đứng cạnh xe và cúi đầu ngửi bé; chủ trạm xe kéo đứng bên tay cầm dây cương, nhìn đồng xu trong paw bé.\n4 : NỘI DUNG CHUYỂN ĐỘNG CHÍNH CỦA SCENE : Bé mèo chạy tới, đặt đồng xu vào khay vé nhỏ, rồi cố leo lên bậc xe kéo mini; Shiba Inu cúi xuống ngửi bộ penguin, mũi chạm vào vây áo làm bé nhột, bé giật mình lùi một bước suýt ngã nhưng vẫn ôm chặt khung chuông; chủ trạm đỡ nhẹ mép xe, bé leo lên ghế, đặt khung chuông vào lòng, Shiba lắc đuôi chuẩn bị kéo.\n5 : NHỮNG YẾU TỐ CHUYỂN ĐỘNG CÒN LẠI: Trạm xe kéo nằm ở đầu chợ, có bảng gỗ tiếng Nhật, bánh xe nhỏ lăn thử trên nền đá, vài người đi chợ tránh sang một bên; âm thanh có tiếng móng Shiba gõ nhẹ xuống đá, tiếng xe kéo kẽo kẹt, tiếng đồng xu chạm khay vé.",
+        "next": "",
+        "status": "queued",
+        "imagePrompt": "",
+        "motionPrompt": "",
+        "provider": "",
+        "account": "",
+        "updatedAt": "2026-06-06T09:01:47.298Z",
+        "sceneId": "10",
+        "sceneIndex": 9,
+        "rawSceneText": "SCENE 10 1 : SCENE 10: Xe kéo Shiba đi qua đường lát đá thì bánh sau mắc vào rãnh thoát nước, bé mèo nhảy xuống dùng sức nâng xe ra.\n2 : Continuity : Bé mèo ginger mini vẫn mặc bộ penguin xanh navy, ôm khung chuông cong, túi áo có bản đồ và đồng xu còn lại; sau khi nhảy xuống, bộ penguin rung mạnh, hai paw bám vào bánh xe, tạo cảm giác bé cực nhỏ nhưng có sức mạnh phi thường.\n3 : NHÂN VẬT : Bé mèo ngồi trên xe kéo rồi nhảy xuống cạnh bánh sau; Shiba Inu trắng đứng phía trước dây kéo, tư thế rướn người; chủ trạm đứng bên hông xe, hai tay giữ thành xe để tránh lật.\n4 : NỘI DUNG CHUYỂN ĐỘNG CHÍNH CỦA SCENE : Xe kéo chạy qua con đường lát đá sạch, bánh sau lọt vào rãnh thoát nước và khựng lại; Shiba rướn người kéo nhưng dây căng mà xe không nhúc nhích; bé mèo đặt khung chuông lên ghế xe, nhảy xuống, chèn vai nhỏ vào mép bánh, hai chân đạp chắc xuống nền, nâng một bên xe lên; bánh bật khỏi rãnh, xe lăn ra ngoài, lực bật làm bé xoay một vòng như con quay penguin rồi đứng lại bằng hai chân.\n5 : NHỮNG YẾU TỐ CHUYỂN ĐỘNG CÒN LẠI: Hai bên đường là cửa gỗ Nhật, bảng hiệu nhỏ, xe đạp dựng sát tường; nước mưa cũ trong rãnh rung nhẹ khi bánh bật ra, bóng đổ rõ dưới xe và chân bé; âm thanh có tiếng bánh gỗ kẹt vào rãnh, tiếng dây kéo căng, tiếng bánh bật “cộc” ra khỏi khe đá, tiếng Shiba thở phì nhẹ.",
+        "imagePath": "",
+        "videoPath": "",
+        "continuityReferencePaths": [],
+        "continuityReferenceSourceScene": null,
+        "generatedContinuityReferences": null,
+        "errorClassification": null
+      }
+    ],
+    "batchSize": 10,
+    "durationSec": 10,
+    "continuityReferences": {
+      "enabled": true,
+      "includeLastFrame": true,
+      "maxKeyFrames": 3,
+      "sendToChatGPT": true,
+      "sendToGrok": false
+    },
+    "createdAt": "2026-06-06T09:01:47.299Z",
+    "description": "",
+    "updatedAt": "2026-06-06T09:01:47.302Z",
+    "finalTimeline": []
+  },
+  "inputs": {
+    "storyPrompt": "",
+    "scriptPrompt": "SCENE 01\n\n1 : SCENE 01: Thùng cá trượt khỏi xe đẩy ở chợ sáng Shirokawa, lao về phía xe nôi em bé và bé mèo ginger penguin lao ra chặn lại.\n2 : Continuity : Bé mèo con ginger mini 1 tháng tuổi, lông cam thật mềm, mắt to sáng, đi bằng 2 chân, mặc bộ cosplay chim cánh cụt xanh navy xuyên suốt, mũ ôm tai, hai vây nhỏ hai bên, dáng cực nhỏ so với thùng cá và xe nôi; vẫn là mèo thật 100%, không biến thành người.\n3 : NHÂN VẬT : Bé mèo ginger đang ở dưới mép sạp cá, tư thế cúi thấp chuẩn bị bật ra; ông chủ sạp cá đứng cạnh xe đẩy bị lệch bánh; một người mẹ đứng cạnh xe nôi ở cuối dốc đá; em bé nằm trong xe nôi, không hành động chính.\n4 : NỘI DUNG CHUYỂN ĐỘNG CHÍNH CỦA SCENE : Bánh xe đẩy cá cán qua viên đá nhỏ, thùng cá nặng trượt khỏi xe và lao xuống dốc lát đá; bé mèo lập tức bật ra, chạy hai chân cực nhanh, hai vây penguin lật phật, lao tới tì cả hai paw vào cạnh thùng; thùng cá đẩy bé trượt ngược vài gang tay, móng chân cào trên đá phát ra tiếng két nhỏ, nước cá sóng sánh bắn nhẹ, rồi thùng dừng trước xe nôi.\n5 : NHỮNG YẾU TỐ CHUYỂN ĐỘNG CÒN LẠI: Chợ cá Nhật buổi sáng đông vừa đủ, người bán hàng giật mình né sang hai bên, cá trong thùng rung lách tách, vải bạt sạp cá phập phồng nhẹ; ánh sáng ban ngày trắng sạch 6000K–6500K phủ đều toàn khung hình, không vàng, không cam.\n\nSCENE 02\n\n1 : SCENE 02: Sau khi cứu xe nôi, bé mèo được ông chủ sạp cá thưởng đồng xu và tự lau người vì bị dính nước cá.\n2 : Continuity : Bé mèo ginger vẫn mặc bộ penguin xanh navy, phần bụng áo hơi ướt nước cá, mũ penguin lệch nhẹ, ria mép dính vài giọt nước; dáng vẫn nhỏ xíu nhưng đứng thẳng bằng 2 chân như người.\n3 : NHÂN VẬT : Bé mèo đứng sát chân sạp cá, hai paw đặt trước ngực; ông chủ sạp cá cúi thấp ngang tầm bé, một tay cầm đồng xu, một tay cầm khăn nhỏ; người mẹ đứng phía sau xe nôi, cúi đầu cảm ơn.\n4 : NỘI DUNG CHUYỂN ĐỘNG CHÍNH CỦA SCENE : Ông chủ sạp cá đặt đồng xu sáng vào hai paw của bé, rồi đưa khăn nhỏ; bé mèo kẹp đồng xu vào túi áo penguin, cầm khăn lau mặt rất nghiêm túc nhưng lau ngược chiều lông làm ria mép xù lên; bé ngẩng mặt “meo!” tự hào, đuôi vẫy nhanh, người mẹ đẩy xe nôi đi qua và cúi đầu cảm ơn.\n5 : NHỮNG YẾU TỐ CHUYỂN ĐỘNG CÒN LẠI: Nước từ thùng cá nhỏ từng giọt xuống nền đá, cá trong sạp quẫy nhẹ, khách chợ phía sau tiếp tục đi lại chậm; âm thanh có tiếng khăn chà nhẹ lên lông, tiếng xu chạm túi áo, tiếng xe nôi lăn xa dần.\n\nSCENE 03\n\n1 : SCENE 03: Bé mèo dùng đồng xu chạy đến quầy mochi taiyaki mini, vừa chuẩn bị ăn thì nhìn thấy xe trang trí lễ hội ở quảng trường bắt đầu lảo đảo va vào cột chuông.\n2 : Continuity : Bé mèo ginger mini vẫn mặc bộ penguin xanh navy, áo còn hơi ẩm ở bụng, ria mép vừa được lau xù nhẹ, đồng xu nằm trong túi áo trước ngực; bé di chuyển nhanh bằng 2 chân, hai vây áo rung liên tục.\n3 : NHÂN VẬT : Bé mèo đứng trước quầy mochi, hai paw nâng đồng xu; bà chủ tiệm mochi đứng sau quầy, tay cầm chiếc taiyaki mini nóng; ở nền xa cùng khung hình, một nhân viên lễ hội đang đẩy xe trang trí có treo dây ruy băng gần cột chuông.\n4 : NỘI DUNG CHUYỂN ĐỘNG CHÍNH CỦA SCENE : Bé mèo đặt đồng xu lên khay, nhận chiếc taiyaki mini bốc hơi, ôm bánh bằng hai paw và đưa gần miệng; phía sau, bánh xe trang trí lễ hội cán lên mép dây ruy băng rơi dưới đất, xe nghiêng, một chậu hoa trên xe trượt sang bên và va vào chân cột treo chuông; bé mèo nhìn thấy chuyển động đó, dừng cắn bánh, tai dựng lên, mắt mở to.\n5 : NHỮNG YẾU TỐ CHUYỂN ĐỘNG CÒN LẠI: Hơi nóng từ taiyaki bay trắng nhẹ, rèm vải tiệm mochi lay động, khách quanh quầy quay đầu theo hướng xe trang trí; âm thanh đến từ hành động nhìn thấy rõ: bánh xe lộc cộc trên đá, chậu hoa cọ vào kim loại, ruy băng kéo lê dưới bánh xe.\n\nSCENE 04\n\n1 : SCENE 04: Xe trang trí lễ hội va vào cột, chiếc chuông gió thủy tinh trắng rơi xuống tấm vải đệm nhưng vẫn nứt; bé gái xe lăn nhìn thấy chiếc chuông bị hỏng.\n2 : Continuity : Bé mèo ginger vẫn ôm chiếc taiyaki mini chưa ăn, bộ penguin xanh navy hơi ẩm, mũ còn lệch nhẹ; thân hình bé rất nhỏ khi chạy vào quảng trường rộng và đứng gần mảnh chuông lớn hơn paw của bé.\n3 : NHÂN VẬT : Bé mèo chạy từ rìa quầy mochi vào quảng trường; nhân viên lễ hội đứng cạnh xe trang trí, hai tay giữ xe lại; bé gái ngồi trên xe lăn gần mẹ, tay cầm tấm thiệp vẽ chuông gió; người thợ thủy tinh già đứng gần cột treo.\n4 : NỘI DUNG CHUYỂN ĐỘNG CHÍNH CỦA SCENE : Xe trang trí húc nhẹ vào cột, móc treo rung mạnh, chuông gió thủy tinh trắng tuột xuống tấm vải đệm dưới chân cột; khi rơi, lõi thủy tinh đập vào thành chuông làm vết nứt lan ra như sợi chỉ trắng; bé gái siết tấm thiệp trong tay, vai chùng xuống; bé mèo chạy tới, đặt taiyaki xuống mép vải, cúi sát nhìn vết nứt.\n5 : NHỮNG YẾU TỐ CHUYỂN ĐỘNG CÒN LẠI: Ruy băng lễ hội quấn lỏng quanh bánh xe trang trí, vài cánh hoa rơi khỏi chậu và lăn trên nền đá; âm thanh có tiếng móc kim loại rung, tiếng thủy tinh chạm vải đệm, tiếng bánh xe lăn khựng lại.\n\nSCENE 05\n\n1 : SCENE 05: Bé mèo từ bỏ chiếc taiyaki mình muốn ăn, đặt đồng xu lên bàn sửa chuông và ra hiệu nhận nhiệm vụ sửa chuông cho bé gái.\n2 : Continuity : Bé mèo ginger mini vẫn mặc bộ penguin xanh navy xuyên suốt, hai paw hơi dính vụn bánh do vừa ôm taiyaki, mắt nhìn qua lại giữa chiếc bánh và bé gái; tạo hình vẫn là mèo con thật, cảm xúc thể hiện qua tai cụp, mắt long lanh, đuôi vẫy chậm.\n3 : NHÂN VẬT : Bé mèo đứng giữa quầy mochi nhỏ và bàn sửa chuông tạm thời ở quảng trường; bà chủ tiệm mochi đứng cạnh khay bánh; người thợ thủy tinh già ngồi sau bàn, trước mặt là chuông nứt; bé gái xe lăn ở bên cạnh mẹ, nhìn theo bé mèo.\n4 : NỘI DUNG CHUYỂN ĐỘNG CHÍNH CỦA SCENE : Bé mèo nhìn chiếc taiyaki, nuốt khan, rồi dùng hai paw đẩy bánh trở lại khay của bà chủ; bé móc đồng xu trong túi áo penguin, đặt lên bàn sửa chuông, sau đó chỉ vào chuông nứt, chỉ sang bé gái, rồi vỗ paw lên ngực “meo!” như hứa sẽ làm; người thợ già xoay bảng chi phí sửa chuông về phía bé, đặt ngón tay lên phần cần thêm tiền và vật liệu.\n5 : NHỮNG YẾU TỐ CHUYỂN ĐỘNG CÒN LẠI: Hơi bánh taiyaki vẫn bay lên nhưng bé không ăn, tạo cảm giác hy sinh rõ bằng hình ảnh; ánh sáng trắng sạch phản chiếu trên mảnh thủy tinh nứt, giấy thiệp trong tay bé gái hơi run theo chuyển động tay.\n\nSCENE 06\n\n1 : SCENE 06: Người thợ thủy tinh đặt các vật cần sửa lên bàn và chú cảnh sát giao thông gấp bản đồ giúp bé mèo bắt đầu hành trình.\n2 : Continuity : Bé mèo ginger vẫn là mèo con 1 tháng tuổi rất nhỏ, mặc bộ penguin xanh navy, túi áo trước ngực đã trống đồng xu; bé đứng kiễng hai chân để nhìn lên mặt bàn cao, mũ penguin vẫn lệch nhẹ sau các va chạm trước.\n3 : NHÂN VẬT : Bé mèo đứng sát chân bàn sửa chuông; người thợ thủy tinh già ngồi sau bàn, tay đặt từng món đồ ra trước mặt bé; chú cảnh sát giao thông đứng bên cạnh quảng trường, cúi xuống ngang tầm bé.\n4 : NỘI DUNG CHUYỂN ĐỘNG CHÍNH CỦA SCENE : Người thợ già lần lượt đặt khung chuông bị cong, mảnh thủy tinh còn dùng được và tấm bản đồ giấy lớn lên bàn; bé mèo kéo bản đồ xuống nhưng bản đồ bung rộng che kín cả người, làm bé loạng choạng lùi lại; chú cảnh sát cúi xuống, gấp bản đồ thành miếng nhỏ vừa túi áo penguin, chỉ tay về hướng con phố dẫn tới xưởng thủy tinh; bé mèo nhét bản đồ vào túi, cúi đầu cảm ơn và xoay người chuẩn bị chạy.\n5 : NHỮNG YẾU TỐ CHUYỂN ĐỘNG CÒN LẠI: Cờ lễ hội ở quảng trường bay nhẹ, xe trang trí được nhân viên kéo lùi khỏi cột, khách chợ đi vòng qua bàn sửa; âm thanh có tiếng giấy bản đồ sột soạt, tiếng khung kim loại chạm bàn, tiếng còi giao thông nhỏ khi cảnh sát ra hiệu cho người đi bộ dừng.\n\nSCENE 07\n\n1 : SCENE 07: Bé mèo giúp bà lão bán đậu phụ nâng thùng nước đậu nành nặng lên quầy để kiếm thêm tiền sửa chuông.\n2 : Continuity : Bé mèo ginger mini mặc bộ penguin xanh navy, túi áo có bản đồ gấp nhỏ nhô ra, hai paw sạch nhưng phần mũ vẫn hơi xù; bé rất thấp so với quầy đậu phụ và thùng nước đậu nành lớn.\n3 : NHÂN VẬT : Bé mèo chạy tới trước quầy đậu phụ; bà lão bán đậu phụ đứng phía sau quầy, hai tay đang cố kéo thùng nước đậu nành; một cậu bé khách hàng đứng bên cạnh quầy, ôm túi vải, quan sát.\n4 : NỘI DUNG CHUYỂN ĐỘNG CHÍNH CỦA SCENE : Bà lão kéo thùng nước đậu nành lên nhưng thùng trượt xuống mép quầy, nước bên trong sóng sánh nặng; bé mèo thấy tấm bảng nhỏ “cần phụ nâng hàng”, lập tức chạy tới, chèn hai chân xuống nền, ôm hai paw quanh thùng, hít mạnh rồi nâng bổng thùng lên quầy; thùng đặt xuống chắc chắn, mặt quầy rung nhẹ, bà lão mở hộp tiền và trao cho bé vài đồng xu.\n5 : NHỮNG YẾU TỐ CHUYỂN ĐỘNG CÒN LẠI: Hơi nước đậu nành trắng bay lên trong ánh sáng sạch, khăn vải trên quầy rung khi thùng đặt xuống, cốc đậu phụ nhỏ lắc nhẹ; âm thanh có tiếng nước lắc trong thùng, tiếng gỗ quầy kêu cộp, tiếng xu rơi vào paw bé.\n\nSCENE 08\n\n1 : SCENE 08: Payoff hài sau khi nâng thùng: miếng đậu phụ mềm nảy lên dính vào mũ penguin của bé mèo mà bé không biết.\n2 : Continuity : Bé mèo ginger vẫn mặc bộ penguin xanh navy, túi áo có bản đồ gấp và vài đồng xu mới nhận, dáng đứng tự hào; trên đầu bé chuẩn bị có miếng đậu phụ mềm dính vào mũ, nhưng tạo hình mèo và trang phục không thay đổi.\n3 : NHÂN VẬT : Bé mèo đứng nghiêm trước quầy, hai paw đặt sát hông như chào kiểu anh hùng; bà lão bán đậu phụ đứng sau quầy, tay vẫn cầm nắp thùng; cậu bé khách hàng đứng bên cạnh, một tay chỉ lên đầu bé.\n4 : NỘI DUNG CHUYỂN ĐỘNG CHÍNH CỦA SCENE : Mặt quầy còn rung từ cú đặt thùng trước đó, một miếng đậu phụ mềm trên đĩa nảy nhẹ lên và rơi “phụp” lên mũ penguin của bé; bé mèo không biết, vẫn ưỡn ngực chào bà lão; cậu bé chỉ lên đầu bé và cười, bé sờ thử, phát hiện miếng đậu phụ, mắt tròn xoe, nhẹ nhàng gỡ xuống bằng hai paw rồi đặt lại vào đĩa phụ, tai cụp xấu hổ nhưng đuôi vẫy vui.\n5 : NHỮNG YẾU TỐ CHUYỂN ĐỘNG CÒN LẠI: Bà lão che miệng cười, rèm vải quầy đậu phụ lay nhẹ, hơi nước tiếp tục bốc lên; âm thanh có tiếng đậu phụ mềm rơi, tiếng cậu bé cười nhỏ, tiếng bé mèo “meo…” ngượng ngùng.\n\nSCENE 09\n\n1 : SCENE 09: Bé mèo đến trạm xe kéo mini Shiba Inu để di chuyển sang xưởng thủy tinh ven kênh.\n2 : Continuity : Bé mèo ginger vẫn mặc bộ penguin xanh navy, túi áo phồng vì có bản đồ và đồng xu, mũ penguin đã sạch khỏi miếng đậu phụ nhưng còn hơi ẩm; bé ôm khung chuông cong bằng hai paw, kích thước khung gần bằng nửa người bé.\n3 : NHÂN VẬT : Bé mèo đứng trước trạm xe kéo mini; chú Shiba Inu trắng đeo yên kéo xe nhỏ, đứng cạnh xe và cúi đầu ngửi bé; chủ trạm xe kéo đứng bên tay cầm dây cương, nhìn đồng xu trong paw bé.\n4 : NỘI DUNG CHUYỂN ĐỘNG CHÍNH CỦA SCENE : Bé mèo chạy tới, đặt đồng xu vào khay vé nhỏ, rồi cố leo lên bậc xe kéo mini; Shiba Inu cúi xuống ngửi bộ penguin, mũi chạm vào vây áo làm bé nhột, bé giật mình lùi một bước suýt ngã nhưng vẫn ôm chặt khung chuông; chủ trạm đỡ nhẹ mép xe, bé leo lên ghế, đặt khung chuông vào lòng, Shiba lắc đuôi chuẩn bị kéo.\n5 : NHỮNG YẾU TỐ CHUYỂN ĐỘNG CÒN LẠI: Trạm xe kéo nằm ở đầu chợ, có bảng gỗ tiếng Nhật, bánh xe nhỏ lăn thử trên nền đá, vài người đi chợ tránh sang một bên; âm thanh có tiếng móng Shiba gõ nhẹ xuống đá, tiếng xe kéo kẽo kẹt, tiếng đồng xu chạm khay vé.\n\nSCENE 10\n\n1 : SCENE 10: Xe kéo Shiba đi qua đường lát đá thì bánh sau mắc vào rãnh thoát nước, bé mèo nhảy xuống dùng sức nâng xe ra.\n2 : Continuity : Bé mèo ginger mini vẫn mặc bộ penguin xanh navy, ôm khung chuông cong, túi áo có bản đồ và đồng xu còn lại; sau khi nhảy xuống, bộ penguin rung mạnh, hai paw bám vào bánh xe, tạo cảm giác bé cực nhỏ nhưng có sức mạnh phi thường.\n3 : NHÂN VẬT : Bé mèo ngồi trên xe kéo rồi nhảy xuống cạnh bánh sau; Shiba Inu trắng đứng phía trước dây kéo, tư thế rướn người; chủ trạm đứng bên hông xe, hai tay giữ thành xe để tránh lật.\n4 : NỘI DUNG CHUYỂN ĐỘNG CHÍNH CỦA SCENE : Xe kéo chạy qua con đường lát đá sạch, bánh sau lọt vào rãnh thoát nước và khựng lại; Shiba rướn người kéo nhưng dây căng mà xe không nhúc nhích; bé mèo đặt khung chuông lên ghế xe, nhảy xuống, chèn vai nhỏ vào mép bánh, hai chân đạp chắc xuống nền, nâng một bên xe lên; bánh bật khỏi rãnh, xe lăn ra ngoài, lực bật làm bé xoay một vòng như con quay penguin rồi đứng lại bằng hai chân.\n5 : NHỮNG YẾU TỐ CHUYỂN ĐỘNG CÒN LẠI: Hai bên đường là cửa gỗ Nhật, bảng hiệu nhỏ, xe đạp dựng sát tường; nước mưa cũ trong rãnh rung nhẹ khi bánh bật ra, bóng đổ rõ dưới xe và chân bé; âm thanh có tiếng bánh gỗ kẹt vào rãnh, tiếng dây kéo căng, tiếng bánh bật “cộc” ra khỏi khe đá, tiếng Shiba thở phì nhẹ.",
+    "chatContextTitle": "Test",
+    "promptTemplates": {
+      "image": {
+        "id": "renderer-image-rules",
+        "version": "1"
+      },
+      "motion": {
+        "id": "renderer-motion-rules",
+        "version": "1"
+      },
+      "story": {
+        "id": "renderer-story-rules",
+        "version": "1"
+      }
+    },
+    "batchPromptRefs": []
+  },
+  "config": {
+    "scriptProvider": "ninerouter",
+    "imageProvider": "ninerouter",
+    "videoProvider": "grok",
+    "imageGeneration": {
+      "method": "web",
+      "endpoint": "http://localhost:20128/v1/images/generations",
+      "model": "cx/gpt-5.5-image",
+      "size": "1024x1024"
+    },
+    "continuityReferences": {
+      "enabled": true,
+      "includeLastFrame": true,
+      "maxKeyFrames": 3,
+      "sendToChatGPT": true,
+      "sendToGrok": false
+    },
+    "selectedModels": {
+      "script": "cx/gpt-5.5",
+      "image": "ninerouter",
+      "video": "grok"
+    },
+    "selectedLabels": {
+      "provider": "9Router local proxy",
+      "account": "Account 1",
+      "model": "cx/gpt-5.5"
+    },
+    "batchSize": 10,
+    "sceneDurationSeconds": 10,
+    "outputLanguage": "Vietnamese",
+    "stylePreset": "current-renderer-settings"
+  },
+  "router": {
+    "accountRouterEnabled": false,
+    "selectedGrokAccountId": null,
+    "routingPolicy": "round_robin",
+    "selectedLabels": {
+      "provider": "Grok",
+      "model": "Grok",
+      "account": ""
+    },
+    "status": {
+      "selectedAccountState": "available",
+      "routerState": ""
+    }
+  },
+  "runtime": {
+    "currentStage": "generating_keyframe",
+    "currentBatchIndex": null,
+    "currentSceneId": "1",
+    "activeBatchIds": [],
+    "paused": false,
+    "lastCheckpointRef": null,
+    "lastAction": "generate_keyframe",
+    "resumeMode": "manual-start",
+    "lastErrorClassification": null,
+    "waitingForUserStart": true,
+    "imageGeneration": {
+      "method": "web",
+      "endpoint": "http://localhost:20128/v1/images/generations",
+      "model": "cx/gpt-5.5-image",
+      "size": "1024x1024"
+    },
+    "continuityReferences": {
+      "enabled": true,
+      "includeLastFrame": true,
+      "maxKeyFrames": 3,
+      "sendToChatGPT": true,
+      "sendToGrok": false
+    },
+    "outputFolder": "D:\\Grok\\Test",
+    "videoPlatform": "grok",
+    "reviewSettings": {
+      "skipAll": false,
+      "skipPrompt": false,
+      "skipImage": false,
+      "skipVideo": false
+    },
+    "skipReview": false,
+    "pixverse": {
+      "resolution": "360P",
+      "ratio": "16:9",
+      "duration": "5",
+      "model": "PixVerse V6",
+      "preview": false,
+      "audio": true
+    },
+    "grokRecovery": {
+      "resultRetryLimit": 2
+    },
+    "grokRouter": {
+      "enabled": false,
+      "account": "grok-default-profile",
+      "routingPolicy": "round_robin",
+      "sandboxFolder": "dev_sandbox_grok_account_router"
+    },
+    "activePreviewTimeline": [],
+    "autoRun": false,
+    "active": false
+  },
+  "assets": {
+    "images": [],
+    "videos": [],
+    "finalOutputs": []
+  },
+  "previewTimeline": [],
+  "extensions": {}
+}

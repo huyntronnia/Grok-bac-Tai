@@ -1,0 +1,363 @@
+{
+  "schemaVersion": 1,
+  "appVersion": "electron-phase2",
+  "savedAt": "2026-06-04T00:21:12.095Z",
+  "project": {
+    "id": "3fb51ab6-e6e0-409b-be76-4a15947c1701",
+    "name": "try",
+    "story": "",
+    "chatContextTitle": "try",
+    "scenes": [
+      {
+        "id": 1,
+        "original": "SCENE 1: Ý chính: Con sói khổng lồ phá cửa vận chuyển ở tầng trệt và khiến cô bé phải chạy lên khu cầu kính.\nBối cảnh: Tầng trệt trung tâm thương mại 5 tầng vào ban ngày, ánh sáng mạnh xuyên qua mái kính panorama, gần lối giao hàng có một cửa vận chuyển kim loại bị móp, xe đẩy hàng đổ nghiêng, quầy bảo vệ nằm ở bên phải khung hình.\nNhân vật xuất hiện: Cô bé 9 tuổi mặc áo khoác vàng dính bụi, quần jean xanh, giày trắng bẩn đứng gần thang cuốn; con sói khổng lồ lông xám đen xuất hiện sau cánh cửa vận chuyển bị móp; chú chó nghiệp vụ Malinois đeo dây cứu hộ màu cam đứng cạnh quầy bảo vệ cùng nhân viên bảo vệ.\nHành động chính 1: Con sói khổng lồ húc mạnh cửa vận chuyển bật tung vào trong sảnh, móng vuốt cào mạnh xuống nền đá làm xe đẩy hàng văng lệch sang trái.\nHành động chính 2: Cô bé hoảng sợ chạy gấp lên thang cuốn đang hoạt động về phía tầng trên, hai tay bám mạnh vào tay vịn để không ngã.\nÂm thanh: Tiếng cửa kim loại bật tung vang cực lớn, tiếng xe đẩy hàng va đập chát chúa, tiếng sói gầm trầm dữ dội giống tiếng gầm đặc trưng của loài sói, tiếng cô bé thở gấp, tiếng chú chó nghiệp vụ sủa dồn dập giống tiếng sủa đặc trưng của loài chó.\nContinuity sang scene sau: Cô bé chạy lên tầng 4 bằng thang cuốn, con sói bắt đầu đuổi theo từ tầng dưới, chú chó nghiệp vụ nhìn thấy toàn bộ sự việc và lao khỏi quầy bảo vệ để bám theo.",
+        "previous": "",
+        "next": "SCENE 2: Ý chính: Cô bé bị dồn ra cầu kính tầng 4 trong khi con sói tiến tới từ hành lang bên trái.\nBối cảnh: Cầu kính treo giữa tầng 4 của trung tâm thương mại, ánh sáng ban ngày cực mạnh phủ qua mái kính, phía dưới là sảnh sâu nhiều tầng, lan can kim loại hai bên, biển báo thoát hiểm và một ba lô cứu hộ màu đỏ treo cạnh trụ lan can phía phải.\nNhân vật xuất hiện: Cô bé áo khoác vàng đứng sát rìa phải cầu kính, hai tay bám lan can; con sói khổng lồ xuất hiện ở rìa trái hành lang; chú chó nghiệp vụ đang chạy lên cầu thang cuốn phía xa phía sau con sói.\nHành động chính 1: Con sói bước mạnh từ rìa trái vào đầu cầu kính, móng vuốt cào mạnh xuống mặt kính làm cầu rung dữ dội.\nHành động chính 2: Cô bé lùi gấp về phía rìa phải, tay run siết chặt lan can, mắt nhìn thẳng vào con sói.\nÂm thanh: Tiếng móng vuốt cào kính rít sắc, tiếng cầu kính rung mạnh, tiếng cô bé hít thở gấp, tiếng sói gầm khàn giống tiếng gầm đặc trưng của loài sói, tiếng bước chân chó nghiệp vụ dồn nhanh trên thang cuốn phía xa.\nContinuity sang scene sau: Cú cào của con sói tạo một vết nứt dài trên mặt cầu kính, vết nứt bắt đầu lan về phía chân cô bé.",
+        "status": "queued",
+        "imagePrompt": "",
+        "motionPrompt": "",
+        "provider": "",
+        "account": "",
+        "updatedAt": "2026-06-04T00:21:12.091Z",
+        "sceneId": "1",
+        "sceneIndex": 0,
+        "rawSceneText": "SCENE 1: Ý chính: Con sói khổng lồ phá cửa vận chuyển ở tầng trệt và khiến cô bé phải chạy lên khu cầu kính.\nBối cảnh: Tầng trệt trung tâm thương mại 5 tầng vào ban ngày, ánh sáng mạnh xuyên qua mái kính panorama, gần lối giao hàng có một cửa vận chuyển kim loại bị móp, xe đẩy hàng đổ nghiêng, quầy bảo vệ nằm ở bên phải khung hình.\nNhân vật xuất hiện: Cô bé 9 tuổi mặc áo khoác vàng dính bụi, quần jean xanh, giày trắng bẩn đứng gần thang cuốn; con sói khổng lồ lông xám đen xuất hiện sau cánh cửa vận chuyển bị móp; chú chó nghiệp vụ Malinois đeo dây cứu hộ màu cam đứng cạnh quầy bảo vệ cùng nhân viên bảo vệ.\nHành động chính 1: Con sói khổng lồ húc mạnh cửa vận chuyển bật tung vào trong sảnh, móng vuốt cào mạnh xuống nền đá làm xe đẩy hàng văng lệch sang trái.\nHành động chính 2: Cô bé hoảng sợ chạy gấp lên thang cuốn đang hoạt động về phía tầng trên, hai tay bám mạnh vào tay vịn để không ngã.\nÂm thanh: Tiếng cửa kim loại bật tung vang cực lớn, tiếng xe đẩy hàng va đập chát chúa, tiếng sói gầm trầm dữ dội giống tiếng gầm đặc trưng của loài sói, tiếng cô bé thở gấp, tiếng chú chó nghiệp vụ sủa dồn dập giống tiếng sủa đặc trưng của loài chó.\nContinuity sang scene sau: Cô bé chạy lên tầng 4 bằng thang cuốn, con sói bắt đầu đuổi theo từ tầng dưới, chú chó nghiệp vụ nhìn thấy toàn bộ sự việc và lao khỏi quầy bảo vệ để bám theo.",
+        "imagePath": "",
+        "videoPath": "",
+        "continuityReferencePaths": [],
+        "continuityReferenceSourceScene": null,
+        "generatedContinuityReferences": null,
+        "errorClassification": null
+      },
+      {
+        "id": 2,
+        "original": "SCENE 2: Ý chính: Cô bé bị dồn ra cầu kính tầng 4 trong khi con sói tiến tới từ hành lang bên trái.\nBối cảnh: Cầu kính treo giữa tầng 4 của trung tâm thương mại, ánh sáng ban ngày cực mạnh phủ qua mái kính, phía dưới là sảnh sâu nhiều tầng, lan can kim loại hai bên, biển báo thoát hiểm và một ba lô cứu hộ màu đỏ treo cạnh trụ lan can phía phải.\nNhân vật xuất hiện: Cô bé áo khoác vàng đứng sát rìa phải cầu kính, hai tay bám lan can; con sói khổng lồ xuất hiện ở rìa trái hành lang; chú chó nghiệp vụ đang chạy lên cầu thang cuốn phía xa phía sau con sói.\nHành động chính 1: Con sói bước mạnh từ rìa trái vào đầu cầu kính, móng vuốt cào mạnh xuống mặt kính làm cầu rung dữ dội.\nHành động chính 2: Cô bé lùi gấp về phía rìa phải, tay run siết chặt lan can, mắt nhìn thẳng vào con sói.\nÂm thanh: Tiếng móng vuốt cào kính rít sắc, tiếng cầu kính rung mạnh, tiếng cô bé hít thở gấp, tiếng sói gầm khàn giống tiếng gầm đặc trưng của loài sói, tiếng bước chân chó nghiệp vụ dồn nhanh trên thang cuốn phía xa.\nContinuity sang scene sau: Cú cào của con sói tạo một vết nứt dài trên mặt cầu kính, vết nứt bắt đầu lan về phía chân cô bé.",
+        "previous": "SCENE 1: Ý chính: Con sói khổng lồ phá cửa vận chuyển ở tầng trệt và khiến cô bé phải chạy lên khu cầu kính.\nBối cảnh: Tầng trệt trung tâm thương mại 5 tầng vào ban ngày, ánh sáng mạnh xuyên qua mái kính panorama, gần lối giao hàng có một cửa vận chuyển kim loại bị móp, xe đẩy hàng đổ nghiêng, quầy bảo vệ nằm ở bên phải khung hình.\nNhân vật xuất hiện: Cô bé 9 tuổi mặc áo khoác vàng dính bụi, quần jean xanh, giày trắng bẩn đứng gần thang cuốn; con sói khổng lồ lông xám đen xuất hiện sau cánh cửa vận chuyển bị móp; chú chó nghiệp vụ Malinois đeo dây cứu hộ màu cam đứng cạnh quầy bảo vệ cùng nhân viên bảo vệ.\nHành động chính 1: Con sói khổng lồ húc mạnh cửa vận chuyển bật tung vào trong sảnh, móng vuốt cào mạnh xuống nền đá làm xe đẩy hàng văng lệch sang trái.\nHành động chính 2: Cô bé hoảng sợ chạy gấp lên thang cuốn đang hoạt động về phía tầng trên, hai tay bám mạnh vào tay vịn để không ngã.\nÂm thanh: Tiếng cửa kim loại bật tung vang cực lớn, tiếng xe đẩy hàng va đập chát chúa, tiếng sói gầm trầm dữ dội giống tiếng gầm đặc trưng của loài sói, tiếng cô bé thở gấp, tiếng chú chó nghiệp vụ sủa dồn dập giống tiếng sủa đặc trưng của loài chó.\nContinuity sang scene sau: Cô bé chạy lên tầng 4 bằng thang cuốn, con sói bắt đầu đuổi theo từ tầng dưới, chú chó nghiệp vụ nhìn thấy toàn bộ sự việc và lao khỏi quầy bảo vệ để bám theo.",
+        "next": "SCENE 3: Ý chính: Vết nứt ép cô bé bò tới ba lô cứu hộ màu đỏ để tìm cách sống sót.\nBối cảnh: Vẫn trên cầu kính tầng 4, vết nứt dài nằm giữa mặt cầu, ánh sáng ban ngày phản chiếu rõ trên kính, ba lô cứu hộ màu đỏ treo cạnh trụ lan can phía phải, biển báo thoát hiểm nằm ngay phía trên ba lô.\nNhân vật xuất hiện: Cô bé áo khoác vàng khuỵu xuống gần rìa phải cầu kính; con sói khổng lồ ở rìa trái cầu kính; chú chó nghiệp vụ vừa xuất hiện ở đầu hành lang xa phía sau con sói.\nHành động chính 1: Vết nứt lan nhanh dưới chân cô bé, cô bé lập tức bò mạnh bằng hai khuỷu tay về phía ba lô cứu hộ màu đỏ.\nHành động chính 2: Con sói dồn trọng lượng xuống cầu kính, mặt cầu nghiêng mạnh sang phải khiến ba lô cứu hộ trượt khỏi móc và rơi xuống gần tay cô bé.\nÂm thanh: Tiếng kính nứt răng rắc cực rõ, tiếng áo khoác cô bé ma sát mạnh trên mặt kính, tiếng ba lô rơi bịch xuống sàn kính, tiếng sói thở phì phò nặng nề, tiếng chó nghiệp vụ sủa liên tiếp giống tiếng sủa đặc trưng của loài chó.\nContinuity sang scene sau: Ba lô cứu hộ đã nằm cạnh tay cô bé, dây cứu hộ màu đỏ lộ ra khỏi khóa kéo nửa mở.",
+        "status": "queued",
+        "imagePrompt": "",
+        "motionPrompt": "",
+        "provider": "",
+        "account": "",
+        "updatedAt": "2026-06-04T00:21:12.091Z",
+        "sceneId": "2",
+        "sceneIndex": 1,
+        "rawSceneText": "SCENE 2: Ý chính: Cô bé bị dồn ra cầu kính tầng 4 trong khi con sói tiến tới từ hành lang bên trái.\nBối cảnh: Cầu kính treo giữa tầng 4 của trung tâm thương mại, ánh sáng ban ngày cực mạnh phủ qua mái kính, phía dưới là sảnh sâu nhiều tầng, lan can kim loại hai bên, biển báo thoát hiểm và một ba lô cứu hộ màu đỏ treo cạnh trụ lan can phía phải.\nNhân vật xuất hiện: Cô bé áo khoác vàng đứng sát rìa phải cầu kính, hai tay bám lan can; con sói khổng lồ xuất hiện ở rìa trái hành lang; chú chó nghiệp vụ đang chạy lên cầu thang cuốn phía xa phía sau con sói.\nHành động chính 1: Con sói bước mạnh từ rìa trái vào đầu cầu kính, móng vuốt cào mạnh xuống mặt kính làm cầu rung dữ dội.\nHành động chính 2: Cô bé lùi gấp về phía rìa phải, tay run siết chặt lan can, mắt nhìn thẳng vào con sói.\nÂm thanh: Tiếng móng vuốt cào kính rít sắc, tiếng cầu kính rung mạnh, tiếng cô bé hít thở gấp, tiếng sói gầm khàn giống tiếng gầm đặc trưng của loài sói, tiếng bước chân chó nghiệp vụ dồn nhanh trên thang cuốn phía xa.\nContinuity sang scene sau: Cú cào của con sói tạo một vết nứt dài trên mặt cầu kính, vết nứt bắt đầu lan về phía chân cô bé.",
+        "imagePath": "",
+        "videoPath": "",
+        "continuityReferencePaths": [],
+        "continuityReferenceSourceScene": null,
+        "generatedContinuityReferences": null,
+        "errorClassification": null
+      },
+      {
+        "id": 3,
+        "original": "SCENE 3: Ý chính: Vết nứt ép cô bé bò tới ba lô cứu hộ màu đỏ để tìm cách sống sót.\nBối cảnh: Vẫn trên cầu kính tầng 4, vết nứt dài nằm giữa mặt cầu, ánh sáng ban ngày phản chiếu rõ trên kính, ba lô cứu hộ màu đỏ treo cạnh trụ lan can phía phải, biển báo thoát hiểm nằm ngay phía trên ba lô.\nNhân vật xuất hiện: Cô bé áo khoác vàng khuỵu xuống gần rìa phải cầu kính; con sói khổng lồ ở rìa trái cầu kính; chú chó nghiệp vụ vừa xuất hiện ở đầu hành lang xa phía sau con sói.\nHành động chính 1: Vết nứt lan nhanh dưới chân cô bé, cô bé lập tức bò mạnh bằng hai khuỷu tay về phía ba lô cứu hộ màu đỏ.\nHành động chính 2: Con sói dồn trọng lượng xuống cầu kính, mặt cầu nghiêng mạnh sang phải khiến ba lô cứu hộ trượt khỏi móc và rơi xuống gần tay cô bé.\nÂm thanh: Tiếng kính nứt răng rắc cực rõ, tiếng áo khoác cô bé ma sát mạnh trên mặt kính, tiếng ba lô rơi bịch xuống sàn kính, tiếng sói thở phì phò nặng nề, tiếng chó nghiệp vụ sủa liên tiếp giống tiếng sủa đặc trưng của loài chó.\nContinuity sang scene sau: Ba lô cứu hộ đã nằm cạnh tay cô bé, dây cứu hộ màu đỏ lộ ra khỏi khóa kéo nửa mở.",
+        "previous": "SCENE 2: Ý chính: Cô bé bị dồn ra cầu kính tầng 4 trong khi con sói tiến tới từ hành lang bên trái.\nBối cảnh: Cầu kính treo giữa tầng 4 của trung tâm thương mại, ánh sáng ban ngày cực mạnh phủ qua mái kính, phía dưới là sảnh sâu nhiều tầng, lan can kim loại hai bên, biển báo thoát hiểm và một ba lô cứu hộ màu đỏ treo cạnh trụ lan can phía phải.\nNhân vật xuất hiện: Cô bé áo khoác vàng đứng sát rìa phải cầu kính, hai tay bám lan can; con sói khổng lồ xuất hiện ở rìa trái hành lang; chú chó nghiệp vụ đang chạy lên cầu thang cuốn phía xa phía sau con sói.\nHành động chính 1: Con sói bước mạnh từ rìa trái vào đầu cầu kính, móng vuốt cào mạnh xuống mặt kính làm cầu rung dữ dội.\nHành động chính 2: Cô bé lùi gấp về phía rìa phải, tay run siết chặt lan can, mắt nhìn thẳng vào con sói.\nÂm thanh: Tiếng móng vuốt cào kính rít sắc, tiếng cầu kính rung mạnh, tiếng cô bé hít thở gấp, tiếng sói gầm khàn giống tiếng gầm đặc trưng của loài sói, tiếng bước chân chó nghiệp vụ dồn nhanh trên thang cuốn phía xa.\nContinuity sang scene sau: Cú cào của con sói tạo một vết nứt dài trên mặt cầu kính, vết nứt bắt đầu lan về phía chân cô bé.",
+        "next": "SCENE 4: Ý chính: Chú chó nghiệp vụ dùng trí thông minh kéo dây cứu hộ để giúp cô bé rời khỏi vùng kính nứt.\nBối cảnh: Cầu kính tầng 4 đang rung mạnh, ba lô cứu hộ nằm cạnh cô bé, dây cứu hộ màu đỏ lộ ra, lan can kim loại bên phải có một móc thép cố định, con sói đứng phía trái cầu.\nNhân vật xuất hiện: Cô bé áo khoác vàng nằm sát sàn kính gần ba lô; chú chó nghiệp vụ Malinois đeo dây cam lao tới từ phía sau con sói; con sói khổng lồ quay đầu về phía chú chó.\nHành động chính 1: Chú chó nghiệp vụ phóng mạnh từ rìa trái phía sau con sói, cắn chặt đầu dây cứu hộ màu đỏ và kéo giật dây về phía móc thép bên lan can.\nHành động chính 2: Cô bé hiểu ý, chộp nhanh đoạn dây còn lại và quấn mạnh quanh cổ tay để tự kéo người khỏi vùng kính nứt.\nÂm thanh: Tiếng chó sủa gấp giống tiếng sủa đặc trưng của loài chó, tiếng dây cứu hộ bị kéo căng rít lên, tiếng móc thép va vào lan can keng lớn, tiếng cô bé thở dồn, tiếng sói gầm giận dữ giống tiếng gầm đặc trưng của loài sói.\nContinuity sang scene sau: Dây cứu hộ đã căng giữa móc thép, chú chó và cổ tay cô bé, tạo thành đường kéo giúp cô bé trượt ra khỏi vùng nguy hiểm.",
+        "status": "queued",
+        "imagePrompt": "",
+        "motionPrompt": "",
+        "provider": "",
+        "account": "",
+        "updatedAt": "2026-06-04T00:21:12.091Z",
+        "sceneId": "3",
+        "sceneIndex": 2,
+        "rawSceneText": "SCENE 3: Ý chính: Vết nứt ép cô bé bò tới ba lô cứu hộ màu đỏ để tìm cách sống sót.\nBối cảnh: Vẫn trên cầu kính tầng 4, vết nứt dài nằm giữa mặt cầu, ánh sáng ban ngày phản chiếu rõ trên kính, ba lô cứu hộ màu đỏ treo cạnh trụ lan can phía phải, biển báo thoát hiểm nằm ngay phía trên ba lô.\nNhân vật xuất hiện: Cô bé áo khoác vàng khuỵu xuống gần rìa phải cầu kính; con sói khổng lồ ở rìa trái cầu kính; chú chó nghiệp vụ vừa xuất hiện ở đầu hành lang xa phía sau con sói.\nHành động chính 1: Vết nứt lan nhanh dưới chân cô bé, cô bé lập tức bò mạnh bằng hai khuỷu tay về phía ba lô cứu hộ màu đỏ.\nHành động chính 2: Con sói dồn trọng lượng xuống cầu kính, mặt cầu nghiêng mạnh sang phải khiến ba lô cứu hộ trượt khỏi móc và rơi xuống gần tay cô bé.\nÂm thanh: Tiếng kính nứt răng rắc cực rõ, tiếng áo khoác cô bé ma sát mạnh trên mặt kính, tiếng ba lô rơi bịch xuống sàn kính, tiếng sói thở phì phò nặng nề, tiếng chó nghiệp vụ sủa liên tiếp giống tiếng sủa đặc trưng của loài chó.\nContinuity sang scene sau: Ba lô cứu hộ đã nằm cạnh tay cô bé, dây cứu hộ màu đỏ lộ ra khỏi khóa kéo nửa mở.",
+        "imagePath": "",
+        "videoPath": "",
+        "continuityReferencePaths": [],
+        "continuityReferenceSourceScene": null,
+        "generatedContinuityReferences": null,
+        "errorClassification": null
+      },
+      {
+        "id": 4,
+        "original": "SCENE 4: Ý chính: Chú chó nghiệp vụ dùng trí thông minh kéo dây cứu hộ để giúp cô bé rời khỏi vùng kính nứt.\nBối cảnh: Cầu kính tầng 4 đang rung mạnh, ba lô cứu hộ nằm cạnh cô bé, dây cứu hộ màu đỏ lộ ra, lan can kim loại bên phải có một móc thép cố định, con sói đứng phía trái cầu.\nNhân vật xuất hiện: Cô bé áo khoác vàng nằm sát sàn kính gần ba lô; chú chó nghiệp vụ Malinois đeo dây cam lao tới từ phía sau con sói; con sói khổng lồ quay đầu về phía chú chó.\nHành động chính 1: Chú chó nghiệp vụ phóng mạnh từ rìa trái phía sau con sói, cắn chặt đầu dây cứu hộ màu đỏ và kéo giật dây về phía móc thép bên lan can.\nHành động chính 2: Cô bé hiểu ý, chộp nhanh đoạn dây còn lại và quấn mạnh quanh cổ tay để tự kéo người khỏi vùng kính nứt.\nÂm thanh: Tiếng chó sủa gấp giống tiếng sủa đặc trưng của loài chó, tiếng dây cứu hộ bị kéo căng rít lên, tiếng móc thép va vào lan can keng lớn, tiếng cô bé thở dồn, tiếng sói gầm giận dữ giống tiếng gầm đặc trưng của loài sói.\nContinuity sang scene sau: Dây cứu hộ đã căng giữa móc thép, chú chó và cổ tay cô bé, tạo thành đường kéo giúp cô bé trượt ra khỏi vùng nguy hiểm.",
+        "previous": "SCENE 3: Ý chính: Vết nứt ép cô bé bò tới ba lô cứu hộ màu đỏ để tìm cách sống sót.\nBối cảnh: Vẫn trên cầu kính tầng 4, vết nứt dài nằm giữa mặt cầu, ánh sáng ban ngày phản chiếu rõ trên kính, ba lô cứu hộ màu đỏ treo cạnh trụ lan can phía phải, biển báo thoát hiểm nằm ngay phía trên ba lô.\nNhân vật xuất hiện: Cô bé áo khoác vàng khuỵu xuống gần rìa phải cầu kính; con sói khổng lồ ở rìa trái cầu kính; chú chó nghiệp vụ vừa xuất hiện ở đầu hành lang xa phía sau con sói.\nHành động chính 1: Vết nứt lan nhanh dưới chân cô bé, cô bé lập tức bò mạnh bằng hai khuỷu tay về phía ba lô cứu hộ màu đỏ.\nHành động chính 2: Con sói dồn trọng lượng xuống cầu kính, mặt cầu nghiêng mạnh sang phải khiến ba lô cứu hộ trượt khỏi móc và rơi xuống gần tay cô bé.\nÂm thanh: Tiếng kính nứt răng rắc cực rõ, tiếng áo khoác cô bé ma sát mạnh trên mặt kính, tiếng ba lô rơi bịch xuống sàn kính, tiếng sói thở phì phò nặng nề, tiếng chó nghiệp vụ sủa liên tiếp giống tiếng sủa đặc trưng của loài chó.\nContinuity sang scene sau: Ba lô cứu hộ đã nằm cạnh tay cô bé, dây cứu hộ màu đỏ lộ ra khỏi khóa kéo nửa mở.",
+        "next": "SCENE 5: Ý chính: Cô bé được kéo khỏi cầu kính nứt và lao vào cửa hàng đồ thể thao gần đó.\nBối cảnh: Mép phải cầu kính nối với cửa hàng đồ thể thao, bên trong có thảm tập, dây leo, mũ bảo hộ, xe scooter trưng bày và cửa phụ dẫn ra hành lang thang máy kính. Ánh sáng ban ngày vẫn phủ sáng toàn bộ không gian.\nNhân vật xuất hiện: Cô bé áo khoác vàng đang bám dây cứu hộ gần cửa hàng; chú chó nghiệp vụ đứng thấp người kéo dây; con sói khổng lồ lao từ phía trái qua cầu kính nứt.\nHành động chính 1: Chú chó kéo mạnh dây cứu hộ liên tiếp, cô bé trượt nhanh khỏi cầu kính và lăn vào cửa hàng đồ thể thao.\nHành động chính 2: Con sói lao tới quá đà, móng vuốt đập mạnh xuống vùng kính nứt khiến một mảng kính sụp xuống phía sau cô bé.\nÂm thanh: Tiếng dây siết căng rít mạnh, tiếng cô bé lăn va vào thảm tập, tiếng kính vỡ ầm xuống sảnh dưới, tiếng sói gầm dữ giống tiếng gầm đặc trưng của loài sói, tiếng chú chó sủa cảnh báo giống tiếng sủa đặc trưng của loài chó.\nContinuity sang scene sau: Cô bé và chú chó đã ở trong cửa hàng đồ thể thao; con sói bị chặn tạm thời bởi khoảng kính vỡ nhưng vẫn còn đường vòng qua hành lang bên trái.",
+        "status": "queued",
+        "imagePrompt": "",
+        "motionPrompt": "",
+        "provider": "",
+        "account": "",
+        "updatedAt": "2026-06-04T00:21:12.091Z",
+        "sceneId": "4",
+        "sceneIndex": 3,
+        "rawSceneText": "SCENE 4: Ý chính: Chú chó nghiệp vụ dùng trí thông minh kéo dây cứu hộ để giúp cô bé rời khỏi vùng kính nứt.\nBối cảnh: Cầu kính tầng 4 đang rung mạnh, ba lô cứu hộ nằm cạnh cô bé, dây cứu hộ màu đỏ lộ ra, lan can kim loại bên phải có một móc thép cố định, con sói đứng phía trái cầu.\nNhân vật xuất hiện: Cô bé áo khoác vàng nằm sát sàn kính gần ba lô; chú chó nghiệp vụ Malinois đeo dây cam lao tới từ phía sau con sói; con sói khổng lồ quay đầu về phía chú chó.\nHành động chính 1: Chú chó nghiệp vụ phóng mạnh từ rìa trái phía sau con sói, cắn chặt đầu dây cứu hộ màu đỏ và kéo giật dây về phía móc thép bên lan can.\nHành động chính 2: Cô bé hiểu ý, chộp nhanh đoạn dây còn lại và quấn mạnh quanh cổ tay để tự kéo người khỏi vùng kính nứt.\nÂm thanh: Tiếng chó sủa gấp giống tiếng sủa đặc trưng của loài chó, tiếng dây cứu hộ bị kéo căng rít lên, tiếng móc thép va vào lan can keng lớn, tiếng cô bé thở dồn, tiếng sói gầm giận dữ giống tiếng gầm đặc trưng của loài sói.\nContinuity sang scene sau: Dây cứu hộ đã căng giữa móc thép, chú chó và cổ tay cô bé, tạo thành đường kéo giúp cô bé trượt ra khỏi vùng nguy hiểm.",
+        "imagePath": "",
+        "videoPath": "",
+        "continuityReferencePaths": [],
+        "continuityReferenceSourceScene": null,
+        "generatedContinuityReferences": null,
+        "errorClassification": null
+      },
+      {
+        "id": 5,
+        "original": "SCENE 5: Ý chính: Cô bé được kéo khỏi cầu kính nứt và lao vào cửa hàng đồ thể thao gần đó.\nBối cảnh: Mép phải cầu kính nối với cửa hàng đồ thể thao, bên trong có thảm tập, dây leo, mũ bảo hộ, xe scooter trưng bày và cửa phụ dẫn ra hành lang thang máy kính. Ánh sáng ban ngày vẫn phủ sáng toàn bộ không gian.\nNhân vật xuất hiện: Cô bé áo khoác vàng đang bám dây cứu hộ gần cửa hàng; chú chó nghiệp vụ đứng thấp người kéo dây; con sói khổng lồ lao từ phía trái qua cầu kính nứt.\nHành động chính 1: Chú chó kéo mạnh dây cứu hộ liên tiếp, cô bé trượt nhanh khỏi cầu kính và lăn vào cửa hàng đồ thể thao.\nHành động chính 2: Con sói lao tới quá đà, móng vuốt đập mạnh xuống vùng kính nứt khiến một mảng kính sụp xuống phía sau cô bé.\nÂm thanh: Tiếng dây siết căng rít mạnh, tiếng cô bé lăn va vào thảm tập, tiếng kính vỡ ầm xuống sảnh dưới, tiếng sói gầm dữ giống tiếng gầm đặc trưng của loài sói, tiếng chú chó sủa cảnh báo giống tiếng sủa đặc trưng của loài chó.\nContinuity sang scene sau: Cô bé và chú chó đã ở trong cửa hàng đồ thể thao; con sói bị chặn tạm thời bởi khoảng kính vỡ nhưng vẫn còn đường vòng qua hành lang bên trái.",
+        "previous": "SCENE 4: Ý chính: Chú chó nghiệp vụ dùng trí thông minh kéo dây cứu hộ để giúp cô bé rời khỏi vùng kính nứt.\nBối cảnh: Cầu kính tầng 4 đang rung mạnh, ba lô cứu hộ nằm cạnh cô bé, dây cứu hộ màu đỏ lộ ra, lan can kim loại bên phải có một móc thép cố định, con sói đứng phía trái cầu.\nNhân vật xuất hiện: Cô bé áo khoác vàng nằm sát sàn kính gần ba lô; chú chó nghiệp vụ Malinois đeo dây cam lao tới từ phía sau con sói; con sói khổng lồ quay đầu về phía chú chó.\nHành động chính 1: Chú chó nghiệp vụ phóng mạnh từ rìa trái phía sau con sói, cắn chặt đầu dây cứu hộ màu đỏ và kéo giật dây về phía móc thép bên lan can.\nHành động chính 2: Cô bé hiểu ý, chộp nhanh đoạn dây còn lại và quấn mạnh quanh cổ tay để tự kéo người khỏi vùng kính nứt.\nÂm thanh: Tiếng chó sủa gấp giống tiếng sủa đặc trưng của loài chó, tiếng dây cứu hộ bị kéo căng rít lên, tiếng móc thép va vào lan can keng lớn, tiếng cô bé thở dồn, tiếng sói gầm giận dữ giống tiếng gầm đặc trưng của loài sói.\nContinuity sang scene sau: Dây cứu hộ đã căng giữa móc thép, chú chó và cổ tay cô bé, tạo thành đường kéo giúp cô bé trượt ra khỏi vùng nguy hiểm.",
+        "next": "SCENE 6: Ý chính: Cô bé và chú chó dùng xe scooter trưng bày để thoát khỏi cửa hàng trước khi con sói vòng qua hành lang.\nBối cảnh: Bên trong cửa hàng đồ thể thao sáng rõ, kệ giày, mũ bảo hộ, dây leo, xe scooter điện trưng bày gần cửa phụ, cửa kính phía trước nhìn ra cầu kính bị vỡ một mảng.\nNhân vật xuất hiện: Cô bé áo khoác vàng đứng cạnh xe scooter điện, tay trái còn quấn dây cứu hộ; chú chó nghiệp vụ đứng sát cửa phụ; con sói khổng lồ xuất hiện thấp thoáng sau cửa kính phía hành lang bên trái.\nHành động chính 1: Cô bé đẩy mạnh xe scooter điện khỏi giá trưng bày, đặt một chân lên bàn đạp và nắm chặt tay lái.\nHành động chính 2: Chú chó cắn mạnh dây kéo ở đầu xe scooter, kéo xe lao thẳng qua cửa phụ ra hành lang thang máy kính.\nÂm thanh: Tiếng bánh scooter rít nhanh trên nền gạch, tiếng giá trưng bày rung mạnh, tiếng cô bé thở gấp, tiếng chó sủa thúc giục giống tiếng sủa đặc trưng của loài chó, tiếng sói gầm vọng từ hành lang giống tiếng gầm đặc trưng của loài sói.\nContinuity sang scene sau: Cô bé và chú chó đã lao ra hành lang thang máy kính, xe scooter vẫn còn dưới chân cô bé, con sói đuổi phía sau qua cửa phụ.",
+        "status": "queued",
+        "imagePrompt": "",
+        "motionPrompt": "",
+        "provider": "",
+        "account": "",
+        "updatedAt": "2026-06-04T00:21:12.091Z",
+        "sceneId": "5",
+        "sceneIndex": 4,
+        "rawSceneText": "SCENE 5: Ý chính: Cô bé được kéo khỏi cầu kính nứt và lao vào cửa hàng đồ thể thao gần đó.\nBối cảnh: Mép phải cầu kính nối với cửa hàng đồ thể thao, bên trong có thảm tập, dây leo, mũ bảo hộ, xe scooter trưng bày và cửa phụ dẫn ra hành lang thang máy kính. Ánh sáng ban ngày vẫn phủ sáng toàn bộ không gian.\nNhân vật xuất hiện: Cô bé áo khoác vàng đang bám dây cứu hộ gần cửa hàng; chú chó nghiệp vụ đứng thấp người kéo dây; con sói khổng lồ lao từ phía trái qua cầu kính nứt.\nHành động chính 1: Chú chó kéo mạnh dây cứu hộ liên tiếp, cô bé trượt nhanh khỏi cầu kính và lăn vào cửa hàng đồ thể thao.\nHành động chính 2: Con sói lao tới quá đà, móng vuốt đập mạnh xuống vùng kính nứt khiến một mảng kính sụp xuống phía sau cô bé.\nÂm thanh: Tiếng dây siết căng rít mạnh, tiếng cô bé lăn va vào thảm tập, tiếng kính vỡ ầm xuống sảnh dưới, tiếng sói gầm dữ giống tiếng gầm đặc trưng của loài sói, tiếng chú chó sủa cảnh báo giống tiếng sủa đặc trưng của loài chó.\nContinuity sang scene sau: Cô bé và chú chó đã ở trong cửa hàng đồ thể thao; con sói bị chặn tạm thời bởi khoảng kính vỡ nhưng vẫn còn đường vòng qua hành lang bên trái.",
+        "imagePath": "",
+        "videoPath": "",
+        "continuityReferencePaths": [],
+        "continuityReferenceSourceScene": null,
+        "generatedContinuityReferences": null,
+        "errorClassification": null
+      },
+      {
+        "id": 6,
+        "original": "SCENE 6: Ý chính: Cô bé và chú chó dùng xe scooter trưng bày để thoát khỏi cửa hàng trước khi con sói vòng qua hành lang.\nBối cảnh: Bên trong cửa hàng đồ thể thao sáng rõ, kệ giày, mũ bảo hộ, dây leo, xe scooter điện trưng bày gần cửa phụ, cửa kính phía trước nhìn ra cầu kính bị vỡ một mảng.\nNhân vật xuất hiện: Cô bé áo khoác vàng đứng cạnh xe scooter điện, tay trái còn quấn dây cứu hộ; chú chó nghiệp vụ đứng sát cửa phụ; con sói khổng lồ xuất hiện thấp thoáng sau cửa kính phía hành lang bên trái.\nHành động chính 1: Cô bé đẩy mạnh xe scooter điện khỏi giá trưng bày, đặt một chân lên bàn đạp và nắm chặt tay lái.\nHành động chính 2: Chú chó cắn mạnh dây kéo ở đầu xe scooter, kéo xe lao thẳng qua cửa phụ ra hành lang thang máy kính.\nÂm thanh: Tiếng bánh scooter rít nhanh trên nền gạch, tiếng giá trưng bày rung mạnh, tiếng cô bé thở gấp, tiếng chó sủa thúc giục giống tiếng sủa đặc trưng của loài chó, tiếng sói gầm vọng từ hành lang giống tiếng gầm đặc trưng của loài sói.\nContinuity sang scene sau: Cô bé và chú chó đã lao ra hành lang thang máy kính, xe scooter vẫn còn dưới chân cô bé, con sói đuổi phía sau qua cửa phụ.",
+        "previous": "SCENE 5: Ý chính: Cô bé được kéo khỏi cầu kính nứt và lao vào cửa hàng đồ thể thao gần đó.\nBối cảnh: Mép phải cầu kính nối với cửa hàng đồ thể thao, bên trong có thảm tập, dây leo, mũ bảo hộ, xe scooter trưng bày và cửa phụ dẫn ra hành lang thang máy kính. Ánh sáng ban ngày vẫn phủ sáng toàn bộ không gian.\nNhân vật xuất hiện: Cô bé áo khoác vàng đang bám dây cứu hộ gần cửa hàng; chú chó nghiệp vụ đứng thấp người kéo dây; con sói khổng lồ lao từ phía trái qua cầu kính nứt.\nHành động chính 1: Chú chó kéo mạnh dây cứu hộ liên tiếp, cô bé trượt nhanh khỏi cầu kính và lăn vào cửa hàng đồ thể thao.\nHành động chính 2: Con sói lao tới quá đà, móng vuốt đập mạnh xuống vùng kính nứt khiến một mảng kính sụp xuống phía sau cô bé.\nÂm thanh: Tiếng dây siết căng rít mạnh, tiếng cô bé lăn va vào thảm tập, tiếng kính vỡ ầm xuống sảnh dưới, tiếng sói gầm dữ giống tiếng gầm đặc trưng của loài sói, tiếng chú chó sủa cảnh báo giống tiếng sủa đặc trưng của loài chó.\nContinuity sang scene sau: Cô bé và chú chó đã ở trong cửa hàng đồ thể thao; con sói bị chặn tạm thời bởi khoảng kính vỡ nhưng vẫn còn đường vòng qua hành lang bên trái.",
+        "next": "SCENE 7: Ý chính: Chú chó bấm nút thang máy kính để đưa cô bé lên mái nhà cứu hộ.\nBối cảnh: Hành lang thang máy kính tầng 4, ánh sáng ban ngày xuyên qua tường kính, bảng điều khiển thang máy có nút lên mái nhà, cửa thang máy kính đang mở, bên ngoài thấy toàn bộ trung tâm thương mại phía dưới.\nNhân vật xuất hiện: Cô bé áo khoác vàng đứng trên scooter sát cửa thang máy; chú chó nghiệp vụ đứng cạnh bảng điều khiển thấp; con sói khổng lồ đang lao từ cuối hành lang phía trái.\nHành động chính 1: Chú chó nhảy mạnh lên, dùng hai chân trước đập trúng nút lên mái nhà trên bảng điều khiển thang máy.\nHành động chính 2: Cô bé kéo scooter vào trong thang máy, chú chó phóng vào theo, cửa kính đóng mạnh ngay trước khi con sói lao tới.\nÂm thanh: Tiếng nút thang máy bíp lớn, tiếng cửa kính trượt đóng gấp, tiếng bánh scooter lăn vào thang máy, tiếng móng vuốt sói cào sầm vào cửa kính, tiếng sói gầm sát cửa giống tiếng gầm đặc trưng của loài sói.\nContinuity sang scene sau: Thang máy kính bắt đầu đi lên mái nhà, con sói bị chặn bên ngoài nhưng nó nhìn thấy cầu thang thoát hiểm gần đó.",
+        "status": "queued",
+        "imagePrompt": "",
+        "motionPrompt": "",
+        "provider": "",
+        "account": "",
+        "updatedAt": "2026-06-04T00:21:12.091Z",
+        "sceneId": "6",
+        "sceneIndex": 5,
+        "rawSceneText": "SCENE 6: Ý chính: Cô bé và chú chó dùng xe scooter trưng bày để thoát khỏi cửa hàng trước khi con sói vòng qua hành lang.\nBối cảnh: Bên trong cửa hàng đồ thể thao sáng rõ, kệ giày, mũ bảo hộ, dây leo, xe scooter điện trưng bày gần cửa phụ, cửa kính phía trước nhìn ra cầu kính bị vỡ một mảng.\nNhân vật xuất hiện: Cô bé áo khoác vàng đứng cạnh xe scooter điện, tay trái còn quấn dây cứu hộ; chú chó nghiệp vụ đứng sát cửa phụ; con sói khổng lồ xuất hiện thấp thoáng sau cửa kính phía hành lang bên trái.\nHành động chính 1: Cô bé đẩy mạnh xe scooter điện khỏi giá trưng bày, đặt một chân lên bàn đạp và nắm chặt tay lái.\nHành động chính 2: Chú chó cắn mạnh dây kéo ở đầu xe scooter, kéo xe lao thẳng qua cửa phụ ra hành lang thang máy kính.\nÂm thanh: Tiếng bánh scooter rít nhanh trên nền gạch, tiếng giá trưng bày rung mạnh, tiếng cô bé thở gấp, tiếng chó sủa thúc giục giống tiếng sủa đặc trưng của loài chó, tiếng sói gầm vọng từ hành lang giống tiếng gầm đặc trưng của loài sói.\nContinuity sang scene sau: Cô bé và chú chó đã lao ra hành lang thang máy kính, xe scooter vẫn còn dưới chân cô bé, con sói đuổi phía sau qua cửa phụ.",
+        "imagePath": "",
+        "videoPath": "",
+        "continuityReferencePaths": [],
+        "continuityReferenceSourceScene": null,
+        "generatedContinuityReferences": null,
+        "errorClassification": null
+      },
+      {
+        "id": 7,
+        "original": "SCENE 7: Ý chính: Chú chó bấm nút thang máy kính để đưa cô bé lên mái nhà cứu hộ.\nBối cảnh: Hành lang thang máy kính tầng 4, ánh sáng ban ngày xuyên qua tường kính, bảng điều khiển thang máy có nút lên mái nhà, cửa thang máy kính đang mở, bên ngoài thấy toàn bộ trung tâm thương mại phía dưới.\nNhân vật xuất hiện: Cô bé áo khoác vàng đứng trên scooter sát cửa thang máy; chú chó nghiệp vụ đứng cạnh bảng điều khiển thấp; con sói khổng lồ đang lao từ cuối hành lang phía trái.\nHành động chính 1: Chú chó nhảy mạnh lên, dùng hai chân trước đập trúng nút lên mái nhà trên bảng điều khiển thang máy.\nHành động chính 2: Cô bé kéo scooter vào trong thang máy, chú chó phóng vào theo, cửa kính đóng mạnh ngay trước khi con sói lao tới.\nÂm thanh: Tiếng nút thang máy bíp lớn, tiếng cửa kính trượt đóng gấp, tiếng bánh scooter lăn vào thang máy, tiếng móng vuốt sói cào sầm vào cửa kính, tiếng sói gầm sát cửa giống tiếng gầm đặc trưng của loài sói.\nContinuity sang scene sau: Thang máy kính bắt đầu đi lên mái nhà, con sói bị chặn bên ngoài nhưng nó nhìn thấy cầu thang thoát hiểm gần đó.",
+        "previous": "SCENE 6: Ý chính: Cô bé và chú chó dùng xe scooter trưng bày để thoát khỏi cửa hàng trước khi con sói vòng qua hành lang.\nBối cảnh: Bên trong cửa hàng đồ thể thao sáng rõ, kệ giày, mũ bảo hộ, dây leo, xe scooter điện trưng bày gần cửa phụ, cửa kính phía trước nhìn ra cầu kính bị vỡ một mảng.\nNhân vật xuất hiện: Cô bé áo khoác vàng đứng cạnh xe scooter điện, tay trái còn quấn dây cứu hộ; chú chó nghiệp vụ đứng sát cửa phụ; con sói khổng lồ xuất hiện thấp thoáng sau cửa kính phía hành lang bên trái.\nHành động chính 1: Cô bé đẩy mạnh xe scooter điện khỏi giá trưng bày, đặt một chân lên bàn đạp và nắm chặt tay lái.\nHành động chính 2: Chú chó cắn mạnh dây kéo ở đầu xe scooter, kéo xe lao thẳng qua cửa phụ ra hành lang thang máy kính.\nÂm thanh: Tiếng bánh scooter rít nhanh trên nền gạch, tiếng giá trưng bày rung mạnh, tiếng cô bé thở gấp, tiếng chó sủa thúc giục giống tiếng sủa đặc trưng của loài chó, tiếng sói gầm vọng từ hành lang giống tiếng gầm đặc trưng của loài sói.\nContinuity sang scene sau: Cô bé và chú chó đã lao ra hành lang thang máy kính, xe scooter vẫn còn dưới chân cô bé, con sói đuổi phía sau qua cửa phụ.",
+        "next": "SCENE 8: Ý chính: Thang máy kính đi lên trong khi con sói chạy theo cầu thang thoát hiểm bên cạnh.\nBối cảnh: Giếng thang máy kính chạy dọc trung tâm thương mại lên mái nhà, bên cạnh là cầu thang thoát hiểm kim loại nhìn thấy qua lớp kính, ánh sáng ban ngày mạnh chiếu vào toàn bộ trục thang.\nNhân vật xuất hiện: Cô bé áo khoác vàng đứng trong thang máy, tay bám lan can kính; chú chó nghiệp vụ đứng chắn trước cô bé; con sói khổng lồ chạy trên cầu thang thoát hiểm kim loại bên ngoài lớp kính.\nHành động chính 1: Thang máy kính tăng tốc đi lên, cô bé mất thăng bằng và bám chặt vào lan can kính.\nHành động chính 2: Con sói chạy dữ dội trên cầu thang kim loại song song với thang máy, vai nó đập mạnh vào lan can làm cầu thang rung dữ dội.\nÂm thanh: Tiếng động cơ thang máy kéo mạnh, tiếng dây cáp rít đều, tiếng chân sói đập ầm ầm trên cầu thang kim loại, tiếng lan can rung chát chúa, tiếng cô bé thở nấc, tiếng chú chó gầm gừ bảo vệ giống tiếng gầm gừ đặc trưng của loài chó.\nContinuity sang scene sau: Thang máy sắp tới mái nhà, con sói cũng sắp lên tới cửa cầu thang mái, tạo cuộc đua cuối cùng.",
+        "status": "queued",
+        "imagePrompt": "",
+        "motionPrompt": "",
+        "provider": "",
+        "account": "",
+        "updatedAt": "2026-06-04T00:21:12.091Z",
+        "sceneId": "7",
+        "sceneIndex": 6,
+        "rawSceneText": "SCENE 7: Ý chính: Chú chó bấm nút thang máy kính để đưa cô bé lên mái nhà cứu hộ.\nBối cảnh: Hành lang thang máy kính tầng 4, ánh sáng ban ngày xuyên qua tường kính, bảng điều khiển thang máy có nút lên mái nhà, cửa thang máy kính đang mở, bên ngoài thấy toàn bộ trung tâm thương mại phía dưới.\nNhân vật xuất hiện: Cô bé áo khoác vàng đứng trên scooter sát cửa thang máy; chú chó nghiệp vụ đứng cạnh bảng điều khiển thấp; con sói khổng lồ đang lao từ cuối hành lang phía trái.\nHành động chính 1: Chú chó nhảy mạnh lên, dùng hai chân trước đập trúng nút lên mái nhà trên bảng điều khiển thang máy.\nHành động chính 2: Cô bé kéo scooter vào trong thang máy, chú chó phóng vào theo, cửa kính đóng mạnh ngay trước khi con sói lao tới.\nÂm thanh: Tiếng nút thang máy bíp lớn, tiếng cửa kính trượt đóng gấp, tiếng bánh scooter lăn vào thang máy, tiếng móng vuốt sói cào sầm vào cửa kính, tiếng sói gầm sát cửa giống tiếng gầm đặc trưng của loài sói.\nContinuity sang scene sau: Thang máy kính bắt đầu đi lên mái nhà, con sói bị chặn bên ngoài nhưng nó nhìn thấy cầu thang thoát hiểm gần đó.",
+        "imagePath": "",
+        "videoPath": "",
+        "continuityReferencePaths": [],
+        "continuityReferenceSourceScene": null,
+        "generatedContinuityReferences": null,
+        "errorClassification": null
+      },
+      {
+        "id": 8,
+        "original": "SCENE 8: Ý chính: Thang máy kính đi lên trong khi con sói chạy theo cầu thang thoát hiểm bên cạnh.\nBối cảnh: Giếng thang máy kính chạy dọc trung tâm thương mại lên mái nhà, bên cạnh là cầu thang thoát hiểm kim loại nhìn thấy qua lớp kính, ánh sáng ban ngày mạnh chiếu vào toàn bộ trục thang.\nNhân vật xuất hiện: Cô bé áo khoác vàng đứng trong thang máy, tay bám lan can kính; chú chó nghiệp vụ đứng chắn trước cô bé; con sói khổng lồ chạy trên cầu thang thoát hiểm kim loại bên ngoài lớp kính.\nHành động chính 1: Thang máy kính tăng tốc đi lên, cô bé mất thăng bằng và bám chặt vào lan can kính.\nHành động chính 2: Con sói chạy dữ dội trên cầu thang kim loại song song với thang máy, vai nó đập mạnh vào lan can làm cầu thang rung dữ dội.\nÂm thanh: Tiếng động cơ thang máy kéo mạnh, tiếng dây cáp rít đều, tiếng chân sói đập ầm ầm trên cầu thang kim loại, tiếng lan can rung chát chúa, tiếng cô bé thở nấc, tiếng chú chó gầm gừ bảo vệ giống tiếng gầm gừ đặc trưng của loài chó.\nContinuity sang scene sau: Thang máy sắp tới mái nhà, con sói cũng sắp lên tới cửa cầu thang mái, tạo cuộc đua cuối cùng.",
+        "previous": "SCENE 7: Ý chính: Chú chó bấm nút thang máy kính để đưa cô bé lên mái nhà cứu hộ.\nBối cảnh: Hành lang thang máy kính tầng 4, ánh sáng ban ngày xuyên qua tường kính, bảng điều khiển thang máy có nút lên mái nhà, cửa thang máy kính đang mở, bên ngoài thấy toàn bộ trung tâm thương mại phía dưới.\nNhân vật xuất hiện: Cô bé áo khoác vàng đứng trên scooter sát cửa thang máy; chú chó nghiệp vụ đứng cạnh bảng điều khiển thấp; con sói khổng lồ đang lao từ cuối hành lang phía trái.\nHành động chính 1: Chú chó nhảy mạnh lên, dùng hai chân trước đập trúng nút lên mái nhà trên bảng điều khiển thang máy.\nHành động chính 2: Cô bé kéo scooter vào trong thang máy, chú chó phóng vào theo, cửa kính đóng mạnh ngay trước khi con sói lao tới.\nÂm thanh: Tiếng nút thang máy bíp lớn, tiếng cửa kính trượt đóng gấp, tiếng bánh scooter lăn vào thang máy, tiếng móng vuốt sói cào sầm vào cửa kính, tiếng sói gầm sát cửa giống tiếng gầm đặc trưng của loài sói.\nContinuity sang scene sau: Thang máy kính bắt đầu đi lên mái nhà, con sói bị chặn bên ngoài nhưng nó nhìn thấy cầu thang thoát hiểm gần đó.",
+        "next": "SCENE 9: Ý chính: Trên mái nhà, chú chó kích hoạt drone cứu hộ để kéo cửa thoát hiểm chặn con sói.\nBối cảnh: Mái nhà trung tâm thương mại vào ban ngày, ánh sáng cực mạnh, sân đáp trực thăng có chữ H lớn, tủ thiết bị cứu hộ mở sẵn do báo động từ quầy bảo vệ kích hoạt, một drone cứu hộ màu cam đặt trên bệ sạc, cửa cầu thang thoát hiểm nằm bên trái, thang máy kính mở bên phải.\nNhân vật xuất hiện: Cô bé áo khoác vàng bước loạng choạng ra khỏi thang máy kính; chú chó nghiệp vụ lao tới bệ drone cứu hộ; con sói khổng lồ đang húc mạnh cửa cầu thang thoát hiểm bên trái.\nHành động chính 1: Chú chó dùng mõm đẩy mạnh cần gạt trên bệ drone cứu hộ, drone bật cánh quạt và bay vọt lên khỏi bệ sạc.\nHành động chính 2: Drone kéo dây cứu hộ móc vào tay nắm cửa cầu thang, giật mạnh cửa đóng sập lại đúng lúc con sói húc tới.\nÂm thanh: Tiếng cánh quạt drone quay vù vù cực rõ, tiếng cần gạt bật cạch lớn, tiếng dây cứu hộ căng phựt, tiếng cửa kim loại đóng sầm, tiếng sói đập mạnh vào cửa và gầm điên cuồng giống tiếng gầm đặc trưng của loài sói, tiếng cô bé thở dốc.\nContinuity sang scene sau: Cửa cầu thang đã bị drone và dây cứu hộ giữ chặt, cô bé và chú chó có vài giây an toàn trên sân đáp trực thăng.",
+        "status": "queued",
+        "imagePrompt": "",
+        "motionPrompt": "",
+        "provider": "",
+        "account": "",
+        "updatedAt": "2026-06-04T00:21:12.091Z",
+        "sceneId": "8",
+        "sceneIndex": 7,
+        "rawSceneText": "SCENE 8: Ý chính: Thang máy kính đi lên trong khi con sói chạy theo cầu thang thoát hiểm bên cạnh.\nBối cảnh: Giếng thang máy kính chạy dọc trung tâm thương mại lên mái nhà, bên cạnh là cầu thang thoát hiểm kim loại nhìn thấy qua lớp kính, ánh sáng ban ngày mạnh chiếu vào toàn bộ trục thang.\nNhân vật xuất hiện: Cô bé áo khoác vàng đứng trong thang máy, tay bám lan can kính; chú chó nghiệp vụ đứng chắn trước cô bé; con sói khổng lồ chạy trên cầu thang thoát hiểm kim loại bên ngoài lớp kính.\nHành động chính 1: Thang máy kính tăng tốc đi lên, cô bé mất thăng bằng và bám chặt vào lan can kính.\nHành động chính 2: Con sói chạy dữ dội trên cầu thang kim loại song song với thang máy, vai nó đập mạnh vào lan can làm cầu thang rung dữ dội.\nÂm thanh: Tiếng động cơ thang máy kéo mạnh, tiếng dây cáp rít đều, tiếng chân sói đập ầm ầm trên cầu thang kim loại, tiếng lan can rung chát chúa, tiếng cô bé thở nấc, tiếng chú chó gầm gừ bảo vệ giống tiếng gầm gừ đặc trưng của loài chó.\nContinuity sang scene sau: Thang máy sắp tới mái nhà, con sói cũng sắp lên tới cửa cầu thang mái, tạo cuộc đua cuối cùng.",
+        "imagePath": "",
+        "videoPath": "",
+        "continuityReferencePaths": [],
+        "continuityReferenceSourceScene": null,
+        "generatedContinuityReferences": null,
+        "errorClassification": null
+      },
+      {
+        "id": 9,
+        "original": "SCENE 9: Ý chính: Trên mái nhà, chú chó kích hoạt drone cứu hộ để kéo cửa thoát hiểm chặn con sói.\nBối cảnh: Mái nhà trung tâm thương mại vào ban ngày, ánh sáng cực mạnh, sân đáp trực thăng có chữ H lớn, tủ thiết bị cứu hộ mở sẵn do báo động từ quầy bảo vệ kích hoạt, một drone cứu hộ màu cam đặt trên bệ sạc, cửa cầu thang thoát hiểm nằm bên trái, thang máy kính mở bên phải.\nNhân vật xuất hiện: Cô bé áo khoác vàng bước loạng choạng ra khỏi thang máy kính; chú chó nghiệp vụ lao tới bệ drone cứu hộ; con sói khổng lồ đang húc mạnh cửa cầu thang thoát hiểm bên trái.\nHành động chính 1: Chú chó dùng mõm đẩy mạnh cần gạt trên bệ drone cứu hộ, drone bật cánh quạt và bay vọt lên khỏi bệ sạc.\nHành động chính 2: Drone kéo dây cứu hộ móc vào tay nắm cửa cầu thang, giật mạnh cửa đóng sập lại đúng lúc con sói húc tới.\nÂm thanh: Tiếng cánh quạt drone quay vù vù cực rõ, tiếng cần gạt bật cạch lớn, tiếng dây cứu hộ căng phựt, tiếng cửa kim loại đóng sầm, tiếng sói đập mạnh vào cửa và gầm điên cuồng giống tiếng gầm đặc trưng của loài sói, tiếng cô bé thở dốc.\nContinuity sang scene sau: Cửa cầu thang đã bị drone và dây cứu hộ giữ chặt, cô bé và chú chó có vài giây an toàn trên sân đáp trực thăng.",
+        "previous": "SCENE 8: Ý chính: Thang máy kính đi lên trong khi con sói chạy theo cầu thang thoát hiểm bên cạnh.\nBối cảnh: Giếng thang máy kính chạy dọc trung tâm thương mại lên mái nhà, bên cạnh là cầu thang thoát hiểm kim loại nhìn thấy qua lớp kính, ánh sáng ban ngày mạnh chiếu vào toàn bộ trục thang.\nNhân vật xuất hiện: Cô bé áo khoác vàng đứng trong thang máy, tay bám lan can kính; chú chó nghiệp vụ đứng chắn trước cô bé; con sói khổng lồ chạy trên cầu thang thoát hiểm kim loại bên ngoài lớp kính.\nHành động chính 1: Thang máy kính tăng tốc đi lên, cô bé mất thăng bằng và bám chặt vào lan can kính.\nHành động chính 2: Con sói chạy dữ dội trên cầu thang kim loại song song với thang máy, vai nó đập mạnh vào lan can làm cầu thang rung dữ dội.\nÂm thanh: Tiếng động cơ thang máy kéo mạnh, tiếng dây cáp rít đều, tiếng chân sói đập ầm ầm trên cầu thang kim loại, tiếng lan can rung chát chúa, tiếng cô bé thở nấc, tiếng chú chó gầm gừ bảo vệ giống tiếng gầm gừ đặc trưng của loài chó.\nContinuity sang scene sau: Thang máy sắp tới mái nhà, con sói cũng sắp lên tới cửa cầu thang mái, tạo cuộc đua cuối cùng.",
+        "next": "SCENE 10: Ý chính: Trực thăng cứu hộ hạ xuống và cô bé ôm chú chó trong happy ending.\nBối cảnh: Sân đáp trực thăng trên mái trung tâm thương mại vào ban ngày, ánh sáng mạnh phủ toàn khung hình, drone cứu hộ vẫn giữ dây ở cửa cầu thang, trực thăng cứu hộ màu trắng cam đang hạ thấp xuống sân đáp, gió từ cánh quạt thổi mạnh áo khoác cô bé.\nNhân vật xuất hiện: Cô bé áo khoác vàng đứng giữa sân đáp, tay còn trầy nhẹ và quấn dây cứu hộ; chú chó nghiệp vụ đứng sát cô bé, dây cam bay mạnh theo gió; con sói bị chặn sau cửa cầu thang bên trái.\nHành động chính 1: Trực thăng cứu hộ hạ xuống chính giữa sân đáp, nhân viên cứu hộ mở cửa và đưa tay ra đón cô bé.\nHành động chính 2: Cô bé quỳ xuống ôm chặt cổ chú chó, khóc nấc vì biết ơn, chú chó liếm nhanh lên mu bàn tay bị trầy của cô bé rồi áp đầu vào vai cô bé.\nÂm thanh: Tiếng trực thăng hạ cánh ầm vang, tiếng gió quạt thổi mạnh, tiếng dây cứu hộ rung phần phật, tiếng cô bé khóc nấc nhẹ vì xúc động, tiếng chú chó thở phì phò và rên vui giống âm thanh đặc trưng của loài chó, tiếng sói gầm xa sau cửa kim loại giống tiếng gầm đặc trưng của loài sói.\nContinuity kết thúc: Cô bé được cứu hợp lý vì báo động đã được kích hoạt từ quầy bảo vệ ở đầu truyện; chú chó là Guardian xuyên suốt; con sói bị chặn bởi cửa cầu thang, drone và dây cứu hộ; kết thúc an toàn, cảm xúc, logic và thỏa mãn.",
+        "status": "queued",
+        "imagePrompt": "",
+        "motionPrompt": "",
+        "provider": "",
+        "account": "",
+        "updatedAt": "2026-06-04T00:21:12.091Z",
+        "sceneId": "9",
+        "sceneIndex": 8,
+        "rawSceneText": "SCENE 9: Ý chính: Trên mái nhà, chú chó kích hoạt drone cứu hộ để kéo cửa thoát hiểm chặn con sói.\nBối cảnh: Mái nhà trung tâm thương mại vào ban ngày, ánh sáng cực mạnh, sân đáp trực thăng có chữ H lớn, tủ thiết bị cứu hộ mở sẵn do báo động từ quầy bảo vệ kích hoạt, một drone cứu hộ màu cam đặt trên bệ sạc, cửa cầu thang thoát hiểm nằm bên trái, thang máy kính mở bên phải.\nNhân vật xuất hiện: Cô bé áo khoác vàng bước loạng choạng ra khỏi thang máy kính; chú chó nghiệp vụ lao tới bệ drone cứu hộ; con sói khổng lồ đang húc mạnh cửa cầu thang thoát hiểm bên trái.\nHành động chính 1: Chú chó dùng mõm đẩy mạnh cần gạt trên bệ drone cứu hộ, drone bật cánh quạt và bay vọt lên khỏi bệ sạc.\nHành động chính 2: Drone kéo dây cứu hộ móc vào tay nắm cửa cầu thang, giật mạnh cửa đóng sập lại đúng lúc con sói húc tới.\nÂm thanh: Tiếng cánh quạt drone quay vù vù cực rõ, tiếng cần gạt bật cạch lớn, tiếng dây cứu hộ căng phựt, tiếng cửa kim loại đóng sầm, tiếng sói đập mạnh vào cửa và gầm điên cuồng giống tiếng gầm đặc trưng của loài sói, tiếng cô bé thở dốc.\nContinuity sang scene sau: Cửa cầu thang đã bị drone và dây cứu hộ giữ chặt, cô bé và chú chó có vài giây an toàn trên sân đáp trực thăng.",
+        "imagePath": "",
+        "videoPath": "",
+        "continuityReferencePaths": [],
+        "continuityReferenceSourceScene": null,
+        "generatedContinuityReferences": null,
+        "errorClassification": null
+      },
+      {
+        "id": 10,
+        "original": "SCENE 10: Ý chính: Trực thăng cứu hộ hạ xuống và cô bé ôm chú chó trong happy ending.\nBối cảnh: Sân đáp trực thăng trên mái trung tâm thương mại vào ban ngày, ánh sáng mạnh phủ toàn khung hình, drone cứu hộ vẫn giữ dây ở cửa cầu thang, trực thăng cứu hộ màu trắng cam đang hạ thấp xuống sân đáp, gió từ cánh quạt thổi mạnh áo khoác cô bé.\nNhân vật xuất hiện: Cô bé áo khoác vàng đứng giữa sân đáp, tay còn trầy nhẹ và quấn dây cứu hộ; chú chó nghiệp vụ đứng sát cô bé, dây cam bay mạnh theo gió; con sói bị chặn sau cửa cầu thang bên trái.\nHành động chính 1: Trực thăng cứu hộ hạ xuống chính giữa sân đáp, nhân viên cứu hộ mở cửa và đưa tay ra đón cô bé.\nHành động chính 2: Cô bé quỳ xuống ôm chặt cổ chú chó, khóc nấc vì biết ơn, chú chó liếm nhanh lên mu bàn tay bị trầy của cô bé rồi áp đầu vào vai cô bé.\nÂm thanh: Tiếng trực thăng hạ cánh ầm vang, tiếng gió quạt thổi mạnh, tiếng dây cứu hộ rung phần phật, tiếng cô bé khóc nấc nhẹ vì xúc động, tiếng chú chó thở phì phò và rên vui giống âm thanh đặc trưng của loài chó, tiếng sói gầm xa sau cửa kim loại giống tiếng gầm đặc trưng của loài sói.\nContinuity kết thúc: Cô bé được cứu hợp lý vì báo động đã được kích hoạt từ quầy bảo vệ ở đầu truyện; chú chó là Guardian xuyên suốt; con sói bị chặn bởi cửa cầu thang, drone và dây cứu hộ; kết thúc an toàn, cảm xúc, logic và thỏa mãn.",
+        "previous": "SCENE 9: Ý chính: Trên mái nhà, chú chó kích hoạt drone cứu hộ để kéo cửa thoát hiểm chặn con sói.\nBối cảnh: Mái nhà trung tâm thương mại vào ban ngày, ánh sáng cực mạnh, sân đáp trực thăng có chữ H lớn, tủ thiết bị cứu hộ mở sẵn do báo động từ quầy bảo vệ kích hoạt, một drone cứu hộ màu cam đặt trên bệ sạc, cửa cầu thang thoát hiểm nằm bên trái, thang máy kính mở bên phải.\nNhân vật xuất hiện: Cô bé áo khoác vàng bước loạng choạng ra khỏi thang máy kính; chú chó nghiệp vụ lao tới bệ drone cứu hộ; con sói khổng lồ đang húc mạnh cửa cầu thang thoát hiểm bên trái.\nHành động chính 1: Chú chó dùng mõm đẩy mạnh cần gạt trên bệ drone cứu hộ, drone bật cánh quạt và bay vọt lên khỏi bệ sạc.\nHành động chính 2: Drone kéo dây cứu hộ móc vào tay nắm cửa cầu thang, giật mạnh cửa đóng sập lại đúng lúc con sói húc tới.\nÂm thanh: Tiếng cánh quạt drone quay vù vù cực rõ, tiếng cần gạt bật cạch lớn, tiếng dây cứu hộ căng phựt, tiếng cửa kim loại đóng sầm, tiếng sói đập mạnh vào cửa và gầm điên cuồng giống tiếng gầm đặc trưng của loài sói, tiếng cô bé thở dốc.\nContinuity sang scene sau: Cửa cầu thang đã bị drone và dây cứu hộ giữ chặt, cô bé và chú chó có vài giây an toàn trên sân đáp trực thăng.",
+        "next": "",
+        "status": "queued",
+        "imagePrompt": "",
+        "motionPrompt": "",
+        "provider": "",
+        "account": "",
+        "updatedAt": "2026-06-04T00:21:12.091Z",
+        "sceneId": "10",
+        "sceneIndex": 9,
+        "rawSceneText": "SCENE 10: Ý chính: Trực thăng cứu hộ hạ xuống và cô bé ôm chú chó trong happy ending.\nBối cảnh: Sân đáp trực thăng trên mái trung tâm thương mại vào ban ngày, ánh sáng mạnh phủ toàn khung hình, drone cứu hộ vẫn giữ dây ở cửa cầu thang, trực thăng cứu hộ màu trắng cam đang hạ thấp xuống sân đáp, gió từ cánh quạt thổi mạnh áo khoác cô bé.\nNhân vật xuất hiện: Cô bé áo khoác vàng đứng giữa sân đáp, tay còn trầy nhẹ và quấn dây cứu hộ; chú chó nghiệp vụ đứng sát cô bé, dây cam bay mạnh theo gió; con sói bị chặn sau cửa cầu thang bên trái.\nHành động chính 1: Trực thăng cứu hộ hạ xuống chính giữa sân đáp, nhân viên cứu hộ mở cửa và đưa tay ra đón cô bé.\nHành động chính 2: Cô bé quỳ xuống ôm chặt cổ chú chó, khóc nấc vì biết ơn, chú chó liếm nhanh lên mu bàn tay bị trầy của cô bé rồi áp đầu vào vai cô bé.\nÂm thanh: Tiếng trực thăng hạ cánh ầm vang, tiếng gió quạt thổi mạnh, tiếng dây cứu hộ rung phần phật, tiếng cô bé khóc nấc nhẹ vì xúc động, tiếng chú chó thở phì phò và rên vui giống âm thanh đặc trưng của loài chó, tiếng sói gầm xa sau cửa kim loại giống tiếng gầm đặc trưng của loài sói.\nContinuity kết thúc: Cô bé được cứu hợp lý vì báo động đã được kích hoạt từ quầy bảo vệ ở đầu truyện; chú chó là Guardian xuyên suốt; con sói bị chặn bởi cửa cầu thang, drone và dây cứu hộ; kết thúc an toàn, cảm xúc, logic và thỏa mãn.",
+        "imagePath": "",
+        "videoPath": "",
+        "continuityReferencePaths": [],
+        "continuityReferenceSourceScene": null,
+        "generatedContinuityReferences": null,
+        "errorClassification": null
+      }
+    ],
+    "batchSize": 10,
+    "durationSec": 10,
+    "continuityReferences": {
+      "enabled": true,
+      "includeLastFrame": true,
+      "maxKeyFrames": 3,
+      "sendToChatGPT": true,
+      "sendToGrok": false
+    },
+    "createdAt": "2026-06-04T00:21:12.092Z",
+    "description": "",
+    "updatedAt": "2026-06-04T00:21:12.095Z",
+    "finalTimeline": []
+  },
+  "inputs": {
+    "storyPrompt": "",
+    "scriptPrompt": "SCENE 1:\nÝ chính: Con sói khổng lồ phá cửa vận chuyển ở tầng trệt và khiến cô bé phải chạy lên khu cầu kính.\nBối cảnh: Tầng trệt trung tâm thương mại 5 tầng vào ban ngày, ánh sáng mạnh xuyên qua mái kính panorama, gần lối giao hàng có một cửa vận chuyển kim loại bị móp, xe đẩy hàng đổ nghiêng, quầy bảo vệ nằm ở bên phải khung hình.\nNhân vật xuất hiện: Cô bé 9 tuổi mặc áo khoác vàng dính bụi, quần jean xanh, giày trắng bẩn đứng gần thang cuốn; con sói khổng lồ lông xám đen xuất hiện sau cánh cửa vận chuyển bị móp; chú chó nghiệp vụ Malinois đeo dây cứu hộ màu cam đứng cạnh quầy bảo vệ cùng nhân viên bảo vệ.\nHành động chính 1: Con sói khổng lồ húc mạnh cửa vận chuyển bật tung vào trong sảnh, móng vuốt cào mạnh xuống nền đá làm xe đẩy hàng văng lệch sang trái.\nHành động chính 2: Cô bé hoảng sợ chạy gấp lên thang cuốn đang hoạt động về phía tầng trên, hai tay bám mạnh vào tay vịn để không ngã.\nÂm thanh: Tiếng cửa kim loại bật tung vang cực lớn, tiếng xe đẩy hàng va đập chát chúa, tiếng sói gầm trầm dữ dội giống tiếng gầm đặc trưng của loài sói, tiếng cô bé thở gấp, tiếng chú chó nghiệp vụ sủa dồn dập giống tiếng sủa đặc trưng của loài chó.\nContinuity sang scene sau: Cô bé chạy lên tầng 4 bằng thang cuốn, con sói bắt đầu đuổi theo từ tầng dưới, chú chó nghiệp vụ nhìn thấy toàn bộ sự việc và lao khỏi quầy bảo vệ để bám theo.\n\nSCENE 2:\nÝ chính: Cô bé bị dồn ra cầu kính tầng 4 trong khi con sói tiến tới từ hành lang bên trái.\nBối cảnh: Cầu kính treo giữa tầng 4 của trung tâm thương mại, ánh sáng ban ngày cực mạnh phủ qua mái kính, phía dưới là sảnh sâu nhiều tầng, lan can kim loại hai bên, biển báo thoát hiểm và một ba lô cứu hộ màu đỏ treo cạnh trụ lan can phía phải.\nNhân vật xuất hiện: Cô bé áo khoác vàng đứng sát rìa phải cầu kính, hai tay bám lan can; con sói khổng lồ xuất hiện ở rìa trái hành lang; chú chó nghiệp vụ đang chạy lên cầu thang cuốn phía xa phía sau con sói.\nHành động chính 1: Con sói bước mạnh từ rìa trái vào đầu cầu kính, móng vuốt cào mạnh xuống mặt kính làm cầu rung dữ dội.\nHành động chính 2: Cô bé lùi gấp về phía rìa phải, tay run siết chặt lan can, mắt nhìn thẳng vào con sói.\nÂm thanh: Tiếng móng vuốt cào kính rít sắc, tiếng cầu kính rung mạnh, tiếng cô bé hít thở gấp, tiếng sói gầm khàn giống tiếng gầm đặc trưng của loài sói, tiếng bước chân chó nghiệp vụ dồn nhanh trên thang cuốn phía xa.\nContinuity sang scene sau: Cú cào của con sói tạo một vết nứt dài trên mặt cầu kính, vết nứt bắt đầu lan về phía chân cô bé.\n\nSCENE 3:\nÝ chính: Vết nứt ép cô bé bò tới ba lô cứu hộ màu đỏ để tìm cách sống sót.\nBối cảnh: Vẫn trên cầu kính tầng 4, vết nứt dài nằm giữa mặt cầu, ánh sáng ban ngày phản chiếu rõ trên kính, ba lô cứu hộ màu đỏ treo cạnh trụ lan can phía phải, biển báo thoát hiểm nằm ngay phía trên ba lô.\nNhân vật xuất hiện: Cô bé áo khoác vàng khuỵu xuống gần rìa phải cầu kính; con sói khổng lồ ở rìa trái cầu kính; chú chó nghiệp vụ vừa xuất hiện ở đầu hành lang xa phía sau con sói.\nHành động chính 1: Vết nứt lan nhanh dưới chân cô bé, cô bé lập tức bò mạnh bằng hai khuỷu tay về phía ba lô cứu hộ màu đỏ.\nHành động chính 2: Con sói dồn trọng lượng xuống cầu kính, mặt cầu nghiêng mạnh sang phải khiến ba lô cứu hộ trượt khỏi móc và rơi xuống gần tay cô bé.\nÂm thanh: Tiếng kính nứt răng rắc cực rõ, tiếng áo khoác cô bé ma sát mạnh trên mặt kính, tiếng ba lô rơi bịch xuống sàn kính, tiếng sói thở phì phò nặng nề, tiếng chó nghiệp vụ sủa liên tiếp giống tiếng sủa đặc trưng của loài chó.\nContinuity sang scene sau: Ba lô cứu hộ đã nằm cạnh tay cô bé, dây cứu hộ màu đỏ lộ ra khỏi khóa kéo nửa mở.\n\nSCENE 4:\nÝ chính: Chú chó nghiệp vụ dùng trí thông minh kéo dây cứu hộ để giúp cô bé rời khỏi vùng kính nứt.\nBối cảnh: Cầu kính tầng 4 đang rung mạnh, ba lô cứu hộ nằm cạnh cô bé, dây cứu hộ màu đỏ lộ ra, lan can kim loại bên phải có một móc thép cố định, con sói đứng phía trái cầu.\nNhân vật xuất hiện: Cô bé áo khoác vàng nằm sát sàn kính gần ba lô; chú chó nghiệp vụ Malinois đeo dây cam lao tới từ phía sau con sói; con sói khổng lồ quay đầu về phía chú chó.\nHành động chính 1: Chú chó nghiệp vụ phóng mạnh từ rìa trái phía sau con sói, cắn chặt đầu dây cứu hộ màu đỏ và kéo giật dây về phía móc thép bên lan can.\nHành động chính 2: Cô bé hiểu ý, chộp nhanh đoạn dây còn lại và quấn mạnh quanh cổ tay để tự kéo người khỏi vùng kính nứt.\nÂm thanh: Tiếng chó sủa gấp giống tiếng sủa đặc trưng của loài chó, tiếng dây cứu hộ bị kéo căng rít lên, tiếng móc thép va vào lan can keng lớn, tiếng cô bé thở dồn, tiếng sói gầm giận dữ giống tiếng gầm đặc trưng của loài sói.\nContinuity sang scene sau: Dây cứu hộ đã căng giữa móc thép, chú chó và cổ tay cô bé, tạo thành đường kéo giúp cô bé trượt ra khỏi vùng nguy hiểm.\n\nSCENE 5:\nÝ chính: Cô bé được kéo khỏi cầu kính nứt và lao vào cửa hàng đồ thể thao gần đó.\nBối cảnh: Mép phải cầu kính nối với cửa hàng đồ thể thao, bên trong có thảm tập, dây leo, mũ bảo hộ, xe scooter trưng bày và cửa phụ dẫn ra hành lang thang máy kính. Ánh sáng ban ngày vẫn phủ sáng toàn bộ không gian.\nNhân vật xuất hiện: Cô bé áo khoác vàng đang bám dây cứu hộ gần cửa hàng; chú chó nghiệp vụ đứng thấp người kéo dây; con sói khổng lồ lao từ phía trái qua cầu kính nứt.\nHành động chính 1: Chú chó kéo mạnh dây cứu hộ liên tiếp, cô bé trượt nhanh khỏi cầu kính và lăn vào cửa hàng đồ thể thao.\nHành động chính 2: Con sói lao tới quá đà, móng vuốt đập mạnh xuống vùng kính nứt khiến một mảng kính sụp xuống phía sau cô bé.\nÂm thanh: Tiếng dây siết căng rít mạnh, tiếng cô bé lăn va vào thảm tập, tiếng kính vỡ ầm xuống sảnh dưới, tiếng sói gầm dữ giống tiếng gầm đặc trưng của loài sói, tiếng chú chó sủa cảnh báo giống tiếng sủa đặc trưng của loài chó.\nContinuity sang scene sau: Cô bé và chú chó đã ở trong cửa hàng đồ thể thao; con sói bị chặn tạm thời bởi khoảng kính vỡ nhưng vẫn còn đường vòng qua hành lang bên trái.\n\nSCENE 6:\nÝ chính: Cô bé và chú chó dùng xe scooter trưng bày để thoát khỏi cửa hàng trước khi con sói vòng qua hành lang.\nBối cảnh: Bên trong cửa hàng đồ thể thao sáng rõ, kệ giày, mũ bảo hộ, dây leo, xe scooter điện trưng bày gần cửa phụ, cửa kính phía trước nhìn ra cầu kính bị vỡ một mảng.\nNhân vật xuất hiện: Cô bé áo khoác vàng đứng cạnh xe scooter điện, tay trái còn quấn dây cứu hộ; chú chó nghiệp vụ đứng sát cửa phụ; con sói khổng lồ xuất hiện thấp thoáng sau cửa kính phía hành lang bên trái.\nHành động chính 1: Cô bé đẩy mạnh xe scooter điện khỏi giá trưng bày, đặt một chân lên bàn đạp và nắm chặt tay lái.\nHành động chính 2: Chú chó cắn mạnh dây kéo ở đầu xe scooter, kéo xe lao thẳng qua cửa phụ ra hành lang thang máy kính.\nÂm thanh: Tiếng bánh scooter rít nhanh trên nền gạch, tiếng giá trưng bày rung mạnh, tiếng cô bé thở gấp, tiếng chó sủa thúc giục giống tiếng sủa đặc trưng của loài chó, tiếng sói gầm vọng từ hành lang giống tiếng gầm đặc trưng của loài sói.\nContinuity sang scene sau: Cô bé và chú chó đã lao ra hành lang thang máy kính, xe scooter vẫn còn dưới chân cô bé, con sói đuổi phía sau qua cửa phụ.\n\nSCENE 7:\nÝ chính: Chú chó bấm nút thang máy kính để đưa cô bé lên mái nhà cứu hộ.\nBối cảnh: Hành lang thang máy kính tầng 4, ánh sáng ban ngày xuyên qua tường kính, bảng điều khiển thang máy có nút lên mái nhà, cửa thang máy kính đang mở, bên ngoài thấy toàn bộ trung tâm thương mại phía dưới.\nNhân vật xuất hiện: Cô bé áo khoác vàng đứng trên scooter sát cửa thang máy; chú chó nghiệp vụ đứng cạnh bảng điều khiển thấp; con sói khổng lồ đang lao từ cuối hành lang phía trái.\nHành động chính 1: Chú chó nhảy mạnh lên, dùng hai chân trước đập trúng nút lên mái nhà trên bảng điều khiển thang máy.\nHành động chính 2: Cô bé kéo scooter vào trong thang máy, chú chó phóng vào theo, cửa kính đóng mạnh ngay trước khi con sói lao tới.\nÂm thanh: Tiếng nút thang máy bíp lớn, tiếng cửa kính trượt đóng gấp, tiếng bánh scooter lăn vào thang máy, tiếng móng vuốt sói cào sầm vào cửa kính, tiếng sói gầm sát cửa giống tiếng gầm đặc trưng của loài sói.\nContinuity sang scene sau: Thang máy kính bắt đầu đi lên mái nhà, con sói bị chặn bên ngoài nhưng nó nhìn thấy cầu thang thoát hiểm gần đó.\n\nSCENE 8:\nÝ chính: Thang máy kính đi lên trong khi con sói chạy theo cầu thang thoát hiểm bên cạnh.\nBối cảnh: Giếng thang máy kính chạy dọc trung tâm thương mại lên mái nhà, bên cạnh là cầu thang thoát hiểm kim loại nhìn thấy qua lớp kính, ánh sáng ban ngày mạnh chiếu vào toàn bộ trục thang.\nNhân vật xuất hiện: Cô bé áo khoác vàng đứng trong thang máy, tay bám lan can kính; chú chó nghiệp vụ đứng chắn trước cô bé; con sói khổng lồ chạy trên cầu thang thoát hiểm kim loại bên ngoài lớp kính.\nHành động chính 1: Thang máy kính tăng tốc đi lên, cô bé mất thăng bằng và bám chặt vào lan can kính.\nHành động chính 2: Con sói chạy dữ dội trên cầu thang kim loại song song với thang máy, vai nó đập mạnh vào lan can làm cầu thang rung dữ dội.\nÂm thanh: Tiếng động cơ thang máy kéo mạnh, tiếng dây cáp rít đều, tiếng chân sói đập ầm ầm trên cầu thang kim loại, tiếng lan can rung chát chúa, tiếng cô bé thở nấc, tiếng chú chó gầm gừ bảo vệ giống tiếng gầm gừ đặc trưng của loài chó.\nContinuity sang scene sau: Thang máy sắp tới mái nhà, con sói cũng sắp lên tới cửa cầu thang mái, tạo cuộc đua cuối cùng.\n\nSCENE 9:\nÝ chính: Trên mái nhà, chú chó kích hoạt drone cứu hộ để kéo cửa thoát hiểm chặn con sói.\nBối cảnh: Mái nhà trung tâm thương mại vào ban ngày, ánh sáng cực mạnh, sân đáp trực thăng có chữ H lớn, tủ thiết bị cứu hộ mở sẵn do báo động từ quầy bảo vệ kích hoạt, một drone cứu hộ màu cam đặt trên bệ sạc, cửa cầu thang thoát hiểm nằm bên trái, thang máy kính mở bên phải.\nNhân vật xuất hiện: Cô bé áo khoác vàng bước loạng choạng ra khỏi thang máy kính; chú chó nghiệp vụ lao tới bệ drone cứu hộ; con sói khổng lồ đang húc mạnh cửa cầu thang thoát hiểm bên trái.\nHành động chính 1: Chú chó dùng mõm đẩy mạnh cần gạt trên bệ drone cứu hộ, drone bật cánh quạt và bay vọt lên khỏi bệ sạc.\nHành động chính 2: Drone kéo dây cứu hộ móc vào tay nắm cửa cầu thang, giật mạnh cửa đóng sập lại đúng lúc con sói húc tới.\nÂm thanh: Tiếng cánh quạt drone quay vù vù cực rõ, tiếng cần gạt bật cạch lớn, tiếng dây cứu hộ căng phựt, tiếng cửa kim loại đóng sầm, tiếng sói đập mạnh vào cửa và gầm điên cuồng giống tiếng gầm đặc trưng của loài sói, tiếng cô bé thở dốc.\nContinuity sang scene sau: Cửa cầu thang đã bị drone và dây cứu hộ giữ chặt, cô bé và chú chó có vài giây an toàn trên sân đáp trực thăng.\n\nSCENE 10:\nÝ chính: Trực thăng cứu hộ hạ xuống và cô bé ôm chú chó trong happy ending.\nBối cảnh: Sân đáp trực thăng trên mái trung tâm thương mại vào ban ngày, ánh sáng mạnh phủ toàn khung hình, drone cứu hộ vẫn giữ dây ở cửa cầu thang, trực thăng cứu hộ màu trắng cam đang hạ thấp xuống sân đáp, gió từ cánh quạt thổi mạnh áo khoác cô bé.\nNhân vật xuất hiện: Cô bé áo khoác vàng đứng giữa sân đáp, tay còn trầy nhẹ và quấn dây cứu hộ; chú chó nghiệp vụ đứng sát cô bé, dây cam bay mạnh theo gió; con sói bị chặn sau cửa cầu thang bên trái.\nHành động chính 1: Trực thăng cứu hộ hạ xuống chính giữa sân đáp, nhân viên cứu hộ mở cửa và đưa tay ra đón cô bé.\nHành động chính 2: Cô bé quỳ xuống ôm chặt cổ chú chó, khóc nấc vì biết ơn, chú chó liếm nhanh lên mu bàn tay bị trầy của cô bé rồi áp đầu vào vai cô bé.\nÂm thanh: Tiếng trực thăng hạ cánh ầm vang, tiếng gió quạt thổi mạnh, tiếng dây cứu hộ rung phần phật, tiếng cô bé khóc nấc nhẹ vì xúc động, tiếng chú chó thở phì phò và rên vui giống âm thanh đặc trưng của loài chó, tiếng sói gầm xa sau cửa kim loại giống tiếng gầm đặc trưng của loài sói.\nContinuity kết thúc: Cô bé được cứu hợp lý vì báo động đã được kích hoạt từ quầy bảo vệ ở đầu truyện; chú chó là Guardian xuyên suốt; con sói bị chặn bởi cửa cầu thang, drone và dây cứu hộ; kết thúc an toàn, cảm xúc, logic và thỏa mãn.",
+    "chatContextTitle": "try",
+    "promptTemplates": {
+      "image": {
+        "id": "renderer-image-rules",
+        "version": "1"
+      },
+      "motion": {
+        "id": "renderer-motion-rules",
+        "version": "1"
+      },
+      "story": {
+        "id": "renderer-story-rules",
+        "version": "1"
+      }
+    },
+    "batchPromptRefs": []
+  },
+  "config": {
+    "scriptProvider": "ninerouter",
+    "imageProvider": "ninerouter",
+    "videoProvider": "grok",
+    "imageGeneration": {
+      "method": "web",
+      "endpoint": "http://localhost:20128/v1/images/generations",
+      "model": "cx/gpt-5.5-image",
+      "size": "1024x1024"
+    },
+    "continuityReferences": {
+      "enabled": true,
+      "includeLastFrame": true,
+      "maxKeyFrames": 3,
+      "sendToChatGPT": true,
+      "sendToGrok": false
+    },
+    "selectedModels": {
+      "script": "cx/gpt-5.5",
+      "image": "ninerouter",
+      "video": "grok"
+    },
+    "selectedLabels": {
+      "provider": "9Router local proxy",
+      "account": "Account 1",
+      "model": "cx/gpt-5.5"
+    },
+    "batchSize": 10,
+    "sceneDurationSeconds": 10,
+    "outputLanguage": "Vietnamese",
+    "stylePreset": "current-renderer-settings"
+  },
+  "router": {
+    "accountRouterEnabled": false,
+    "selectedGrokAccountId": null,
+    "routingPolicy": "round_robin",
+    "selectedLabels": {
+      "provider": "Grok",
+      "model": "Grok",
+      "account": ""
+    },
+    "status": {
+      "selectedAccountState": "available",
+      "routerState": ""
+    }
+  },
+  "runtime": {
+    "currentStage": "generating_keyframe",
+    "currentBatchIndex": null,
+    "currentSceneId": "1",
+    "activeBatchIds": [],
+    "paused": false,
+    "lastCheckpointRef": null,
+    "lastAction": "generate_keyframe",
+    "resumeMode": "manual-start",
+    "lastErrorClassification": null,
+    "waitingForUserStart": true,
+    "imageGeneration": {
+      "method": "web",
+      "endpoint": "http://localhost:20128/v1/images/generations",
+      "model": "cx/gpt-5.5-image",
+      "size": "1024x1024"
+    },
+    "continuityReferences": {
+      "enabled": true,
+      "includeLastFrame": true,
+      "maxKeyFrames": 3,
+      "sendToChatGPT": true,
+      "sendToGrok": false
+    },
+    "outputFolder": "D:\\Grok\\try",
+    "videoPlatform": "grok",
+    "reviewSettings": {
+      "skipAll": false,
+      "skipPrompt": false,
+      "skipImage": false,
+      "skipVideo": false
+    },
+    "skipReview": false,
+    "pixverse": {
+      "resolution": "360P",
+      "ratio": "16:9",
+      "duration": "5",
+      "model": "PixVerse V6",
+      "preview": false,
+      "audio": true
+    },
+    "grokRecovery": {
+      "resultRetryLimit": 2
+    },
+    "grokRouter": {
+      "enabled": false,
+      "account": "grok-default-profile",
+      "routingPolicy": "round_robin",
+      "sandboxFolder": "dev_sandbox_grok_account_router"
+    },
+    "activePreviewTimeline": [],
+    "autoRun": false,
+    "active": false
+  },
+  "assets": {
+    "images": [],
+    "videos": [],
+    "finalOutputs": []
+  },
+  "previewTimeline": [],
+  "extensions": {}
+}

@@ -1,0 +1,14 @@
+{
+  "reason": "no-assistant-after-send",
+  "state": {
+    "count": 0,
+    "text": "",
+    "generating": true,
+    "stopButton": true,
+    "sendReady": false,
+    "voiceReady": false,
+    "composerButtonCount": 58,
+    "mode": "fallback-non-user"
+  },
+  "elapsedMs": 43866
+}

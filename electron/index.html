@@ -227,18 +227,6 @@
       <p id="review-inline-status">Chưa có asset cần review.</p>
     </section>
 
-    <section class="workflow-progress-card" aria-labelledby="workflow-progress-title">
-      <div class="workflow-progress-head">
-        <div>
-          <span class="preview-label">Pipeline progress</span>
-          <h3 id="workflow-progress-title">Thanh quy trình batch</h3>
-        </div>
-        <strong id="workflow-progress-percent">0%</strong>
-      </div>
-      <div class="workflow-progress-track" aria-hidden="true"><span id="workflow-progress-fill"></span></div>
-      <div id="workflow-step-list" class="workflow-step-list" aria-live="polite"></div>
-    </section>
-
     <section id="final-preview-card" class="final-preview-card" aria-labelledby="final-preview-title" hidden>
       <div class="final-preview-head">
         <div>
@@ -262,7 +250,10 @@
           <span class="preview-label">Live pipeline log</span>
           <h3 id="pipeline-log-title">Nhật ký chạy workflow</h3>
         </div>
-        <button id="clear-log-btn" class="ghost mini" type="button">Xóa log</button>
+        <div class="pipeline-log-actions">
+          <button id="copy-log-btn" class="ghost mini" type="button">Copy log</button>
+          <button id="clear-log-btn" class="ghost mini" type="button">Xóa log</button>
+        </div>
       </div>
       <ol id="pipeline-log-list" class="pipeline-log-list" aria-live="polite"></ol>
     </section>
@@ -483,6 +474,17 @@
             <span>Send extra references to Grok</span>
           </label>
         </div>
+      </section>
+
+      <section class="settings-section">
+        <h3>Grok recovery</h3>
+        <div class="settings-grid">
+          <label>
+            Max retry
+            <input id="grok-result-retry-limit" type="number" min="0" max="10" step="1" value="2" />
+          </label>
+        </div>
+        <p class="settings-help">Khi Grok lỗi trang/image hoặc không trả video hợp lệ, tool sẽ upload lại ảnh tham chiếu và gửi lại đúng motion prompt scene hiện tại.</p>
       </section>
 
       <section class="settings-section">

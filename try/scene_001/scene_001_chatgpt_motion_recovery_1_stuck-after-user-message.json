@@ -1,0 +1,14 @@
+{
+  "reason": "stuck-after-user-message",
+  "state": {
+    "count": 1,
+    "text": "Rất tiếc, nhưng hình ảnh chúng ta tạo ra có thể vi phạm các quy định của chúng tôi về bạo lực. Nếu bạn cho rằng chúng tôi đã hiểu sai, vui lòng thử lại hoặc chỉnh sửa câu lệnh của bạn.",
+    "generating": false,
+    "stopButton": false,
+    "sendReady": false,
+    "voiceReady": false,
+    "composerButtonCount": 50,
+    "mode": "assistant-role"
+  },
+  "elapsedMs": 27099
+}
