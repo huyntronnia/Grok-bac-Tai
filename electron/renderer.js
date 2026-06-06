@@ -1,3 +1,38 @@
+
+/* vidora-crash-guard-renderer-installed */
+window.addEventListener('error', (event) => {
+  try {
+    window.videoPlannerAPI?.appendAppLog?.({
+      source: 'renderer',
+      kind: 'error',
+      text: 'Renderer crash/error: ' + (event.error?.message || event.message || 'unknown'),
+      details: {
+        message: event.message,
+        filename: event.filename,
+        lineno: event.lineno,
+        colno: event.colno,
+        stack: event.error?.stack || '',
+      },
+    });
+  } catch (_error) {}
+});
+
+window.addEventListener('unhandledrejection', (event) => {
+  try {
+    const reason = event.reason;
+    window.videoPlannerAPI?.appendAppLog?.({
+      source: 'renderer',
+      kind: 'error',
+      text: 'Renderer unhandled rejection: ' + (reason?.message || String(reason || 'unknown')),
+      details: {
+        message: reason?.message || String(reason || ''),
+        stack: reason?.stack || '',
+      },
+    });
+  } catch (_error) {}
+});
+
+
 const projectForm = document.querySelector('#project-form');
 const projectNameInput = document.querySelector('#project-name');
 const storyInput = document.querySelector('#story-input');
@@ -42,6 +77,7 @@ const continuityRefsToggle = document.querySelector('#continuity-refs-toggle');
 const continuityMaxKeyframesSelect = document.querySelector('#continuity-max-keyframes-select');
 const continuityChatgptToggle = document.querySelector('#continuity-chatgpt-toggle');
 const continuityGrokToggle = document.querySelector('#continuity-grok-toggle');
+const grokResultRetryLimitInput = document.querySelector('#grok-result-retry-limit');
 const settingsDialog = document.querySelector('#settings-dialog');
 const settingsSaveBtn = document.querySelector('#settings-save-btn');
 const openHardPromptBtn = document.querySelector('#open-hard-prompt-btn');
@@ -65,15 +101,13 @@ const pixverseAudioToggle = document.querySelector('#pixverse-audio-toggle');
 const statusText = document.querySelector('#review-inline-status');
 const pipelineLogList = document.querySelector('#pipeline-log-list');
 const pipelineLogCard = document.querySelector('.pipeline-log-card');
-const workflowStepList = document.querySelector('#workflow-step-list');
-const workflowProgressFill = document.querySelector('#workflow-progress-fill');
-const workflowProgressPercent = document.querySelector('#workflow-progress-percent');
 const finalPreviewCard = document.querySelector('#final-preview-card');
 const finalPreviewVideo = document.querySelector('#final-preview-video');
 const finalPreviewMeta = document.querySelector('#final-preview-meta');
 const finalSceneTimeline = document.querySelector('#final-scene-timeline');
 const refreshFinalPreviewBtn = document.querySelector('#refresh-final-preview-btn');
 const clearLogBtn = document.querySelector('#clear-log-btn');
+const copyLogBtn = document.querySelector('#copy-log-btn');
 const runState = document.querySelector('#run-state');
 const metricScenes = document.querySelector('#metric-scenes');
 const metricApproved = document.querySelector('#metric-approved');
@@ -182,7 +216,7 @@ let pendingChatResolve = null;
 let reviewZoom = 100;
 let pixverseCapability = null;
 let pipelineLogs = [];
-let pipelineLogVisible = false;
+let pipelineLogVisible = true;
 let lastStatusText = '';
 let lastStartClickAt = 0;
 let isReviewSpaceHeld = false;
@@ -253,6 +287,16 @@ function applyContinuityReferenceSettings(settings = {}) {
   if (continuityMaxKeyframesSelect) continuityMaxKeyframesSelect.value = String(Math.max(0, Math.min(3, Number(settings.maxKeyFrames ?? 3) || 3)));
   if (continuityChatgptToggle) continuityChatgptToggle.checked = settings.sendToChatGPT !== false;
   if (continuityGrokToggle) continuityGrokToggle.checked = settings.sendToGrok === true;
+}
+
+function getGrokRecoverySettings() {
+  return {
+    resultRetryLimit: clamp(Number(grokResultRetryLimitInput?.value ?? 2) || 0, 0, 10),
+  };
+}
+
+function applyGrokRecoverySettings(settings = {}) {
+  if (grokResultRetryLimitInput) grokResultRetryLimitInput.value = String(clamp(Number(settings.resultRetryLimit ?? settings.retryLimit ?? 2) || 0, 0, 10));
 }
 
 function getImageGenerationSettings() {
@@ -652,8 +696,312 @@ async function sendCurrentBatchViaWeb() {
   render();
 }
 
+
+
+function ensureChatChoiceFields() {
+  if (!project) return;
+  project.chatContextTitle = project.chatContextTitle || '';
+  project.chatResolveChoice = project.chatResolveChoice || '';
+  project.pendingChatRenameTitle = project.pendingChatRenameTitle || '';
+  project.chatChoiceConfirmed = project.chatChoiceConfirmed === true;
+}
+
+function shouldAskChatGptChatChoice(scene) {
+  if (!project || !scene) return false;
+  ensureChatChoiceFields();
+
+  // Chỉ bỏ qua hỏi nếu user đã chọn trong dialog mới.
+  if (project.chatChoiceConfirmed === true) return false;
+
+  const imageSettings = getImageGenerationSettings?.() || {};
+  if (imageSettings.method === 'api') return false;
+
+  const alreadyHasImage = Boolean(scene.imagePath || scene.imageDataUrl);
+  if (alreadyHasImage && !scene.forceRegenerateImage) return false;
+
+  return true;
+}
+
+function requireChatGptChatChoiceBeforeRun(scene) {
+  if (!shouldAskChatGptChatChoice(scene)) return false;
+
+  paused = true;
+  isRunning = false;
+  autoContinuing = false;
+
+  if (scene && ['running', 'image_generating', 'keyframe_generating'].includes(scene.status)) {
+    scene.status = scene.imagePath ? 'image_done' : 'approved';
+  }
+
+  openChatResolveDialog(scene, 'choose-chat-before-run');
+  setStatus('Chọn cách dùng ChatGPT trước: tạo chat mới hoặc nhập tên chat cũ để tool vào rồi đổi tên.', 'error');
+  persist();
+  render();
+  return true;
+}
+
+
+function getSceneVideoPathValue(scene) {
+  return scene?.videoPath || scene?.videoUrl || scene?.finalVideoPath || scene?.outputVideoPath || '';
+}
+
+function getSceneKeyframePathValue(scene) {
+  return scene?.imagePath || scene?.imageUrl || scene?.keyframePath || scene?.keyframeUrl || '';
+}
+
+function findFirstIncompleteSceneBefore(sceneId) {
+  if (!project?.scenes?.length) return null;
+
+  const sorted = [...project.scenes].sort((a, b) => Number(a.id || 0) - Number(b.id || 0));
+  for (const scene of sorted) {
+    const id = Number(scene.id || 0);
+    if (!id || id >= Number(sceneId || 0)) continue;
+
+    if (!sceneHasRequiredOutputForCurrentMode(scene)) {
+      return scene;
+    }
+  }
+
+  return null;
+}
+
+function shouldBlockSceneBecausePreviousVideoMissing(scene) {
+  const previous = findFirstIncompleteSceneBefore(scene?.id);
+  return previous || null;
+}
+
+
+function safeAddPipelineLog(source, kind, text, details = null) {
+  try {
+    if (typeof addPipelineLog === 'function') {
+      addPipelineLog(source, kind, text, details);
+      return;
+    }
+  } catch (_error) {}
+
+  try {
+    if (Array.isArray(pipelineLogs)) {
+      pipelineLogs.unshift({
+        time: new Date().toLocaleTimeString('vi-VN', { hour12: false }),
+        source,
+        kind,
+        text,
+        details,
+      });
+
+      if (pipelineLogs.length > 300) pipelineLogs = pipelineLogs.slice(0, 300);
+      renderPipelineLog?.();
+    }
+  } catch (_error) {}
+}
+
+function sceneHasMotionPromptOutput(scene) {
+  return Boolean(
+    scene?.motionPrompt ||
+    scene?.motionPromptPath ||
+    scene?.videoStatus === 'skipped-image-motion-only'
+  );
+}
+
+function sceneHasRequiredOutputForCurrentMode(scene) {
+  if (isImageMotionOnlyModeEnabled()) {
+    return sceneHasMotionPromptOutput(scene);
+  }
+
+  return Boolean(scene?.videoPath || scene?.videoUrl || scene?.finalVideoPath || scene?.outputVideoPath);
+}
+
+function sceneHasVideoOutput(scene) {
+  return sceneHasRequiredOutputForCurrentMode(scene);
+}
+
+function findFirstSceneMissingVideo() {
+  if (!project?.scenes?.length) return null;
+
+  return [...project.scenes]
+    .sort((a, b) => Number(a.id || 0) - Number(b.id || 0))
+    .find((scene) => !sceneHasRequiredOutputForCurrentMode(scene)) || null;
+}
+
+function forceResumeFirstIncompleteSceneIfNeeded() {
+  const firstIncomplete = findFirstSceneMissingVideo();
+  if (!firstIncomplete) return false;
+
+  const id = Number(firstIncomplete.id || 0);
+  if (!id) return false;
+
+  const currentIds = Array.isArray(activeBatchIds) ? activeBatchIds.map(Number) : [];
+
+  // Nếu batch hiện tại đã bắt đầu bằng scene cần chạy tiếp thì không đổi.
+  if (currentIds.length && currentIds[0] === id) return false;
+
+  // Trong image+motion-only, nếu batch 2-10 đang có scene chưa có motion prompt,
+  // giữ batch đó thay vì ép quay lại scene 1 đã xong motion.
+  if (isImageMotionOnlyModeEnabled() && currentIds.includes(id)) {
+    safeAddPipelineLog(
+      'renderer',
+      'running',
+      `Image + motion only: giữ batch hiện tại, scene tiếp theo cần chạy là scene ${id}.`,
+      { activeBatchIds }
+    );
+    return false;
+  }
+
+  activeBatchIds = [id];
+
+  if (isImageMotionOnlyModeEnabled()) {
+    firstIncomplete.status = firstIncomplete.imagePath ? 'motion_prompt_pending' : 'image_generating';
+    firstIncomplete.progressStep = firstIncomplete.imagePath ? 'motion' : 'image';
+  } else if (firstIncomplete.motionPrompt && !sceneHasVideoOutput(firstIncomplete)) {
+    firstIncomplete.status = 'video_pending';
+    firstIncomplete.progressStep = 'video';
+  } else if (firstIncomplete.imagePath && !firstIncomplete.motionPrompt) {
+    firstIncomplete.status = 'motion_prompt_pending';
+    firstIncomplete.progressStep = 'motion';
+  }
+
+  safeAddPipelineLog(
+    'renderer',
+    'running',
+    isImageMotionOnlyModeEnabled()
+      ? `Resume guard: ép pipeline về scene ${id} vì scene này chưa có motion prompt.`
+      : `Resume guard: scene ${id} chưa có video, ép pipeline quay lại scene này trước khi chạy scene sau.`,
+    { activeBatchIds }
+  );
+
+  return true;
+}
+
+
+
+function isImageMotionOnlyModeEnabled() {
+  return Boolean(project?.imageMotionOnlyMode || document.querySelector('#image-motion-only-mode')?.checked);
+}
+
+function ensureImageMotionOnlyModeControl() {
+  try {
+    if (document.querySelector('#image-motion-only-mode-card')) {
+      const checkbox = document.querySelector('#image-motion-only-mode');
+      if (checkbox && project) checkbox.checked = Boolean(project.imageMotionOnlyMode);
+      return;
+    }
+
+    const startBtn =
+      document.querySelector('#start-pipeline-btn') ||
+      document.querySelector('#start-full-pipeline-btn') ||
+      document.querySelector('[data-action="start-pipeline"]') ||
+      Array.from(document.querySelectorAll('button')).find((btn) =>
+        /start pipeline|chạy pipeline|pipeline ngay/i.test(String(btn.innerText || btn.textContent || ''))
+      );
+
+    const card = document.createElement('div');
+    card.id = 'image-motion-only-mode-card';
+    card.className = 'image-motion-only-mode-card';
+    card.innerHTML = `
+      <label class="image-motion-only-mode-label">
+        <input id="image-motion-only-mode" type="checkbox" />
+        <span>
+          <b>Chỉ tạo ảnh + motion prompt</b>
+          <small>Bỏ qua Grok/Veo/video. Dùng khi acc video die, tự đem ảnh + prompt đi làm tay.</small>
+        </span>
+      </label>
+    `;
+
+    const checkbox = card.querySelector('#image-motion-only-mode');
+    checkbox.checked = Boolean(project?.imageMotionOnlyMode);
+    checkbox.addEventListener('change', () => {
+      if (project) {
+        project.imageMotionOnlyMode = checkbox.checked;
+        persist?.();
+      }
+
+      setStatus(
+        checkbox.checked
+          ? 'Đã bật chế độ chỉ tạo ảnh + motion prompt, sẽ bỏ qua Grok/Veo/video.'
+          : 'Đã tắt chế độ chỉ tạo ảnh + motion prompt.',
+        checkbox.checked ? 'ok' : 'idle'
+      );
+    });
+
+    if (startBtn?.parentElement) {
+      startBtn.parentElement.insertBefore(card, startBtn);
+    } else {
+      document.body.appendChild(card);
+    }
+  } catch (error) {
+    console.warn('ensureImageMotionOnlyModeControl failed', error);
+  }
+}
+
+
+
+function getNextImageMotionOnlyBatchAfter(doneSceneId = 0) {
+  if (!project?.scenes?.length) return [];
+
+  const sorted = [...project.scenes].sort((a, b) => Number(a.id || 0) - Number(b.id || 0));
+
+  const next = sorted.find((scene) => {
+    const id = Number(scene.id || 0);
+    if (!id || id <= Number(doneSceneId || 0)) return false;
+
+    const hasMotion = Boolean(
+      scene.motionPrompt ||
+      scene.motionPromptPath ||
+      scene.videoStatus === 'skipped-image-motion-only'
+    );
+
+    return !hasMotion;
+  });
+
+  if (!next?.id) return [];
+
+  return sorted
+    .map((scene) => Number(scene.id || 0))
+    .filter((id) => id >= Number(next.id || 0))
+    .slice(0, 10);
+}
+
+
+
+function hasMotionOnlySceneDoneStrict(scene) {
+  return Boolean(
+    scene &&
+    (
+      scene.videoStatus === 'skipped-image-motion-only' ||
+      scene.status === 'done' ||
+      scene.motionPrompt ||
+      scene.motionPromptPath
+    )
+  );
+}
+
+function findBlockingPreviousMotionScene(targetSceneId) {
+  if (!isImageMotionOnlyModeEnabled() || !project?.scenes?.length) return null;
+
+  const target = Number(targetSceneId || 0);
+  if (!target || target <= 1) return null;
+
+  const sorted = [...project.scenes].sort((a, b) => Number(a.id || 0) - Number(b.id || 0));
+
+  for (const scene of sorted) {
+    const id = Number(scene.id || 0);
+    if (!id || id >= target) continue;
+
+    if (!hasMotionOnlySceneDoneStrict(scene)) {
+      return scene;
+    }
+  }
+
+  return null;
+}
+
+
 async function runFullPipeline() {
+  ensureImageMotionOnlyModeControl();
+
+  ensureChatChoiceFields();
   if (!project || !activeBatchIds.length) return;
+  forceResumeFirstIncompleteSceneIfNeeded();
   if (!outputFolder) {
     await chooseOutputFolder();
     if (!outputFolder) return;
@@ -682,6 +1030,25 @@ async function runFullPipeline() {
 
   for (let i = 0; i < scenesToRun.length; i++) {
     const scene = scenesToRun[i];
+    const blockingPreviousScene = shouldBlockSceneBecausePreviousVideoMissing(scene);
+    if (blockingPreviousScene) {
+      paused = true;
+      isRunning = false;
+      autoContinuing = false;
+      setStatus(
+        isImageMotionOnlyModeEnabled()
+          ? `Không chạy scene ${scene.id}: scene ${blockingPreviousScene.id} chưa có motion prompt hoàn chỉnh.`
+          : `Không chạy scene ${scene.id}: scene ${blockingPreviousScene.id} chưa có video hoàn chỉnh.`,
+        'error'
+      );
+      safeAddPipelineLog('renderer', 'error', (isImageMotionOnlyModeEnabled()
+        ? `Không chạy scene kế tiếp vì scene trước chưa có motion prompt hoàn chỉnh: scene ${blockingPreviousScene.id}`
+        : `Không chạy scene kế tiếp vì scene trước chưa có video hoàn chỉnh: scene ${blockingPreviousScene.id}`));
+      persist();
+      render();
+      return;
+    }
+    if (requireChatGptChatChoiceBeforeRun(scene)) return;
     try {
       const sceneIndex = project.scenes.indexOf(scene);
       const resumeAction = getNextResumeAction({ project, runtime: { ...projectRuntime, activeBatchIds, currentSceneId: getSceneRef(scene, sceneIndex) } });
@@ -694,8 +1061,28 @@ async function runFullPipeline() {
       if (motionPrompt) scene.motionPrompt = motionPrompt;
       scene.progressStep = scene.imagePath ? 'motion' : 'image';
       render();
+      // strict-motion-only-before-run-scene-guard
+      if (isImageMotionOnlyModeEnabled()) {
+        const blockingPreviousMotionScene = findBlockingPreviousMotionScene(scene.id);
+        if (blockingPreviousMotionScene) {
+          activeBatchIds = [Number(blockingPreviousMotionScene.id)];
+          safeAddPipelineLog?.(
+            'renderer',
+            'running',
+            `Image + motion only: chặn nhảy scene ${scene.id}; quay lại scene ${blockingPreviousMotionScene.id} vì scene trước chưa commit motion prompt.`,
+            { activeBatchIds }
+          );
+          persist();
+          render();
+          return runFullPipeline();
+        }
+      }
+
       const result = await window.videoPlannerAPI.runScenePipeline({
-        projectName: project.name,
+        
+        imageMotionOnlyMode: isImageMotionOnlyModeEnabled(),
+        skipVideoGeneration: isImageMotionOnlyModeEnabled(),
+projectName: project.name,
         outputFolder,
         sceneId: scene.id,
         imagePrompt,
@@ -709,11 +1096,111 @@ async function runFullPipeline() {
         videoConfig: getVideoProviderConfig(),
         imageProvider: getImageGenerationSettings(),
         continuityReferences: getContinuityReferenceSettings(),
-        chatContextTitle: project.chatContextTitle ?? project.name ?? projectNameInput?.value?.trim() ?? '',
+        chatContextTitle: project.chatContextTitle || '',
         pendingChatRenameTitle: project.pendingChatRenameTitle || '',
         scriptText: storyInput?.value?.trim() || project?.story || '',
         sceneText: scene.original || '',
       });
+
+      // motion-only-mark-result-done-v2
+      if (
+        isImageMotionOnlyModeEnabled() &&
+        (
+          result?.imageMotionOnlyMode ||
+          result?.skipVideoGeneration ||
+          result?.videoStatus === 'skipped-image-motion-only'
+        )
+      ) {
+        scene.imagePath = result.imagePath || scene.imagePath || '';
+        scene.imageDataUrl = result.imageDataUrl || scene.imageDataUrl || '';
+        scene.motionPrompt = result.motionPrompt || scene.motionPrompt || '[saved: motion_prompt.txt]';
+        scene.motionPromptPath = result.motionPromptPath || scene.motionPromptPath || 'motion_prompt.txt';
+        scene.videoStatus = 'skipped-image-motion-only';
+        scene.videoPath = '';
+        scene.videoUrl = '';
+        scene.status = 'done';
+        scene.motionPrompt = result.motionPrompt || scene.motionPrompt || '[saved: motion_prompt.txt]';
+        scene.motionPromptPath = result.motionPromptPath || scene.motionPromptPath || 'motion_prompt.txt';
+        scene.progressStep = 'motion';
+        scene.error = '';
+        scene.updatedAt = new Date().toISOString();
+
+        safeAddPipelineLog?.(
+          'renderer',
+          'ok',
+          `Image + motion only: scene ${scene.id} completed without video.`
+        );
+
+        persist();
+        render();
+
+        const remainingInCurrentBatch = (activeBatchIds || [])
+          .map(Number)
+          .filter((id) => id > Number(scene.id || 0));
+
+        if (!remainingInCurrentBatch.length) {
+          const nextBatch = getNextImageMotionOnlyBatchAfter(scene.id);
+
+          if (nextBatch.length) {
+            activeBatchIds = nextBatch;
+            safeAddPipelineLog?.(
+              'renderer',
+              'running',
+              `Image + motion only: tự chuyển sang batch kế tiếp bắt đầu từ scene ${nextBatch[0]}.`,
+              { activeBatchIds }
+            );
+            persist();
+            render();
+            return runFullPipeline();
+          }
+        }
+
+        continue;
+      }
+
+
+      if (isImageMotionOnlyModeEnabled() && result?.imageMotionOnlyMode) {
+        scene.imagePath = result.imagePath || scene.imagePath;
+        scene.imageDataUrl = result.imageDataUrl || scene.imageDataUrl;
+        scene.motionPrompt = result.motionPrompt || scene.motionPrompt || '';
+        scene.motionPromptPath = result.motionPromptPath || scene.motionPromptPath || '';
+        scene.videoStatus = 'skipped-image-motion-only';
+        scene.status = 'done';
+        scene.progressStep = 'motion';
+        scene.error = '';
+        safeAddPipelineLog?.('renderer', 'ok', `Image + motion only: scene ${scene.id} completed without video.`);
+        persist();
+        render();
+        continue;
+      // image-motion-only-auto-continue-next-batch
+      // Scene này đã xong yêu cầu của mode ảnh+motion. Nếu batch chỉ có scene này,
+      // lần loop/auto-route tiếp theo phải tìm scene thiếu motionPrompt, không bị kẹt ở scene cũ.
+      }
+
+      const hasVideoOutput = Boolean(
+        scene.videoPath ||
+        scene.videoUrl ||
+        scene.finalVideoPath ||
+        scene.outputVideoPath ||
+        result?.videoPath ||
+        result?.videoUrl ||
+        result?.finalVideoPath ||
+        result?.outputVideoPath
+      );
+
+      if (!hasVideoOutput && !isImageMotionOnlyModeEnabled()) {
+        paused = true;
+        isRunning = false;
+        autoContinuing = false;
+        scene.status = scene.motionPrompt ? 'video_pending' : 'motion_prompt_pending';
+        scene.progressStep = scene.motionPrompt ? 'video' : 'motion';
+        scene.error = 'Scene này chưa có motion/video hoàn chỉnh nên đã chặn chạy scene kế tiếp.';
+        persist();
+        render();
+        setStatus(`Scene ${scene.id} chưa có video hoàn chỉnh. Đã dừng để tránh nhảy sang scene kế tiếp.`, 'error');
+        return;
+      }
+
       scene.forceRegenerateImage = false;
       scene.imagePrompt = result.imagePromptUsed || scene.imagePrompt || imagePrompt;
       if (result.motionPrompt) {
@@ -749,7 +1236,7 @@ async function runFullPipeline() {
         setStatus(`Scene ${scene.id}: ${scene.error}`, 'error');
         return;
       }
-      if (project.pendingChatRenameTitle && result.phase === 'image') {
+      if (project.pendingChatRenameTitle && (result.phase === 'image' || result.imagePath)) {
         project.chatContextTitle = project.pendingChatRenameTitle;
         project.pendingChatRenameTitle = '';
       }
@@ -796,13 +1283,14 @@ async function runFullPipeline() {
       scene.updatedAt = new Date().toISOString();
       persist();
       render();
-      if (scene.pipelineRetryCount <= 2) {
-        setStatus(`Scene ${scene.id} lỗi tạm thời: ${message}. Tự gửi lại lần ${scene.pipelineRetryCount}/2...`, 'running');
-        await new Promise((resolve) => setTimeout(resolve, 2500));
-        scene.status = scene.imagePath ? 'video_generating' : 'image_generating';
+      if (/Object reference chain is too long|Cannot find context with specified id|Execution context was destroyed|Target closed/i.test(message)) {
+        scene.status = 'error';
+        scene.progressStep = scene.imagePath ? 'motion' : 'image';
+        paused = true;
+        persist();
         render();
-        i--;
-        continue;
+        setStatus(`Scene ${scene.id} lỗi CDP/browser: ${message}. Đã dừng retry để tránh gửi lặp vào sai chat.`, 'error');
+        return;
       }
       scene.status = 'error';
       scene.progressStep = scene.imagePath ? 'motion' : 'image';
@@ -853,6 +1341,7 @@ function getVideoProviderConfig() {
     grok: {
       resolution: '720p',
       duration: String(normalizeSceneDuration(project?.durationSec || durationInput?.value || 10)),
+      ...getGrokRecoverySettings(),
     },
   };
 }
@@ -915,6 +1404,31 @@ function updatePixVerseConfigAdvice() {
 }
 
 async function waitForProviderReady(providerValue, label) {
+  // hard-skip-waitForProviderReady-video-provider-motion-only
+  if (
+    typeof isImageMotionOnlyModeEnabled === 'function' &&
+    isImageMotionOnlyModeEnabled() &&
+    providerValue !== 'chatgpt'
+  ) {
+    safeAddPipelineLog?.(
+      'renderer',
+      'running',
+      `Image + motion only: skip waitForProviderReady(${providerValue}), không mở/check ${label}.`
+    );
+
+    setStatus(
+      `Bỏ qua ${label} vì đang bật chế độ chỉ tạo ảnh + motion prompt.`,
+      'ok'
+    );
+
+    return {
+      provider: providerValue,
+      loggedIn: true,
+      skipped: true,
+      imageMotionOnlyMode: true,
+      reason: 'image-motion-only-skip-video-provider',
+    };
+  }
   await openWebLogin(providerValue);
   const startedAt = Date.now();
   let attempt = 0;
@@ -1006,11 +1520,96 @@ async function autoRunRoute() {
     setStatus('Bước 2/5: mở và kiểm tra ChatGPT...', 'running');
     const chatgptState = await waitForProviderReady('chatgpt', 'ChatGPT');
 
+// VIDORA_AUTO_CONFIRM_EXISTING_CHAT_FROM_LOGIN_SAMPLE
+    {
+      const norm = (v) => String(v || '')
+        .trim()
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/đ/g, 'd')
+        .replace(/\s+/g, ' ');
+
+      const projectTitle =
+        String(project?.name || project?.projectName || projectNameInput?.value || projectTitleInput?.value || '').trim();
+
+      const visibleChatText = [
+        chatgptState?.title,
+        chatgptState?.url,
+        chatgptState?.sampleText,
+      ].map(v => String(v || '')).join('\n');
+
+      if (
+        project &&
+        projectTitle &&
+        !project.chatChoiceConfirmed &&
+        norm(visibleChatText).includes(norm(projectTitle))
+      ) {
+        project.chatChoiceConfirmed = true;
+        project.chatContextTitle = projectTitle;
+        project.pendingChatRenameTitle = '';
+        project.forceFreshChat = false;
+
+        safeAddPipelineLog?.(
+          'renderer',
+          'ok',
+          `ChatGPT existing chat auto-confirmed from sidebar/login sample: "${projectTitle}".`,
+          {
+            projectTitle,
+            chatgptTitle: chatgptState?.title || '',
+            chatgptUrl: chatgptState?.url || '',
+          }
+        );
+
+        persist?.();
+        render?.();
+      }
+    }
+
+
     const videoPlatform = getSelectedVideoPlatform();
-    setStatus(`Bước 3/5: mở và kiểm tra ${videoPlatform.label}...`, 'running');
-    const videoState = await waitForProviderReady(videoPlatform.value, videoPlatform.label);
-    if (videoPlatform.value === 'pixverse') {
-      pixverseCapability = videoState.capability || null;
+
+
+    let videoState = null;
+
+
+
+    // skip-video-provider-ready-image-motion-only
+
+
+    if (isImageMotionOnlyModeEnabled()) {
+
+
+      safeAddPipelineLog?.(
+
+
+        'renderer',
+
+
+        'running',
+
+
+        `Image + motion only: bỏ qua bước mở/kiểm tra ${videoPlatform.label}, không cần provider video.`
+
+
+      );
+
+
+      setStatus('Bỏ qua provider video vì đang bật chế độ chỉ tạo ảnh + motion prompt.', 'ok');
+
+
+    } else {
+
+
+      setStatus(`Bước 3/5: mở và kiểm tra ${videoPlatform.label}...`, 'running');
+
+
+      videoState = await waitForProviderReady(videoPlatform.value, videoPlatform.label);
+
+
+    }
+    if (!isImageMotionOnlyModeEnabled() && videoPlatform.value === 'pixverse') {
+      pixverseCapability = videoState?.capability || null;
       updatePixVerseConfigAdvice();
       const config = getVideoProviderConfig().pixverse;
       const estimated = estimatePixVerseEnergy(config);
@@ -1100,7 +1699,9 @@ function buildCsv() {
 }
 
 function render() {
-  const scenes = project?.scenes || [];
+  
+  ensureImageMotionOnlyModeControl();
+const scenes = project?.scenes || [];
   metricScenes.textContent = scenes.length;
   metricApproved.textContent = scenes.filter((scene) => scene.status === 'approved').length;
   metricBatch.textContent = activeBatchIds.length ? `${activeBatchIds[0]}-${activeBatchIds.at(-1)}` : '—';
@@ -1114,7 +1715,6 @@ function render() {
   autoRunBtn.disabled = false;
   openReviewBtn.disabled = !getCurrentReviewScene();
 
-  renderWorkflowProgress();
   renderFinalPreview();
   renderAssetReviewModal();
   renderProjectSessionStatus();
@@ -1191,13 +1791,32 @@ function setStatus(text, kind = 'idle') {
   appendPipelineLog(text, kind);
 }
 
-function appendPipelineLog(text, kind = 'idle') {
-  if (!text || text === lastStatusText) return;
-  lastStatusText = text;
-  const time = new Date().toLocaleTimeString('vi-VN', { hour12: false });
-  pipelineLogs.unshift({ time, text, kind });
+function summarizeLogDetails(details) {
+  if (!details) return '';
+  try {
+    if (typeof details === 'string') return details.slice(0, 320);
+    const compact = JSON.stringify(details, (_key, value) => {
+      if (typeof value === 'string') return value.length > 180 ? `${value.slice(0, 180)}...` : value;
+      return value;
+    });
+    return compact.length > 420 ? `${compact.slice(0, 420)}...` : compact;
+  } catch (_error) {
+    return '';
+  }
+}
+
+function appendPipelineLog(text, kind = 'idle', options = {}) {
+  if (!text) return;
+  const source = options.source || 'renderer';
+  const duplicateKey = `${source}:${kind}:${text}`;
+  if (!options.allowDuplicate && duplicateKey === lastStatusText) return;
+  lastStatusText = duplicateKey;
+  const time = options.ts
+    ? new Date(options.ts).toLocaleTimeString('vi-VN', { hour12: false })
+    : new Date().toLocaleTimeString('vi-VN', { hour12: false });
+  pipelineLogs.unshift({ time, text, kind, source, details: summarizeLogDetails(options.details) });
   pipelineLogs = pipelineLogs.slice(0, 80);
-  window.videoPlannerAPI?.appendAppLog?.({ source: 'renderer', kind, text }).catch(() => null);
+  if (!options.skipPersist) window.videoPlannerAPI?.appendAppLog?.({ source: 'renderer', kind, text }).catch(() => null);
   renderPipelineLog();
 }
 
@@ -1212,62 +1831,97 @@ window.videoPlannerAPI?.onPipelineNotice?.((payload) => {
   showPipelineNotice(payload);
 });
 
+window.videoPlannerAPI?.onPipelineLogEntry?.((entry = {}) => {
+  appendPipelineLog(entry.text || '', entry.kind || 'info', {
+    source: entry.source || 'main',
+    ts: entry.ts,
+    details: entry.details,
+    skipPersist: true,
+    allowDuplicate: true,
+  });
+});
+
+function formatPipelineLogsForCopy() {
+  const lines = [];
+  lines.push('=== Vidora pipeline log ===');
+  lines.push(`Time: ${new Date().toLocaleString('vi-VN', { hour12: false })}`);
+  if (project?.name) lines.push(`Project: ${project.name}`);
+  lines.push('');
+
+  if (!pipelineLogs.length) {
+    lines.push('(No pipeline logs)');
+    return lines.join('\n');
+  }
+
+  [...pipelineLogs].reverse().forEach((entry, index) => {
+    const source = entry.source || 'app';
+    const kind = entry.kind || 'info';
+    lines.push(`[${String(index + 1).padStart(3, '0')}] ${entry.time || ''} · ${source} · ${kind}`);
+    lines.push(entry.text || '');
+    if (entry.details) {
+      lines.push('details:');
+      lines.push(String(entry.details));
+    }
+    lines.push('');
+  });
+
+  return lines.join('\n');
+}
+
+async function copyPipelineLog() {
+  const text = formatPipelineLogsForCopy();
+
+  try {
+    await navigator.clipboard.writeText(text);
+    if (copyLogBtn) {
+      const old = copyLogBtn.textContent;
+      copyLogBtn.textContent = 'Copied ✓';
+      setTimeout(() => { copyLogBtn.textContent = old; }, 1200);
+    }
+    setStatus('Đã copy pipeline log vào clipboard.', 'ok');
+  } catch (error) {
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.setAttribute('readonly', '');
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    textarea.select();
+
+    let ok = false;
+    try {
+      ok = document.execCommand('copy');
+    } catch (_err) {
+      ok = false;
+    }
+
+    textarea.remove();
+
+    if (ok) {
+      if (copyLogBtn) {
+        const old = copyLogBtn.textContent;
+        copyLogBtn.textContent = 'Copied ✓';
+        setTimeout(() => { copyLogBtn.textContent = old; }, 1200);
+      }
+      setStatus('Đã copy pipeline log vào clipboard.', 'ok');
+      return;
+    }
+
+    setStatus(`Không copy được log: ${error?.message || error}`, 'error');
+  }
+}
+
 function renderPipelineLog() {
   if (!pipelineLogList) return;
   if (pipelineLogCard) pipelineLogCard.hidden = !pipelineLogVisible;
   pipelineLogList.innerHTML = pipelineLogs.length
-    ? pipelineLogs.map((entry) => `<li class="log-${entry.kind}"><span>${escapeHtml(entry.time)}</span><p>${escapeHtml(entry.text)}</p></li>`).join('')
+    ? pipelineLogs.map((entry) => `<li class="log-${entry.kind}"><span>${escapeHtml(entry.time)} · ${escapeHtml(entry.source || 'app')}</span><p>${escapeHtml(entry.text)}</p>${entry.details ? `<small>${escapeHtml(entry.details)}</small>` : ''}</li>`).join('')
     : '<li class="log-idle"><span>—</span><p>Chưa có log. Bấm Start pipeline để bắt đầu.</p></li>';
 }
 
 function setPipelineLogVisible(visible) {
   pipelineLogVisible = Boolean(visible);
   renderPipelineLog();
-}
-
-function getSceneWorkflowSteps(scene) {
-  const done = 'done';
-  const doing = 'doing';
-  const error = 'error';
-  const todo = 'todo';
-  const hasImage = Boolean(scene.imagePath || scene.imageDataUrl);
-  const hasVideoDone = Boolean(scene.videoPath || scene.status === 'video_done');
-  const failed = scene.status === 'error';
-  const progressStep = ['image_generating', 'video_generating', 'asset_review'].includes(scene.status) ? scene.progressStep || '' : '';
-  const imageDoing = scene.status === 'image_generating' && progressStep === 'image';
-  const motionDoing = scene.status === 'video_generating' && progressStep === 'motion';
-  const mergeDoing = progressStep === 'merge' && !hasVideoDone;
-  return [
-    { key: 'image', title: `Image scene ${scene.id}`, state: failed && progressStep === 'image' ? error : hasImage || ['image_done', 'video_generating', 'video_done'].includes(scene.status) ? done : imageDoing ? doing : todo },
-    { key: 'motion', title: `Motion scene ${scene.id}`, state: failed && progressStep === 'motion' ? error : hasVideoDone ? done : motionDoing ? doing : todo },
-    { key: 'merge', title: `Merge scene ${scene.id}`, state: failed && progressStep === 'merge' ? error : scene.status === 'video_done' ? done : hasVideoDone || mergeDoing ? doing : todo },
-  ];
-}
-
-function renderWorkflowProgress() {
-  if (!workflowStepList || !workflowProgressFill || !workflowProgressPercent) return;
-  const scenes = project?.scenes?.length ? project.scenes.filter((scene) => !activeBatchIds.length || activeBatchIds.includes(scene.id)) : [];
-  const promptStep = scenes.length ? [{
-    key: 'prompt-batch',
-    title: `Chốt prompt batch · ${scenes.length} scene`,
-    state: scenes.some((scene) => scene.status === 'error' && scene.progressStep === 'prompt') ? 'error'
-      : scenes.some((scene) => scene.status === 'waiting_review' || scene.reviewType === 'prompt') ? 'doing'
-        : scenes.every((scene) => Boolean(scene.imagePrompt && scene.motionPrompt) || ['approved', 'image_done', 'video_done', 'asset_review', 'image_generating', 'video_generating'].includes(scene.status)) ? 'done'
-          : scenes.some((scene) => scene.progressStep === 'prompt') ? 'doing'
-            : 'todo',
-  }] : [];
-  const steps = [...promptStep, ...scenes.flatMap(getSceneWorkflowSteps)];
-  const doneCount = steps.filter((step) => step.state === 'done').length;
-  const percent = steps.length ? Math.round((doneCount / steps.length) * 100) : 0;
-  workflowProgressFill.style.width = `${percent}%`;
-  workflowProgressPercent.textContent = `${percent}%`;
-  workflowStepList.innerHTML = steps.length
-    ? steps.map((step) => {
-      const icon = step.state === 'done' ? '✓' : step.state === 'doing' ? '⟳' : step.state === 'error' ? '!' : '•';
-      const label = step.state === 'done' ? 'done' : step.state === 'doing' ? 'doing' : step.state === 'error' ? 'error' : 'pending';
-      return `<article class="workflow-step ${step.state}"><span class="step-icon">${icon}</span><div><div class="step-title">${escapeHtml(step.title)}</div><div class="step-state">${label}</div></div></article>`;
-    }).join('')
-    : '<article class="workflow-step"><span class="step-icon">•</span><div><div class="step-title">Chưa có batch</div><div class="step-state">pending</div></div></article>';
 }
 
 function loadTextFileToTextarea(fileInput, textarea, fileNameEl, label) {
@@ -1899,6 +2553,7 @@ function getProjectSessionPayload() {
         audio: Boolean(pixverseAudioToggle?.checked),
       },
       continuityReferences: getContinuityReferenceSettings(),
+      grokRecovery: getGrokRecoverySettings(),
       grokRouter: getGrokRouterSettings(),
       activePreviewTimeline: previewTimeline,
       autoRun: false,
@@ -2025,6 +2680,7 @@ function applyProjectSessionPayload(payload = {}, filePath = '') {
   applyImageGenerationSettings(payload.runtime?.imageGeneration || payload.config?.imageGeneration);
   applyReviewSettings(payload.runtime?.reviewSettings || { skipReview: payload.runtime?.skipReview });
   applyContinuityReferenceSettings(payload.runtime?.continuityReferences || payload.config?.continuityReferences || project?.continuityReferences || {});
+  applyGrokRecoverySettings(payload.runtime?.grokRecovery || payload.config?.grokRecovery || payload.config?.videoConfig?.grok || {});
   setControlValue(pixverseResolutionSelect, payload.runtime?.pixverse?.resolution);
   setControlValue(pixverseRatioSelect, payload.runtime?.pixverse?.ratio);
   setControlValue(pixverseDurationSelect, payload.runtime?.pixverse?.duration);
@@ -2074,7 +2730,7 @@ async function confirmUnsavedProjectAction(actionLabel) {
 
 function openChatResolveDialog(scene, message) {
   pendingChatResolve = { sceneId: scene?.id || null, message };
-  if (chatResolveMessage) chatResolveMessage.textContent = `Không tìm thấy đoạn chat ChatGPT tên "${project?.name || ''}". Chọn cách xử lý để tool tiếp tục.`;
+  if (chatResolveMessage) chatResolveMessage.textContent = `Chọn cách dùng ChatGPT cho project "${project?.name || ''}": tạo chat mới hoặc nhập tên đoạn chat cũ để tool vào rồi đổi tên.`;
   if (chatResolveTitleInput) chatResolveTitleInput.value = '';
   if (chatResolveDialog && !chatResolveDialog.open) chatResolveDialog.showModal();
   setStatus('Cần chọn cách xử lý đoạn chat ChatGPT để tiếp tục pipeline.', 'error');
@@ -2099,13 +2755,17 @@ async function resolveChatAndContinue(mode) {
   if (mode === 'new') {
     const targetTitle = project?.name || projectNameInput?.value?.trim() || '';
     project.chatContextTitle = '';
-    project.pendingChatRenameTitle = targetTitle;
-    setStatus(`Option 1: bỏ tìm chat cũ. Tool sẽ mở chat mới, gửi prompt, rồi rename thành "${targetTitle}" sau khi ChatGPT tạo /c/...`, 'running');
+    project.chatResolveChoice = 'new';
+    
+    project.chatChoiceConfirmed = true;project.pendingChatRenameTitle = targetTitle;
+    setStatus(`Option 1: bỏ tìm chat cũ. Tool sẽ mở chat mới, gửi prompt, rồi rename an toàn đúng chat hiện tại.`, 'running');
     await window.videoPlannerAPI?.appendAppLog?.({ source: 'renderer', kind: 'running', text: `Chat resolve option 1: bypass old chat, pendingRenameTitle=${targetTitle}` });
   } else {
     const targetTitle = project?.name || projectNameInput?.value?.trim() || '';
     project.chatContextTitle = title;
-    project.pendingChatRenameTitle = targetTitle;
+    project.chatResolveChoice = 'existing';
+    
+    project.chatChoiceConfirmed = true;project.pendingChatRenameTitle = targetTitle;
     setStatus(`Option 2: tool sẽ vào đoạn chat "${title}", rồi check/rename liên tục thành "${targetTitle}" trước khi tiếp tục pipeline.`, 'running');
     await window.videoPlannerAPI?.appendAppLog?.({ source: 'renderer', kind: 'running', text: `Chat resolve option 2: select old chat="${title}", pendingRenameTitle=${targetTitle}` });
   }
@@ -2138,6 +2798,10 @@ function createBlankProjectFromName() {
     name: projectNameInput?.value?.trim() || 'Untitled project',
     story: storyInput?.value?.trim() || '',
     scenes: [],
+    chatContextTitle: '',
+    chatResolveChoice: '',
+    chatChoiceConfirmed: false,
+    pendingChatRenameTitle: '',
     batchSize: clamp(Number(batchSizeInput?.value) || 10, 1, 10),
     durationSec: applySceneDurationValue(durationInput?.value || 10),
     createdAt: now,
@@ -2259,7 +2923,7 @@ async function openProjectSessionFlow() {
 }
 
 function persist() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify({ project, activeBatchIds, paused, outputFolder, currentProjectFilePath, projectDirty, projectRuntime, grokRouter: getGrokRouterSettings(), reviewSettings: getReviewSettings(), imageGeneration: getImageGenerationSettings(), continuityReferences: getContinuityReferenceSettings() }));
+  localStorage.setItem(STORAGE_KEY, JSON.stringify({ project, activeBatchIds, paused, outputFolder, currentProjectFilePath, projectDirty, projectRuntime, grokRouter: getGrokRouterSettings(), reviewSettings: getReviewSettings(), imageGeneration: getImageGenerationSettings(), continuityReferences: getContinuityReferenceSettings(), grokRecovery: getGrokRecoverySettings() }));
 }
 
 async function reconcileSavedAssets() {
@@ -2322,6 +2986,7 @@ function restore() {
     applyImageGenerationSettings(saved.imageGeneration || {});
     applyReviewSettings(saved.reviewSettings || { skipReview: saved.skipReview });
     applyContinuityReferenceSettings(saved.continuityReferences || saved.project?.continuityReferences || {});
+    applyGrokRecoverySettings(saved.grokRecovery || {});
     currentProjectFilePath = saved.currentProjectFilePath || '';
     projectDirty = Boolean(saved.projectDirty);
     projectRuntime = { ...projectRuntime, ...(saved.projectRuntime || {}) };
@@ -2508,13 +3173,15 @@ modelInput?.addEventListener('input', () => {
     markProjectDirty();
     persist();
   }));
-[imageGenerationMethodSelect, imageApiEndpointInput, imageApiModelSelect, imageApiSizeInput, imageApiKeyInput]
+[imageGenerationMethodSelect, imageApiEndpointInput, imageApiModelSelect, imageApiSizeInput, imageApiKeyInput, grokResultRetryLimitInput]
   .filter(Boolean)
   .forEach((control) => control.addEventListener('change', () => {
     markProjectDirty();
     persist();
   }));
 settingsSaveBtn?.addEventListener('click', saveSettingsDialog);
+copyLogBtn?.addEventListener('click', copyPipelineLog);
+
 openHardPromptBtn?.addEventListener('click', async () => {
   const result = await window.videoPlannerAPI?.openHardPromptFile?.().catch((error) => ({ ok: false, error: error.message }));
   setStatus(result?.ok ? 'Đã mở file 2 NHIỆM VỤ BẰNG PROMPT.txt.' : `Không mở được file prompt cứng: ${result?.error || 'unknown'}`, result?.ok ? 'ok' : 'error');
@@ -2543,3 +3210,7 @@ window.videoPlannerAPI?.onProjectMenuCommand?.((command) => {
 window.videoPlannerAPI?.appendAppLog?.({ source: 'renderer', kind: 'info', text: 'Renderer loaded' }).catch(() => null);
 
 restore();
+
+
+setTimeout(ensureImageMotionOnlyModeControl, 0);
+document.addEventListener('DOMContentLoaded', ensureImageMotionOnlyModeControl);

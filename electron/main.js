@@ -1,4 +1,71 @@
 const { execFileSync, spawn } = require('child_process');
+
+/* vidora-hard-console-log-compact-installed */
+const __vidoraRawConsoleLog = console.log.bind(console);
+const __vidoraRawConsoleWarn = console.warn.bind(console);
+const __vidoraRawConsoleError = console.error.bind(console);
+
+function __vidoraCompactConsoleArg(arg) {
+  try {
+    if (typeof arg === 'string') {
+      let out = arg;
+
+      out = out.replace(/"html":"[^"]{200,}"/g, '"html":"[omitted-heavy-html]"');
+      out = out.replace(/"buttonText":"[^"]{500,}"/g, '"buttonText":"[truncated-buttonText]"');
+      out = out.replace(/"sampleText":"[^"]{500,}"/g, '"sampleText":"[truncated-sampleText]"');
+      out = out.replace(/"tailSnippet":"[^"]{500,}"/g, '"tailSnippet":"[truncated-tailSnippet]"');
+      out = out.replace(/"latestAssistantText":"[^"]{500,}"/g, '"latestAssistantText":"[truncated-latestAssistantText]"');
+      out = out.replace(/"node":\{[^\n]{200,}?\}/g, '"node":"[omitted-heavy-dom]"');
+
+      if (out.includes('CDP evaluate fallback: returned safe JSON after Object reference chain error.')) {
+        globalThis.__vidoraLastCdpFallbackConsoleAt = globalThis.__vidoraLastCdpFallbackConsoleAt || 0;
+        const now = Date.now();
+        if (now - globalThis.__vidoraLastCdpFallbackConsoleAt < 15000) return null;
+        globalThis.__vidoraLastCdpFallbackConsoleAt = now;
+      }
+
+      if (out.length > 5000) out = out.slice(0, 5000) + '...<console-truncated>';
+      return out;
+    }
+
+    if (arg && typeof arg === 'object') {
+      const seen = new WeakSet();
+      const json = JSON.stringify(arg, (key, value) => {
+        if (key === 'node' || key === 'html' || key === 'outerHTML' || key === 'innerHTML') return '[omitted-heavy-dom]';
+        if (typeof value === 'string' && value.length > 500) return value.slice(0, 500) + '...<truncated>';
+        if (value && typeof value === 'object') {
+          if (seen.has(value)) return '[circular]';
+          seen.add(value);
+        }
+        return value;
+      });
+      return json.length > 5000 ? json.slice(0, 5000) + '...<console-truncated>' : json;
+    }
+
+    return arg;
+  } catch (_error) {
+    return '[console-arg-compact-failed]';
+  }
+}
+
+console.log = (...args) => {
+  const compacted = args.map(__vidoraCompactConsoleArg).filter((item) => item !== null);
+  if (compacted.length) __vidoraRawConsoleLog(...compacted);
+};
+
+console.warn = (...args) => {
+  const compacted = args.map(__vidoraCompactConsoleArg).filter((item) => item !== null);
+  if (compacted.length) __vidoraRawConsoleWarn(...compacted);
+};
+
+// Quan trọng: đừng ghi VidoraLog error ra stderr nữa, PowerShell sẽ báo NativeCommandError.
+// Error vẫn nằm trong UI log/app log, chỉ chuyển console sang stdout để npm start không bị hiểu là command error.
+console.error = (...args) => {
+  const compacted = args.map(__vidoraCompactConsoleArg).filter((item) => item !== null);
+  if (compacted.length) __vidoraRawConsoleLog(...compacted);
+};
+
+
 const { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, Menu, shell, safeStorage } = require('electron');
 const CDP = require('chrome-remote-interface');
 const ffmpegPath = require('ffmpeg-static');
@@ -18,13 +85,49 @@ const CHROME_DEBUG_PORT = 9223;
 const CHROME_CDP_HOST = `http://127.0.0.1:${CHROME_DEBUG_PORT}`;
 const CHROME_USER_DATA_DIR = path.join(app.getPath('userData'), 'chrome-cdp-profile');
 const CHALLENGE_RECOVERY_LIMIT = 2;
-const GROK_IMAGINE_AGENT_URL = 'https://grok.com/imagine/agent';
+const GROK_IMAGINE_AGENT_URL = 'https://grok.com/imagine';
 const CHAT_TITLE_CHECK_MIN_INTERVAL_MS = 45000;
 const GROK_SEND_RETRY_LIMIT = 2;
+const DEFAULT_GROK_RESULT_RETRY_LIMIT = Math.max(0, Math.min(10, Number(process.env.VIDORA_GROK_RESULT_RETRY_LIMIT || 2) || 2));
+
+function isLikelyChatGptSendButtonText(text) {
+  const raw = String(text || '').trim().toLowerCase();
+  const t = raw
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/đ/g, 'd');
+
+  if (!t) return false;
+
+  // Cấm click nhầm các nút tool/mode.
+  if (
+    t.includes('viet hoac') ||
+    t.includes('hinh sua') ||
+    t.includes('chinh sua') ||
+    t.includes('tao anh') ||
+    t.includes('tra cuu') ||
+    t.includes('voice') ||
+    t.includes('micro')
+  ) {
+    return false;
+  }
+
+  return (
+    t.includes('send') ||
+    t.includes('gui') ||
+    t.includes('submit') ||
+    t.includes('arrow-up') ||
+    t.includes('send-button') ||
+    t.includes('composer-submit')
+  );
+}
+
+const CHATGPT_UI_RECOVERY_SEND_RETRY_LIMIT = 18;
 const challengeRecoveryAttempts = new Map();
 const motionPromptSendLocks = new Map();
+const scenePipelineLocks = new Map();
 let chromeProcess = null;
-let showPipelineLog = false;
+let showPipelineLog = true;
 const chatTitleStableChecks = new Map();
 const chatGptConversationIdentityCache = {
   conversationId: '',
@@ -109,13 +212,18 @@ function sanitizeLogString(value = '') {
     }));
 }
 
-function sanitizeLogValue(value, key = '') {
-  if (Array.isArray(value)) return value.map((item) => sanitizeLogValue(item, key));
+function sanitizeLogValue(value, key = '', depth = 0, seen = new WeakSet()) {
+  if (depth > 5) return '[max-depth]';
+  if (typeof value === 'bigint') return value.toString();
+  if (Array.isArray(value)) return value.slice(0, 40).map((item) => sanitizeLogValue(item, key, depth + 1, seen));
   if (value && typeof value === 'object') {
+    if (seen.has(value)) return '[circular]';
+    seen.add(value);
+    if (Buffer.isBuffer(value)) return `[buffer:${value.length}]`;
     const clean = {};
-    for (const [key, child] of Object.entries(value)) {
-      if (SECRET_KEY_PATTERN.test(key)) continue;
-      clean[key] = sanitizeLogValue(child, key);
+    for (const [childKey, child] of Object.entries(value).slice(0, 80)) {
+      if (SECRET_KEY_PATTERN.test(childKey)) continue;
+      clean[childKey] = sanitizeLogValue(child, childKey, depth + 1, seen);
     }
     return clean;
   }
@@ -125,6 +233,84 @@ function sanitizeLogValue(value, key = '') {
     return clean.length > max ? `${clean.slice(0, max)}...` : clean;
   }
   return value;
+}
+
+function sanitizeIpcValue(value, key = '', depth = 0, seen = new WeakSet()) {
+  if (depth > 8) return '[max-depth]';
+  if (typeof value === 'bigint') return value.toString();
+  if (typeof value === 'function' || typeof value === 'symbol' || typeof value === 'undefined') return null;
+  if (typeof value === 'string') return value.length > 50_000_000 ? `${value.slice(0, 50_000_000)}...` : value;
+  if (!value || typeof value !== 'object') return value;
+  if (seen.has(value)) return '[circular]';
+  seen.add(value);
+  if (Buffer.isBuffer(value)) return `[buffer:${value.length}]`;
+  if (value instanceof Error) {
+    return {
+      name: value.name || 'Error',
+      message: sanitizeLogString(value.message || ''),
+      stack: sanitizeLogString(value.stack || '').slice(0, 4000),
+    };
+  }
+  if (Array.isArray(value)) return value.slice(0, 120).map((item) => sanitizeIpcValue(item, key, depth + 1, seen));
+  const clean = {};
+  for (const [childKey, child] of Object.entries(value).slice(0, 120)) {
+    if (SECRET_KEY_PATTERN.test(childKey)) continue;
+    clean[childKey] = sanitizeIpcValue(child, childKey, depth + 1, seen);
+  }
+  return clean;
+}
+
+function safeIpcHandler(handler) {
+  return async (...args) => {
+    try {
+      return sanitizeIpcValue(await handler(...args));
+    } catch (error) {
+      const message = sanitizeLogString(error?.message || String(error || 'Unknown IPC error'));
+      const safe = new Error(message);
+      safe.name = error?.name || 'Error';
+      throw safe;
+    }
+  };
+}
+
+function sanitizeScenePipelineResult(result = {}) {
+  if (!result || typeof result !== 'object') return result;
+  const safeText = (value, max = 20000) => String(value || '').slice(0, max);
+  const safePaths = (value) => Array.isArray(value) ? value.filter(Boolean).map((item) => safeText(item, 1000)).slice(0, 8) : [];
+  const refs = result.generatedContinuityReferences && typeof result.generatedContinuityReferences === 'object'
+    ? {
+        ok: Boolean(result.generatedContinuityReferences.ok),
+        skipped: Boolean(result.generatedContinuityReferences.skipped),
+        reason: safeText(result.generatedContinuityReferences.reason, 500),
+        sourceSceneId: result.generatedContinuityReferences.sourceSceneId || null,
+        paths: safePaths(result.generatedContinuityReferences.paths),
+      }
+    : null;
+  const router = result.router && typeof result.router === 'object'
+    ? {
+        paused: Boolean(result.router.paused),
+        selectedAccountId: safeText(result.router.selectedAccountId, 200),
+        routingPolicy: safeText(result.router.routingPolicy, 200),
+        pauseReason: safeText(result.router.pauseReason, 500),
+        lastErrorClassification: safeText(result.router.lastErrorClassification, 300),
+      }
+    : null;
+  return {
+    sceneDir: safeText(result.sceneDir, 1000),
+    phase: safeText(result.phase, 100),
+    imagePath: safeText(result.imagePath, 1000),
+    imageDataUrl: safeText(result.imageDataUrl, 8_000_000),
+    imagePromptUsed: safeText(result.imagePromptUsed, 50000),
+    motionPrompt: safeText(result.motionPrompt, 50000),
+    videoPath: safeText(result.videoPath, 1000),
+    videoProvider: safeText(result.videoProvider, 100),
+    videoStatus: safeText(result.videoStatus, 2000),
+    videoError: safeText(result.videoError, 4000),
+    continuityReferencePaths: safePaths(result.continuityReferencePaths),
+    continuityReferenceSourceScene: result.continuityReferenceSourceScene || null,
+    generatedContinuityReferences: refs,
+    router,
+  };
 }
 
 function assertNoProjectSecrets(value, keyPath = []) {
@@ -593,7 +779,7 @@ async function maybeRenameChatGptCurrentConversationUntilTitle(page, title = '',
       source: 'main',
       kind: 'running',
       text: 'chatTitleCheck: using cached conversation identity',
-      details: { sceneId: options.sceneId || '', reason: options.reason || 'rename-skip', path: locationState.path || '', title: sanitizeChatTitleForLog(wanted) },
+      details: { sceneId: ((typeof options !== 'undefined' && options?.sceneId) || (typeof context !== 'undefined' && context?.sceneId) || ''), reason: options.reason || 'rename-skip', path: locationState.path || '', title: sanitizeChatTitleForLog(wanted) },
     });
     return { ok: true, skipped: true, cached: true, title: wanted, path: locationState.path };
   }
@@ -602,17 +788,17 @@ async function maybeRenameChatGptCurrentConversationUntilTitle(page, title = '',
       source: 'main',
       kind: 'running',
       text: `chatTitleCheck: skipped reason=rate-limit-${options.reason || 'rename'}`,
-      details: { sceneId: options.sceneId || '', path: locationState?.path || '', title: sanitizeChatTitleForLog(wanted), lastCheckAgoMs: Date.now() - cached.lastCheckAt },
+      details: { sceneId: ((typeof options !== 'undefined' && options?.sceneId) || (typeof context !== 'undefined' && context?.sceneId) || ''), path: locationState?.path || '', title: sanitizeChatTitleForLog(wanted), lastCheckAgoMs: Date.now() - cached.lastCheckAt },
     });
     return { ok: true, skipped: true, rateLimited: true, title: wanted, path: locationState?.path || '' };
   }
-  if (options.force) await appendAppLog(null, { source: 'main', kind: 'running', text: `chatTitleCheck: forced reason=${options.reason || 'rename'}`, details: { sceneId: options.sceneId || '', title: sanitizeChatTitleForLog(wanted) } });
+  if (options.force) await appendAppLog(null, { source: 'main', kind: 'running', text: `chatTitleCheck: forced reason=${options.reason || 'rename'}`, details: { sceneId: ((typeof options !== 'undefined' && options?.sceneId) || (typeof context !== 'undefined' && context?.sceneId) || ''), title: sanitizeChatTitleForLog(wanted) } });
   cached.lastCheckAt = Date.now();
   const result = await renameChatGptCurrentConversationUntilTitle(page, wanted, options);
   if (result?.ok) {
     const verifiedLocation = await getChatGptLocationState(page);
     updateChatGptConversationIdentity(verifiedLocation, wanted);
-    await appendAppLog(null, { source: 'main', kind: 'ok', text: `chatTitleCheck: verified title=${sanitizeChatTitleForLog(wanted)}`, details: { sceneId: options.sceneId || '', reason: options.reason || 'rename', path: verifiedLocation?.path || '' } });
+    await appendAppLog(null, { source: 'main', kind: 'ok', text: `chatTitleCheck: verified title=${sanitizeChatTitleForLog(wanted)}`, details: { sceneId: ((typeof options !== 'undefined' && options?.sceneId) || (typeof context !== 'undefined' && context?.sceneId) || ''), reason: options.reason || 'rename', path: verifiedLocation?.path || '' } });
   }
   return result;
 }
@@ -733,6 +919,58 @@ async function resumeFromRouterCheckpoint() {
   return { ok: true, status: getGrokRouterStatus(), checkpoint: grokRouterState.checkpoint };
 }
 
+
+function vidoraCompactLogDetails(value, depth = 0) {
+  if (value == null) return value;
+
+  if (typeof value === 'string') {
+    return value.length > 700 ? value.slice(0, 700) + '...<truncated>' : value;
+  }
+
+  if (typeof value !== 'object') return value;
+
+  if (depth > 4) return '[depth-truncated]';
+
+  if (Array.isArray(value)) {
+    return value.slice(0, 8).map((item) => vidoraCompactLogDetails(item, depth + 1));
+  }
+
+  const out = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (
+      key === 'node' ||
+      key === 'html' ||
+      key === 'outerHTML' ||
+      key === 'innerHTML' ||
+      key === 'svg' ||
+      key === 'children' ||
+      key === 'parentElement'
+    ) {
+      out[key] = '[omitted-heavy-dom]';
+      continue;
+    }
+
+    if (key === 'buttonText' || key === 'tailSnippet' || key === 'sampleText' || key === 'latestAssistantText') {
+      out[key] = String(item || '').slice(0, 500);
+      continue;
+    }
+
+    out[key] = vidoraCompactLogDetails(item, depth + 1);
+  }
+
+  return out;
+}
+
+function vidoraShouldThrottleLog(key, intervalMs = 12000) {
+  globalThis.__vidoraLogThrottle = globalThis.__vidoraLogThrottle || {};
+  const now = Date.now();
+  const last = globalThis.__vidoraLogThrottle[key] || 0;
+  if (now - last < intervalMs) return true;
+  globalThis.__vidoraLogThrottle[key] = now;
+  return false;
+}
+
+
 async function appendAppLog(_event, entry = {}) {
   const record = {
     ts: new Date().toISOString(),
@@ -747,13 +985,30 @@ async function appendAppLog(_event, entry = {}) {
   else console.log(terminalLine);
   await fs.mkdir(path.dirname(APP_LOG_FILE), { recursive: true }).catch(() => null);
   await fs.appendFile(APP_LOG_FILE, `${line}\n`, 'utf8').catch(() => null);
+  if (record.source !== 'renderer') {
+    BrowserWindow.getAllWindows().forEach((win) => {
+      if (win.isDestroyed()) return;
+      try {
+        win.webContents.send('pipeline:log-entry', sanitizeIpcValue(record));
+      } catch (error) {
+        console.error(`[VidoraLog][main][error] pipeline log IPC skipped: ${error.message}`);
+      }
+    });
+  }
   return { ok: true, path: APP_LOG_FILE };
 }
 
 async function notifyRenderer(type, message, details = null) {
-  await appendAppLog(null, { source: 'main', kind: 'notice', text: message, details: { type, details } });
+  const safeDetails = details == null ? null : sanitizeLogValue(details);
+  await appendAppLog(null, { source: 'main', kind: 'notice', text: message, details: { type, details: safeDetails } });
   BrowserWindow.getAllWindows().forEach((win) => {
-    if (!win.isDestroyed()) win.webContents.send('pipeline:notice', { type, message, details, ts: new Date().toISOString() });
+    if (!win.isDestroyed()) {
+      try {
+        win.webContents.send('pipeline:notice', sanitizeIpcValue({ type, message, details: safeDetails, ts: new Date().toISOString() }));
+      } catch (error) {
+        appendAppLog(null, { source: 'main', kind: 'error', text: `notifyRenderer IPC skipped: ${error.message}` }).catch(() => null);
+      }
+    }
   });
 }
 
@@ -1805,6 +2060,10 @@ async function sendPromptViaWeb(_event, options) {
     throw new Error(loginRequiredMessage(normalizedProvider, loginState.reason || loginState.url || ''));
   }
 
+  if (!String(chatContextTitle || '').trim() && String(pendingChatRenameTitle || globalThis.__vidoraPendingChatRenameTitleSafe || '').trim()) {
+    await assertChatGptNotExistingConversation(page, sceneId);
+  }
+
   const beforeCount = await evaluateOnCdpPage(page, `(${countAssistantMessagesScript.toString()})()`);
   const sent = await sendPromptViaCdpInput(page, prompt);
   if (!sent.ok) {
@@ -1821,7 +2080,80 @@ async function sendPromptViaWeb(_event, options) {
   return { responseText, promptPath, responsePath, cdp: true };
 }
 
-async function runScenePipeline(_event, options) {
+async function runScenePipeline(_event, options = {}) {
+  const key = `${path.resolve(String(options.outputFolder || ''))}::scene-${((typeof options !== 'undefined' && options?.sceneId) || (typeof context !== 'undefined' && context?.sceneId) || '') ?? ''}`;
+  const existing = scenePipelineLocks.get(key);
+  if (existing) {
+    await appendAppLog(null, {
+      source: 'main',
+      kind: 'running',
+      text: `Scene ${((typeof options !== 'undefined' && options?.sceneId) || (typeof context !== 'undefined' && context?.sceneId) || '')}: duplicate pipeline call joined existing run instead of opening a new chat.`,
+      details: { key, startedAt: existing.startedAt },
+    });
+    return existing.promise;
+  }
+  const promise = runScenePipelineLocked(_event, options).then(sanitizeScenePipelineResult);
+  scenePipelineLocks.set(key, { promise, startedAt: new Date().toISOString() });
+  try {
+    return await promise;
+  } finally {
+    if (scenePipelineLocks.get(key)?.promise === promise) scenePipelineLocks.delete(key);
+  }
+}
+
+async function findSceneKeyframePathSafe(sceneDir, sceneId) {
+  const candidates = [
+    path.join(sceneDir, `scene_${String(sceneId).padStart(3, '0')}_keyframe.png`),
+    path.join(sceneDir, 'scene_keyframe.png'),
+    path.join(sceneDir, 'keyframe.png'),
+  ];
+
+  for (const candidate of candidates) {
+    try {
+      await fs.access(candidate);
+      return candidate;
+    } catch (_error) {}
+  }
+
+  return '';
+}
+
+async function buildImageMotionOnlyPipelineResult({
+  sceneDir,
+  sceneId,
+  imagePath,
+  motionPrompt,
+  finalImagePrompt = '',
+  continuityReferenceState = null,
+}) {
+  return {
+    sceneDir,
+    phase: 'motion_prompt',
+    imageMotionOnlyMode: true,
+    skipVideoGeneration: true,
+    imagePath,
+    imageDataUrl: imagePath ? await imageFileToDataUrl(imagePath).catch(() => '') : '',
+    imagePromptUsed: finalImagePrompt || '',
+    motionPrompt,
+    motionPromptPath: path.join(sceneDir, 'motion_prompt.txt'),
+    videoPath: '',
+    videoProvider: 'none',
+    videoStatus: 'skipped-image-motion-only',
+    videoError: '',
+    continuityReferencePaths: continuityReferenceState?.paths || [],
+    continuityReferenceSourceScene: continuityReferenceState?.sourceSceneId || null,
+    generatedContinuityReferences: {
+      ok: false,
+      skipped: true,
+      reason: 'image-motion-only-mode',
+      sourceSceneId: sceneId,
+      paths: [],
+    },
+    router: null,
+  };
+}
+
+async function runScenePipelineLocked(_event, options) {
   const {
     projectName = 'project',
     outputFolder,
@@ -1835,7 +2167,14 @@ async function runScenePipeline(_event, options) {
   } = options || {};
   let motionPrompt = options.motionPrompt || '';
 
-  if (!outputFolder) throw new Error('Chưa chọn folder output.');
+  
+  const imageMotionOnlyMode = Boolean(
+    options.imageMotionOnlyMode ||
+    options.skipVideoGeneration ||
+    options.motionOnlyMode ||
+    options.noVideoMode
+  );
+if (!outputFolder) throw new Error('Chưa chọn folder output.');
   if (!sceneText?.trim() && !imagePrompt?.trim()) throw new Error('Thiếu scene để tạo ảnh.');
 
   const projectDir = outputFolder;
@@ -1851,6 +2190,43 @@ async function runScenePipeline(_event, options) {
     motionPrompt = await fs.readFile(existingMotionPromptPath, 'utf8').then((value) => value.trim()).catch(() => '');
     if (motionPrompt) {
       await appendAppLog(null, { source: 'main', kind: 'ok', text: `Scene ${sceneId}: đã có motion_prompt.txt, bỏ qua ChatGPT NV2 và gửi thẳng Grok.` });
+
+    if (imageMotionOnlyMode) {
+      const imageMotionOnlySafeImagePathCandidates = [
+        path.join(sceneDir, `scene_${String(sceneId).padStart(3, '0')}_keyframe.png`),
+        path.join(sceneDir, 'scene_keyframe.png'),
+        path.join(sceneDir, 'keyframe.png'),
+      ];
+
+      let imageMotionOnlySafeImagePath = '';
+      for (const candidate of imageMotionOnlySafeImagePathCandidates) {
+        try {
+          await fs.access(candidate);
+          imageMotionOnlySafeImagePath = candidate;
+          break;
+        } catch (_error) {}
+      }
+
+      await appendAppLog(null, {
+        source: 'main',
+        kind: 'ok',
+        text: `Scene ${sceneId}: Image + motion only: đã có sẵn motion_prompt.txt; bỏ qua Grok/Veo/video.`,
+        details: {
+          imagePath: imageMotionOnlySafeImagePath ? path.basename(imageMotionOnlySafeImagePath) : '',
+          motionPromptRef: 'motion_prompt.txt',
+          reason: 'existing motion_prompt.txt; skipping video provider',
+        },
+      }).catch(() => null);
+
+      return await buildImageMotionOnlyPipelineResult({
+        sceneDir,
+        sceneId,
+        imagePath: imageMotionOnlySafeImagePath,
+        motionPrompt,
+        finalImagePrompt: '',
+        continuityReferenceState: null,
+      });
+    }
     }
   }
   if (motionPrompt) await fs.writeFile(existingMotionPromptPath, motionPrompt, 'utf8');
@@ -1868,10 +2244,31 @@ async function runScenePipeline(_event, options) {
     await setAccountRouterEnabled(null, requestedRouterEnabled);
   }
   if (routerActive && videoAccount) await selectGrokAccount(null, videoAccount).catch(() => null);
-  await appendAppLog(null, {
-    source: 'main',
-    kind: 'info',
-    text: `Scene ${sceneId}: video router ${videoProvider}/${videoAccount || 'default'} (${routingPolicy})`,
+  if (imageMotionOnlyMode && String(motionPrompt || '').trim()) {
+    const imageMotionOnlySafeImagePath = await findSceneKeyframePathSafe(sceneDir, sceneId);
+
+    await appendAppLog(null, {
+      source: 'main',
+      kind: 'ok',
+      text: `Scene ${sceneId}: Image + motion only: đã có motion prompt, bỏ qua toàn bộ Grok/Veo/video.`,
+      details: {
+        imagePath: imageMotionOnlySafeImagePath ? path.basename(imageMotionOnlySafeImagePath) : '',
+        motionPromptRef: 'motion_prompt.txt',
+        reason: 'final guard before video provider in image-motion-only mode',
+      },
+    }).catch(() => null);
+
+    return await buildImageMotionOnlyPipelineResult({
+      sceneDir,
+      sceneId,
+      imagePath: imageMotionOnlySafeImagePath,
+      motionPrompt,
+      finalImagePrompt: '',
+      continuityReferenceState: null,
+    });
+  }
+
+  await appendAppLog(null, { source: 'main', kind: 'info', text: `Scene ${sceneId}: video router ${videoProvider}/${videoAccount || 'default'} (${routingPolicy})`,
     details: { videoProvider, videoAccount: maskRouterText(videoAccount), routingPolicy, accountRouterEnabled: routerActive, routerSandbox: 'dev_sandbox_grok_account_router' },
   });
   let imagePath = options.imagePath || '';
@@ -1901,7 +2298,7 @@ async function runScenePipeline(_event, options) {
     }
     const chatGptResult = imageProvider?.method === 'api'
       ? await generateImageWithImageApi({ imagePrompt: finalImagePrompt, sceneDir, sceneId, config: imageProvider })
-      : await generateImageAndMotionWithChatGPT({ imagePrompt: finalImagePrompt, sceneDir, sceneId, chatContextTitle, pendingChatRenameTitle: '', referenceImagePaths });
+      : await generateImageAndMotionWithChatGPT({ imagePrompt: finalImagePrompt, sceneDir, sceneId, chatContextTitle, pendingChatRenameTitle, referenceImagePaths });
     imagePath = chatGptResult.imagePath;
     console.log(`[PIPELINE][Scene ${sceneId}] SAVED image: ${imagePath}`);
     await appendAppLog(null, { source: 'main', kind: 'ok', text: `PIPELINE Scene ${sceneId}: đã lưu ảnh keyframe: ${path.basename(imagePath || '')}` });
@@ -1910,7 +2307,39 @@ async function runScenePipeline(_event, options) {
     }
     if (motionPrompt) {
       await fs.writeFile(path.join(sceneDir, 'motion_prompt.txt'), motionPrompt, 'utf8');
-    }
+    
+
+  if (imageMotionOnlyMode) {
+    await appendAppLog(null, {
+      source: 'main',
+      kind: 'ok',
+      text: `Scene ${sceneId}: Image + motion only mode: đã lưu keyframe và motion_prompt.txt, bỏ qua Grok/Veo/video.`,
+      details: {
+        imagePath: imagePath ? path.basename(imagePath) : '',
+        motionPromptRef: 'motion_prompt.txt',
+      },
+    }).catch(() => null);
+
+    return {
+      sceneDir,
+      phase: 'motion_prompt',
+      imageMotionOnlyMode: true,
+      imagePath,
+      imageDataUrl: imagePath ? await imageFileToDataUrl(imagePath).catch(() => '') : '',
+      imagePromptUsed: finalImagePrompt,
+      motionPrompt,
+      motionPromptPath: path.join(sceneDir, 'motion_prompt.txt'),
+      videoPath: '',
+      videoProvider: 'none',
+      videoStatus: 'skipped-image-motion-only',
+      videoError: '',
+      continuityReferencePaths: continuityReferenceState?.paths || [],
+      continuityReferenceSourceScene: continuityReferenceState?.sourceSceneId || null,
+      generatedContinuityReferences: { ok: false, skipped: true, reason: 'image-motion-only-mode', sourceSceneId: sceneId, paths: [] },
+      router: null,
+    };
+  }
+}
   }
 
   if (!motionPrompt?.trim() && !options.forceRegenerateMotionPrompt && await pathExists(existingMotionPromptPath)) {
@@ -2009,12 +2438,69 @@ async function runScenePipeline(_event, options) {
     videoProvider,
     videoStatus: videoResult?.status || (videoError ? `error: ${maskRouterText(videoError.split('\n')[0])}` : 'pending-selector-or-manual-download'),
     videoError: maskRouterText(videoError),
-    continuityReferencePaths: continuityReferenceState?.paths || [],
+    
+    motionPrompt,
+    imageMotionOnlyMode: false,
+continuityReferencePaths: continuityReferenceState?.paths || [],
     continuityReferenceSourceScene: continuityReferenceState?.sourceSceneId || null,
     generatedContinuityReferences,
     router: routerActive ? getGrokRouterStatus() : null,
   };
 }
+
+
+async function openFreshChatGptRootPage(reason = 'new-chat') {
+  // Use the project's existing CDP recovery/open helper.
+  // Do NOT call CDP.New directly because 127.0.0.1:9222 may be temporarily down/restarting.
+  const page = await getCdpPage('chatgpt', true, { bringToFront: true, recover: true });
+
+  await appendAppLog(null, {
+    source: 'main',
+    kind: 'running',
+    text: `ChatGPT new-chat mode: using recovered ChatGPT page for ${reason}, navigating to root before prompt.`,
+  });
+
+  await page.Page.bringToFront().catch(() => null);
+
+  // First try ChatGPT's own New Chat button if available.
+  const clickedNewChat = await evaluateOnCdpPage(
+    page,
+    `(${clickChatGptStartNewChatScript.toString()})()`
+  ).catch((error) => ({ ok: false, error: error.message }));
+
+  await appendAppLog(null, {
+    source: 'main',
+    kind: clickedNewChat?.ok ? 'ok' : 'running',
+    text: `ChatGPT new-chat mode: click New Chat result: ${clickedNewChat?.ok ? 'ok' : clickedNewChat?.error || 'not-clicked'}`,
+    details: clickedNewChat,
+  });
+
+  // Then force root URL. This prevents sending into an existing /c/... conversation.
+  await page.Page.navigate({ url: 'https://chatgpt.com/' });
+  await waitForCdpLoad(page).catch(() => null);
+  await sleep(2500);
+
+  const location = await evaluateOnCdpPage(page, 'location.href').catch(() => '');
+  await appendAppLog(null, {
+    source: 'main',
+    kind: /\/c\//i.test(String(location)) ? 'error' : 'ok',
+    text: `ChatGPT new-chat mode: ready location=${location}`,
+    details: { reason, location },
+  });
+
+  return page;
+}
+
+async function assertChatGptNotExistingConversation(client, sceneId = '') {
+  const location = await evaluateOnCdpPage(client, 'location.href').catch(() => '');
+  if (/chatgpt\.com\/c\//i.test(String(location))) {
+    throw new Error(
+      `Đã chọn tạo chat mới nhưng ChatGPT vẫn đang ở conversation cũ: ${location}. Đã chặn gửi prompt/rename để không phá đoạn chat hiện tại.`
+    );
+  }
+  return location;
+}
+
 
 async function generateImageWithImageApi({ imagePrompt, sceneDir, sceneId, config = {} }) {
   const endpoint = String(config.endpoint || 'http://localhost:20128/v1/images/generations').trim();
@@ -2049,8 +2535,85 @@ async function generateImageWithImageApi({ imagePrompt, sceneDir, sceneId, confi
   return { imagePath, motionPrompt: '' };
 }
 
+
+function isChatGptPolicyRefusalText(text = '') {
+  const t = String(text || '').toLowerCase();
+  return (
+    t.includes('vi phạm các quy định') ||
+    t.includes('quy định của chúng tôi về bạo lực') ||
+    t.includes('có thể vi phạm') ||
+    t.includes('i can’t help create') ||
+    t.includes('i can’t assist with') ||
+    t.includes('policy') && t.includes('violence')
+  );
+}
+
 async function generateImageAndMotionWithChatGPT({ imagePrompt, sceneDir, sceneId, chatContextTitle = '', pendingChatRenameTitle = '', referenceImagePaths = [] }) {
-  const page = await getCdpPage('chatgpt', true);
+
+  let effectiveChatContextTitle = String(chatContextTitle || '').trim();
+  let effectivePendingChatRenameTitle = String(pendingChatRenameTitle || globalThis.__vidoraPendingChatRenameTitleSafe || '').trim();
+  const wantsFreshNewChat = !String(chatContextTitle || '').trim() && String(pendingChatRenameTitle || globalThis.__vidoraPendingChatRenameTitleSafe || '').trim();
+
+  const projectFreshChatKey = String(
+    (
+      typeof options !== 'undefined' &&
+      options &&
+      (
+        options.projectName ||
+        options.projectTitle ||
+        options.project?.name
+      )
+    ) ||
+    (
+      typeof projectName !== 'undefined'
+        ? projectName
+        : ''
+    ) ||
+    pendingChatRenameTitle ||
+    'default-project'
+  ).trim();
+  // fresh-chat-key-safe-options
+  // fresh-chat-safe-key-no-options-undefined
+  const previousFreshChatKey = globalThis.__vidoraFreshChatCreatedForProject || '';
+
+  const useFreshNewChat = Boolean(wantsFreshNewChat && previousFreshChatKey !== projectFreshChatKey);
+
+  if (useFreshNewChat) {
+    globalThis.__vidoraFreshChatCreatedForProject = projectFreshChatKey;
+  }
+
+  // Giữ flag này true khi user chọn New, kể cả scene sau, để recovery không đụng sidebar lịch sử.
+  globalThis.__vidoraChatGptNewChatMode = Boolean(wantsFreshNewChat);
+
+  if (wantsFreshNewChat && !useFreshNewChat) {
+    await appendAppLog(null, {
+      source: 'main',
+      kind: 'running',
+      text: `ChatGPT new-chat mode: project already has a fresh chat; reuse current ChatGPT tab for scene ${sceneId}.`,
+      details: {
+        sceneId,
+        projectFreshChatKey,
+        previousFreshChatKey,
+      },
+    }).catch(() => null);
+  }
+if (useFreshNewChat) {
+    await appendAppLog(null, {
+      source: 'main',
+      kind: 'running',
+      text: `ChatGPT new-chat mode: safe rename enabled. targetRename="${effectivePendingChatRenameTitle}"`,
+    });
+    globalThis.__vidoraPendingChatRenameTitleSafe = String(effectivePendingChatRenameTitle || globalThis.__vidoraPendingChatRenameTitleSafe || '').trim();
+    // keep effectivePendingChatRenameTitle for safe rename later
+pendingChatRenameTitle = '';
+  }
+const page = useFreshNewChat
+    ? await openFreshChatGptRootPage(`scene-${sceneId}-image-new-chat`)
+    : await getCdpPage('chatgpt', true);
+
+  if (useFreshNewChat) {
+    await assertChatGptNotExistingConversation(page, sceneId);
+  }
   const loginState = await evaluateOnCdpPage(page, `(${detectLoginScript.toString()})('chatgpt')`);
   if (!loginState.loggedIn) {
     const autoLogin = await tryAutoLoginWithStoredAccount(page, 'chatgpt', { reason: 'image-pipeline', sceneId }).catch((error) => ({ ok: false, error: error.message }));
@@ -2064,24 +2627,208 @@ async function generateImageAndMotionWithChatGPT({ imagePrompt, sceneDir, sceneI
       throw new Error(loginRequiredMessage('chatgpt', loginState.reason || loginState.url || autoLogin?.finalReason || ''));
     }
   }
-  if (pendingChatRenameTitle?.trim() && !chatContextTitle?.trim()) {
+  const initialActiveGeneration = await evaluateOnCdpPage(page, `(${detectChatGptActiveGenerationScriptStrict.toString()})()`).catch((error) => ({ ok: false, generating: false, error: error.message }));
+  const initialImageState = await evaluateOnCdpPage(page, `(${readChatGptImageStateScript.toString()})()`).catch((error) => ({ ok: false, generating: false, error: error.message }));
+  if (useFreshNewChat) {
+    await appendAppLog(null, {
+      source: 'main',
+      kind: 'running',
+      text: 'ChatGPT new-chat mode: skip adopt-active-generation check; will send prompt into root/new chat.',
+      details: {
+        activeGeneration: initialActiveGeneration,
+        imageState: sanitizeChatGptImageSnapshot(initialImageState),
+      },
+    });
+  }
+  
+  let vidoraSkipAdoptActiveGeneration = false;
+
+// VIDORA_DISABLE_ADOPT_ACTIVE_GENERATION_ON_ROOT
+  {
+    const adoptPathCheck = await evaluateOnCdpPage(page, `(() => ({
+      href: location.href,
+      path: location.pathname,
+      title: document.title,
+      hasConversationUrl: location.pathname.includes('/c/'),
+      hasStopButton: !![...document.querySelectorAll('button,[role="button"]')]
+        .find(b => /dừng|stop/i.test(String(b.innerText || b.textContent || b.getAttribute('aria-label') || ''))),
+      hasGeneratedImageCard: !![...document.querySelectorAll('img, canvas, [style*="background-image"]')]
+        .find(el => {
+          const r = el.getBoundingClientRect();
+          return r.width > 220 && r.height > 140 && r.top > 80 && r.bottom < innerHeight + 300;
+        }),
+      composerText: String(
+        document.querySelector('#prompt-textarea, textarea, [contenteditable="true"]')?.innerText ||
+        document.querySelector('#prompt-textarea, textarea, [contenteditable="true"]')?.value ||
+        ''
+      ).trim().slice(0, 200),
+    }))()`).catch((error) => ({ ok: false, error: error.message }));
+
+    const rootNoRealGeneration =
+      adoptPathCheck &&
+      adoptPathCheck.path === '/' &&
+      !adoptPathCheck.hasConversationUrl &&
+      !adoptPathCheck.hasStopButton &&
+      !adoptPathCheck.hasGeneratedImageCard;
+
+    if (rootNoRealGeneration) {
+      await appendAppLog(null, {
+        source: 'main',
+        kind: 'running',
+        text: 'ChatGPT adopt active generation bị chặn: đang ở root/home, không phải đoạn chat đang tạo ảnh.',
+        details: { adoptPathCheck },
+      }).catch(() => null);
+
+      // Chặn đúng biến mà if adopt phía dưới đang dùng.
+      vidoraSkipAdoptActiveGeneration = true;
+      try { if (initialActiveGeneration) initialActiveGeneration.generating = false; } catch {}
+      try { if (initialImageState) initialImageState.generating = false; } catch {}
+      try { if (activeGeneration) activeGeneration.generating = false; } catch {}
+      try { if (imageState) imageState.generating = false; } catch {}
+    }
+  }
+
+
+
+// VIDORA_HARD_SKIP_THINKING_TEXT_ADOPT_SCENE_GT1
+  {
+    const sid =
+      Number((typeof options !== 'undefined' && options?.sceneId) || (typeof context !== 'undefined' && context?.sceneId) || 0);
+
+    const activeMode = String(initialActiveGeneration?.mode || '');
+    const tail = String(initialActiveGeneration?.tailSnippet || '');
+    const stopReal =
+      initialImageState?.stopButtonVisible === true ||
+      /dừng|stop/i.test(String(initialActiveGeneration?.stopText || ''));
+
+    const oldTextThinking =
+      sid > 1 &&
+      initialActiveGeneration?.generating === true &&
+      activeMode.includes('thinking') &&
+      !stopReal;
+
+    if (oldTextThinking) {
+      vidoraSkipAdoptActiveGeneration = true;
+
+      await appendAppLog(null, {
+        source: 'main',
+        kind: 'running',
+        text: 'ChatGPT adopt active generation HARD-SKIP: scene sau đang thấy thinking-text cũ, không phải NV1 ảnh mới.',
+        details: {
+          sceneId: sid,
+          activeMode,
+          stopReal,
+          tailSnippet: tail.slice(0, 800),
+          initialImageState: sanitizeChatGptImageSnapshot(initialImageState),
+        },
+      }).catch(() => null);
+
+      try { if (initialActiveGeneration) initialActiveGeneration.generating = false; } catch {}
+      try { if (initialImageState) initialImageState.generating = false; } catch {}
+      try { if (initialImageState) initialImageState.preparingImage = false; } catch {}
+      try { if (initialImageState) initialImageState.stopButtonVisible = false; } catch {}
+    }
+  }
+
+// VIDORA_BLOCK_TEXT_THINKING_ADOPT_BETWEEN_SCENES
+  {
+    const activeMode = String(initialActiveGeneration?.mode || '');
+    const tail = String(initialActiveGeneration?.tailSnippet || '');
+    const imageReallyGenerating =
+      initialImageState?.generating === true ||
+      initialImageState?.preparingImage === true ||
+      initialImageState?.stopButtonVisible === true;
+
+    const textThinkingOnly =
+      initialActiveGeneration?.generating === true &&
+      activeMode.includes('thinking') &&
+      !imageReallyGenerating;
+
+    const looksLikeOldMotionPrompt =
+      /negative prompt|no music|dòng 1|dòng 2|motion prompt|technical specifications|khung hình trong ảnh/i.test(tail);
+
+    if (textThinkingOnly || looksLikeOldMotionPrompt) {
+      await appendAppLog(null, {
+        source: 'main',
+        kind: 'running',
+        text: 'ChatGPT adopt active generation bị chặn: chỉ là text/thinking cũ, không phải tạo ảnh scene hiện tại.',
+        details: {
+          activeMode,
+          tailSnippet: tail.slice(0, 600),
+          imageReallyGenerating,
+          textThinkingOnly,
+          looksLikeOldMotionPrompt,
+          initialImageState: sanitizeChatGptImageSnapshot(initialImageState),
+        },
+      }).catch(() => null);
+
+      vidoraSkipAdoptActiveGeneration = true;
+      try { if (initialActiveGeneration) initialActiveGeneration.generating = false; } catch {}
+      try { if (initialImageState) initialImageState.generating = false; } catch {}
+      try { if (initialImageState) initialImageState.preparingImage = false; } catch {}
+      try { if (initialImageState) initialImageState.stopButtonVisible = false; } catch {}
+    }
+  }
+
+if (!vidoraSkipAdoptActiveGeneration && !useFreshNewChat && (initialActiveGeneration?.generating || isChatGptActivelyGenerating(initialImageState))) {
+    const imagePath = path.join(sceneDir, `scene_${String(sceneId).padStart(3, '0')}_keyframe.png`);
+    const beforeImages = await evaluateOnCdpPage(page, `(${collectGeneratedImageUrlsScript.toString()})()`).catch(() => ({ urls: [] }));
+    const imageNetworkCapture = startChatGptImageNetworkCapture(page, { sceneId });
+    await appendAppLog(null, {
+      source: 'main',
+      kind: 'running',
+      text: `Scene ${sceneId}: ChatGPT dang generate; adopt active generation instead of opening root/new chat.`,
+      details: {
+        activeGeneration: initialActiveGeneration,
+        imageState: sanitizeChatGptImageSnapshot(initialImageState),
+        existingUrlCount: beforeImages?.urls?.length || 0,
+      },
+    });
+    try {
+      await saveChatGPTGeneratedImageAsset(page, {
+        existingUrls: beforeImages?.urls || [],
+        minAssistantRootIndex: 0,
+        prompt: imagePrompt,
+        sceneDir,
+        sceneId,
+        outputPath: imagePath,
+        networkCapture: imageNetworkCapture,
+      });
+    } finally {
+      imageNetworkCapture.stop();
+    }
+    const renameTitle = effectivePendingChatRenameTitle || effectiveChatContextTitle;
+    if (renameTitle?.trim()) await maybeRenameChatGptCurrentConversationUntilTitle(page, renameTitle.trim(), { sceneId, timeoutMs: 15000, waitForRecent: false, reason: 'adopt-active-generation' }).catch(() => null);
+    await page.close();
+    return { imagePath, motionPrompt: '' };
+  }
+  if (effectivePendingChatRenameTitle && !effectiveChatContextTitle) {
     await invalidateChatGptConversationIdentity('new-chat-requested');
     await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: pending chat mới, mở ChatGPT root trước khi gửi prompt. targetRename="${pendingChatRenameTitle}"` });
     await page.Page.navigate({ url: 'https://chatgpt.com/' }).catch((error) => appendAppLog(null, { source: 'main', kind: 'error', text: `Scene ${sceneId}: navigate ChatGPT root failed: ${error.message}` }));
     await waitForCdpLoad(page).catch(() => null);
     await sleep(1600);
   }
-  if (chatContextTitle?.trim()) {
-    const selectedChat = await maybeSelectChatGptConversationByTitle(page, chatContextTitle.trim(), { sceneId, force: Boolean(pendingChatRenameTitle?.trim()), reason: pendingChatRenameTitle?.trim() ? 'explicit-rename-select' : 'initial-conversation-setup' });
+  if (effectiveChatContextTitle) {
+    const selectedChat = await maybeSelectChatGptConversationByTitle(page, effectiveChatContextTitle, { sceneId, force: Boolean(effectivePendingChatRenameTitle), reason: effectivePendingChatRenameTitle ? 'explicit-rename-select' : 'initial-conversation-setup' });
     await appendAppLog(null, { source: 'main', kind: selectedChat?.ok ? 'ok' : 'error', text: `ChatGPT context: ${selectedChat?.ok ? `đã mở chat "${chatContextTitle}"` : selectedChat?.error || 'không tìm thấy chat'}`, details: selectedChat });
     if (!selectedChat?.ok) throw new Error(selectedChat?.error || `Không tìm thấy cuộc trò chuyện ChatGPT: ${chatContextTitle}`);
-    if (pendingChatRenameTitle?.trim()) {
+    if (effectivePendingChatRenameTitle) {
       await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: Option 2 đã mở chat cũ, rename ngay thành "${pendingChatRenameTitle.trim()}" trước khi gửi prompt.` });
-      const prePromptRename = await maybeRenameChatGptCurrentConversationUntilTitle(page, pendingChatRenameTitle.trim(), { sceneId, timeoutMs: 60000, waitForRecent: true, force: true, reason: 'explicit-pre-prompt-rename' }).catch((error) => ({ ok: false, error: error.message }));
+      const prePromptRename = await maybeRenameChatGptCurrentConversationUntilTitle(page, effectivePendingChatRenameTitle, { sceneId, timeoutMs: 60000, waitForRecent: true, force: true, reason: 'explicit-pre-prompt-rename' }).catch((error) => ({ ok: false, error: error.message }));
       await appendAppLog(null, { source: 'main', kind: prePromptRename?.ok ? 'ok' : 'error', text: `Scene ${sceneId}: Option 2 pre-prompt rename ${prePromptRename?.ok ? 'ok' : prePromptRename?.error || 'failed/timeout'}`, details: prePromptRename });
     }
   } else {
     await appendAppLog(null, { source: 'main', kind: 'running', text: `PIPELINE Scene ${sceneId}: không có tên đoạn chat, dùng ChatGPT tab hiện tại.` });
+  }
+
+  const responseChoiceRecovery = await recoverChatGptResponseChoiceChat(page, {
+    sceneId,
+    targetTitle: effectivePendingChatRenameTitle || effectiveChatContextTitle,
+  });
+  if (responseChoiceRecovery?.recovered) {
+    effectivePendingChatRenameTitle = responseChoiceRecovery.targetTitle || effectivePendingChatRenameTitle || effectiveChatContextTitle;
+    effectiveChatContextTitle = '';
   }
 
   const beforeImages = await evaluateOnCdpPage(page, `(${collectGeneratedImageUrlsScript.toString()})()`);
@@ -2124,16 +2871,66 @@ async function generateImageAndMotionWithChatGPT({ imagePrompt, sceneDir, sceneI
   const imageNetworkCapture = startChatGptImageNetworkCapture(page, { sceneId });
   try {
     const sentImage = await sendPromptViaCdpInput(page, imageInstruction);
-    await appendAppLog(null, { source: 'main', kind: sentImage?.ok ? 'ok' : 'error', text: `Scene ${sceneId}: ChatGPT send image prompt ${sentImage?.ok ? 'ok' : sentImage?.error || 'failed'}`, details: sentImage });
+    
+// HOOK_INPUT_GATE_AFTER_NV1_SEND_BEFORE_RENAME_REAL
+  await vidoraChatGptInputGate((typeof client !== 'undefined' ? client : (typeof page !== 'undefined' ? page : null)), {
+    sceneId: ((typeof options !== 'undefined' && options?.sceneId) || (typeof context !== 'undefined' && context?.sceneId) || ''),
+    stage: 'after-nv1-send-before-rename',
+  });
+
+await appendAppLog(null, { source: 'main', kind: sentImage?.ok ? 'ok' : 'error', text: `Scene ${sceneId}: ChatGPT send image prompt ${sentImage?.ok ? 'ok' : sentImage?.error || 'failed'}`, details: sentImage });
     if (!sentImage.ok) throw new Error(sentImage.error || 'Không gửi được image prompt vào ChatGPT.');
-    const earlyRenameTitle = pendingChatRenameTitle || chatContextTitle;
+    const earlyRenameTitle = effectivePendingChatRenameTitle || effectiveChatContextTitle;
     await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: earlyRenameTitle="${earlyRenameTitle || ''}"` });
     if (earlyRenameTitle?.trim()) {
       const renameStartedAt = Date.now();
       let sawConversationPath = '';
       while (Date.now() - renameStartedAt < 20000) {
         const currentPath = await evaluateOnCdpPage(page, `location.pathname`).catch(() => '');
-        await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: ChatGPT rename poll path=${currentPath || '(empty)'}` });
+        // rename-only-after-real-conversation-url-final
+      if (String(currentPath || '(empty)' || '') === '/' || !String(currentPath || '(empty)' || '').includes('/c/')) {
+        await appendAppLog(null, {
+          source: 'main',
+          kind: 'error',
+          text: `Scene ${sceneId}: chưa có hội thoại /c/... vì prompt chưa gửi thật; bỏ rename poll và quay về kiểm tra input.`,
+          details: { path: currentPath || '(empty)', reason: 'no-conversation-url-before-rename' },
+        }).catch(() => null);
+
+// HOOK_INPUT_GATE_AFTER_NV1_SENTIMAGE_REAL
+  await vidoraChatGptInputGate((typeof client !== 'undefined' ? client : (typeof page !== 'undefined' ? page : null)), {
+    sceneId: ((typeof options !== 'undefined' && options?.sceneId) || (typeof context !== 'undefined' && context?.sceneId) || ''),
+    stage: 'after-nv1-sentImage-log',
+  });
+
+  // GUARD_WRONG_SEND_LABEL_AFTER_SENTIMAGE_REAL
+  {
+    const sendLabel = String(sentImage?.send || sentImage?.selector || '').toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/đ/g, 'd');
+
+    if (
+      sendLabel.includes('viet hoac') ||
+      sendLabel.includes('hinh sua') ||
+      sendLabel.includes('chinh sua') ||
+      sendLabel.includes('tao anh') ||
+      sendLabel.includes('tra cuu')
+    ) {
+      await appendAppLog(null, {
+        source: 'main',
+        kind: 'error',
+        text: `Scene ${sceneId}: CLICK NHẦM nút tool/mode "${sentImage?.send || sentImage?.selector}", không phải nút gửi. Dừng.`,
+        details: { sentImage },
+      }).catch(() => null);
+
+      throw new Error('clicked-wrong-chatgpt-tool-button-not-send');
+    }
+  }
+
+        break;
+      }
+
+      await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: ChatGPT rename poll path=${currentPath || '(empty)'}` });
         if (String(currentPath || '').startsWith('/c/')) {
           sawConversationPath = String(currentPath || '');
           const recentsReady = await waitForChatGptRecentItem(page, sawConversationPath, sceneId);
@@ -2160,7 +2957,7 @@ async function generateImageAndMotionWithChatGPT({ imagePrompt, sceneDir, sceneI
   } finally {
     imageNetworkCapture.stop();
   }
-  const renameTitle = pendingChatRenameTitle || chatContextTitle;
+  const renameTitle = effectivePendingChatRenameTitle || effectiveChatContextTitle;
   if (renameTitle?.trim()) await maybeRenameChatGptCurrentConversationUntilTitle(page, renameTitle.trim(), { sceneId, timeoutMs: 15000, waitForRecent: false, reason: 'post-image-stage' }).catch(() => null);
 
   let generatedMotionPrompt = '';
@@ -2208,6 +3005,19 @@ async function generateMotionPromptWithChatGPTOnce({ imagePath, prompt, sceneDir
       await appendAppLog(null, { source: 'main', kind: 'error', text: `ChatGPT không chọn được cuộc trò chuyện "${chatContextTitle}": ${error.message}` });
     });
   }
+  const initialResponseChoiceRecovery = await recoverChatGptResponseChoiceChat(page, {
+    sceneId,
+    targetTitle: chatContextTitle,
+    stage: 'motion-prompt-before-upload',
+  });
+  if (initialResponseChoiceRecovery?.recovered) {
+    await appendAppLog(null, {
+      source: 'main',
+      kind: 'ok',
+      text: `Scene ${sceneId}: NV2 da mo chat moi sau khi gap man hinh chon 2 hinh/phan hoi.`,
+      details: initialResponseChoiceRecovery,
+    });
+  }
   const idleBefore = await waitForChatGptComposerIdle(page, { sceneId, stage: 'motion_prompt', attemptId: lockInfo.attemptId });
   const before = await evaluateOnCdpPage(page, `(${readLatestAssistantScript.toString()})()`).catch(() => ({ count: idleBefore?.count || 0, text: '' }));
   const uploadedForNv2 = await uploadFileViaCdp(page, imagePath, 'chatgpt');
@@ -2226,13 +3036,25 @@ async function generateMotionPromptWithChatGPTOnce({ imagePath, prompt, sceneDir
   let lastState = null;
   let recoveredOnce = 0;
   const retryMotionPrompt = async (reason, state) => {
-    if (recoveredOnce >= 3) return false;
     recoveredOnce += 1;
     await fs.writeFile(path.join(sceneDir, `scene_${String(sceneId).padStart(3, '0')}_chatgpt_motion_recovery_${recoveredOnce}_${reason}.json`), JSON.stringify({ reason, state, elapsedMs: Date.now() - startedAt }, null, 2), 'utf8').catch(() => null);
     await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: NV2 bị kẹt (${reason}), retry ${recoveredOnce}/3: F5 → Stop → F5 → upload lại ảnh → gửi lại NV2.` });
     await page.Page.reload({ ignoreCache: true }).catch(() => null);
     await waitForCdpLoad(page).catch(() => null);
     await sleep(1800);
+    const responseChoiceRecovery = await recoverChatGptResponseChoiceChat(page, {
+      sceneId,
+      targetTitle: chatContextTitle,
+      stage: `motion-prompt-retry-${recoveredOnce}`,
+    });
+    if (responseChoiceRecovery?.recovered) {
+      await appendAppLog(null, {
+        source: 'main',
+        kind: 'ok',
+        text: `Scene ${sceneId}: NV2 recovery da tao chat moi truoc khi gui lai prompt.`,
+        details: responseChoiceRecovery,
+      });
+    }
     const stopped = await evaluateOnCdpPage(page, `(${clickChatGptStopGeneratingScript.toString()})()`).catch((error) => ({ ok: false, error: error.message }));
     await appendAppLog(null, { source: 'main', kind: stopped?.ok ? 'ok' : 'running', text: `Scene ${sceneId}: NV2 recovery Stop: ${stopped?.ok ? stopped.mode || 'ok' : stopped?.error || 'không thấy Stop'}`, details: stopped });
     await sleep(800);
@@ -2240,21 +3062,37 @@ async function generateMotionPromptWithChatGPTOnce({ imagePath, prompt, sceneDir
     await waitForCdpLoad(page).catch(() => null);
     await sleep(2200);
     const uploadAgain = await uploadFileViaCdp(page, imagePath, 'chatgpt').catch((error) => ({ ok: false, error: error.message }));
+    if (!uploadAgain?.ok) return true;
     await appendAppLog(null, { source: 'main', kind: uploadAgain?.ok ? 'ok' : 'error', text: `Scene ${sceneId}: NV2 recovery upload lại keyframe: ${uploadAgain?.ok ? 'ChatGPT đã nhận ảnh' : uploadAgain?.error || 'failed'}`, details: uploadAgain });
     if (!uploadAgain?.ok) throw new Error(uploadAgain?.error || 'Không upload lại được keyframe trước khi retry NV2.');
     await sleep(1500);
     const beforeRetry = await evaluateOnCdpPage(page, `(${readLatestAssistantScript.toString()})()`).catch(() => ({ count: 0, text: '' }));
     const resent = await sendPromptViaCdpInput(page, instruction);
+    if (!resent?.ok) return true;
     if (!resent?.ok) throw new Error(resent?.error || 'Không gửi lại Nhiệm vụ 2 sau recovery.');
     await appendAppLog(null, { source: 'main', kind: 'ok', text: `Scene ${sceneId}: đã gửi lại NV2 sau recovery ${recoveredOnce}/3.`, details: { resent, beforeRetry } });
     return true;
   };
 
-  while (Date.now() - startedAt < 360000) {
+  while (true) {
     await sleep(3000);
     const state = await evaluateOnCdpPage(page, `(${readLatestAssistantScript.toString()})()`).catch(() => null);
     lastState = state;
     if (!state?.text) {
+      {
+        const policyCheckText =
+          typeof latestText !== 'undefined' ? latestText :
+          typeof text !== 'undefined' ? text :
+          typeof responseText !== 'undefined' ? responseText :
+          typeof latest?.text !== 'undefined' ? latest.text :
+          typeof latestAssistantText !== 'undefined' ? latestAssistantText :
+          '';
+
+        if (isChatGptPolicyRefusalText(policyCheckText)) {
+          await notifyChatGptPolicyRefusal(sceneId, 'NV2/motion-prompt', policyCheckText);
+        }
+      }
+
       await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: đang chờ ChatGPT trả NV2, chưa thấy assistant response mới.`, details: state });
       if (Date.now() - startedAt > 25000 && await retryMotionPrompt('no-assistant-after-send', state)) continue;
       continue;
@@ -2267,7 +3105,88 @@ async function generateMotionPromptWithChatGPTOnce({ imagePath, prompt, sceneDir
     if (freshAssistant && composerDone && quality.ok) break;
     if (freshAssistant && composerIdle && !quality.ok && Date.now() - startedAt > 25000 && await retryMotionPrompt(quality.error || 'bad-response-idle', state)) continue;
     if (!freshAssistant && composerIdle && Date.now() - startedAt > 25000 && await retryMotionPrompt('stuck-after-user-message', state)) continue;
+    {
+        const policyCheckText =
+          typeof latestText !== 'undefined' ? latestText :
+          typeof text !== 'undefined' ? text :
+          typeof responseText !== 'undefined' ? responseText :
+          typeof latest?.text !== 'undefined' ? latest.text :
+          typeof latestAssistantText !== 'undefined' ? latestAssistantText :
+          '';
+
+        if (isChatGptPolicyRefusalText(policyCheckText)) {
+          await notifyChatGptPolicyRefusal(sceneId, 'NV2/motion-prompt', policyCheckText);
+        }
+      }
+
+      await vidoraChatGptInputGate((typeof client !== 'undefined' ? client : (typeof page !== 'undefined' ? page : null)), {
+        sceneId: ((typeof options !== 'undefined' && options?.sceneId) || (typeof context !== 'undefined' && context?.sceneId) || ''),
+        stage: 'before-nv2-wait',
+      });
+
+// VIDORA_FORCE_SEND_NV2_BEFORE_WAIT_REAL
+  {
+    const nv2GateTarget = (typeof client !== 'undefined' ? client : (typeof page !== 'undefined' ? page : null));
+
+    let nv2InputState = await vidoraReadChatGptComposerStateReal(nv2GateTarget, {
+      sceneId: ((typeof options !== 'undefined' && options?.sceneId) || (typeof context !== 'undefined' && context?.sceneId) || ''),
+      stage: 'nv2-force-send-before-wait-check',
+    }).catch((error) => ({ ok: false, error: error.message }));
+
     await appendAppLog(null, {
+      source: 'main',
+      kind: 'running',
+      text: 'NV2 SEND GATE: kiểm tra input trước khi chờ ChatGPT trả motion prompt.',
+      details: { nv2InputState },
+    }).catch(() => null);
+
+    if (nv2InputState?.ok && nv2InputState.composerHasText) {
+      await appendAppLog(null, {
+        source: 'main',
+        kind: 'error',
+        text: 'NV2 SEND GATE: input còn prompt NV2 => chưa gửi thật, ép bấm nút gửi.',
+        details: {
+          textLength: nv2InputState.composerTextLength,
+          textHead: nv2InputState.composerTextHead,
+          sendButton: nv2InputState.sendButton,
+          sendCandidates: nv2InputState.sendCandidates,
+        },
+      }).catch(() => null);
+
+      for (let attempt = 1; attempt <= 5; attempt++) {
+        const click = await vidoraClickChatGptRealSendButton(nv2GateTarget, nv2InputState)
+          .catch((error) => ({ ok: false, error: error.message }));
+
+        await sleep(1200);
+
+        const after = await vidoraReadChatGptComposerStateReal(nv2GateTarget, {
+          sceneId: ((typeof options !== 'undefined' && options?.sceneId) || (typeof context !== 'undefined' && context?.sceneId) || ''),
+          stage: 'nv2-force-send-after-click',
+          attempt,
+        }).catch((error) => ({ ok: false, error: error.message }));
+
+        await appendAppLog(null, {
+          source: 'main',
+          kind: (!after?.composerHasText || after?.stopVisible) ? 'ok' : 'running',
+          text: (!after?.composerHasText || after?.stopVisible)
+            ? `NV2 SEND GATE: attempt ${attempt} gửi OK, input đã trống hoặc ChatGPT đang chạy.`
+            : `NV2 SEND GATE: attempt ${attempt} chưa gửi, input vẫn còn nội dung.`,
+          details: { attempt, click, after },
+        }).catch(() => null);
+
+        nv2InputState = after;
+
+        if (!after?.composerHasText || after?.stopVisible) break;
+      }
+
+      if (nv2InputState?.composerHasText && !nv2InputState?.stopVisible) {
+        throw new Error('nv2-send-gate-failed-input-still-has-prompt');
+      }
+    }
+  }
+
+
+      await appendAppLog(null, {
       source: 'main',
       kind: 'running',
       text: `Scene ${sceneId}: chờ ChatGPT hoàn tất NV2 (${state.generating ? 'thinking' : quality.error || 'response-chưa-đủ'}).`,
@@ -2311,6 +3230,30 @@ function normalizeVideoProvider(provider) {
   return provider === 'pixverse' ? 'pixverse' : 'grok';
 }
 
+function normalizeGrokResultRetryLimit(config = {}) {
+  const raw = config.resultRetryLimit ?? config.generationRetryLimit ?? config.retryLimit ?? DEFAULT_GROK_RESULT_RETRY_LIMIT;
+  return Math.max(0, Math.min(10, Number(raw) || 0));
+}
+
+function makeRetryableGrokGenerationError(reason = 'unknown', details = {}) {
+  const error = new Error(`grok_retryable_generation_error:${reason}`);
+  error.retryableGrokGeneration = true;
+  error.grokRetryReason = reason;
+  error.details = details;
+  return error;
+}
+
+function isRetryableGrokGenerationError(error) {
+  const message = String(error?.message || error || '');
+  return Boolean(error?.retryableGrokGeneration)
+    || /grok_retryable_generation_error|grok_send_failed_external_error|timeout|timed out|request failed|network|fetch|failed to generate|generation failed|couldn'?t generate|unable to generate|error generating|image.*failed|black|blank|no-new-video|manual-download|invalid-video|download/i.test(message);
+}
+
+function summarizeGrokGenerationError(error) {
+  if (!error) return 'unknown';
+  return error.grokRetryReason || String(error.message || error).split('\n')[0].slice(0, 240);
+}
+
 async function generateVideoWithProvider({ provider, imagePath, motionPrompt, sceneDir, sceneId, videoConfig = {}, continuityReferencePaths = [], continuitySettings = {}, continuityReferences = null }) {
   if (provider === 'pixverse') {
     return generateVideoWithGenericProvider({ provider: 'pixverse', imagePath, motionPrompt, sceneDir, sceneId, config: videoConfig.pixverse || {}, continuityReferencePaths, continuitySettings, continuityReferences });
@@ -2343,12 +3286,20 @@ function sanitizeGrokUrlForLog(value = '') {
 }
 
 function isGrokImagineAgentUrl(value = '') {
+  const text = String(value || '');
   try {
-    const parsed = new URL(String(value || ''));
-    return parsed.hostname === 'grok.com' && (parsed.pathname === '/imagine/agent' || parsed.pathname.startsWith('/imagine/agent/'));
+    const url = new URL(text, 'https://grok.com');
+    return url.hostname === 'grok.com' && (
+      url.pathname === '/imagine' ||
+      url.pathname.startsWith('/imagine/')
+    );
   } catch (_error) {
-    return false;
+    return text.includes('grok.com/imagine') || text.startsWith('/imagine');
   }
+}
+
+function isGrokImagineReadyRoute(route) {
+  return route === 'imagine_agent_ready' || route === 'imagine_agent_ready';
 }
 
 async function getGrokRouteState(page) {
@@ -2365,7 +3316,7 @@ async function waitForGrokImagineAgentReady(page, sceneId = '', options = {}) {
   let lastState = null;
   while (Date.now() - startedAt < timeoutMs) {
     lastState = await getGrokRouteState(page);
-    if (lastState?.route === 'imagine_agent_ready' && (!options.requireComposer || lastState.hasComposer || lastState.hasUploadTarget || lastState.hasSendButton)) {
+    if ((isGrokImagineReadyRoute(lastState?.route) || lastState?.route === 'imagine_agent_ready') && (!options.requireComposer || lastState.hasComposer || lastState.hasUploadTarget || lastState.hasSendButton)) {
       await appendAppLog(null, { source: 'main', kind: 'ok', text: 'grokRoute: imagine agent ready', details: { sceneId, ...lastState } });
       return lastState;
     }
@@ -2379,6 +3330,51 @@ async function waitForGrokImagineAgentReady(page, sceneId = '', options = {}) {
   return lastState || { ok: false, route: 'timeout', error: 'timeout-waiting-imagine-agent-ready' };
 }
 
+
+async function forceGrokNormalImagineVideoMode(page, sceneId = '') {
+  const result = await evaluateOnCdpPage(page, `
+    (() => {
+      const body = document.body;
+      const out = { ok: true, actions: [], url: location.href };
+
+      const visible = (node) => {
+        const r = node.getBoundingClientRect?.();
+        return r && r.width > 8 && r.height > 8 && r.bottom > 0 && r.right > 0;
+      };
+
+      const textOf = (node) =>
+        String(node.innerText || node.textContent || node.getAttribute?.('aria-label') || node.title || '').replace(/\\s+/g, ' ').trim();
+
+      const buttons = Array.from(document.querySelectorAll('button, [role="button"], a')).filter(visible);
+
+      // Không chọn Agent Beta. Chọn Image trước nếu cần, rồi Video nếu có.
+      const image = buttons.find((b) => /^image$/i.test(textOf(b)) || / image /i.test(' ' + textOf(b) + ' '));
+      if (image && !/selected|active|true/i.test(String(image.getAttribute('aria-pressed') || image.getAttribute('data-state') || ''))) {
+        image.click();
+        out.actions.push('click-image');
+      }
+
+      const video = buttons.find((b) => /^video$/i.test(textOf(b)) || / video /i.test(' ' + textOf(b) + ' '));
+      if (video) {
+        video.click();
+        out.actions.push('click-video');
+      }
+
+      return out;
+    })()
+  `).catch((error) => ({ ok: false, error: error.message }));
+
+  await appendAppLog(null, {
+    source: 'main',
+    kind: result?.ok ? 'ok' : 'error',
+    text: `Scene ${sceneId}: Grok normal /imagine video mode ${result?.ok ? 'ready' : 'failed'}`,
+    details: result,
+  }).catch(() => null);
+
+  return result;
+}
+
+
 async function ensureGrokImagineAgentPage(page, sceneId = '', config = {}) {
   await page.Page.bringToFront().catch(() => null);
   let recovered = false;
@@ -2389,7 +3385,11 @@ async function ensureGrokImagineAgentPage(page, sceneId = '', config = {}) {
     if (lastState?.route === 'normal_chat') {
       await appendAppLog(null, { source: 'main', kind: 'error', text: 'grokRoute: blocked send because target was normal chat', details: { sceneId, attempt, ...lastState } });
     }
-    if (!isGrokImagineAgentUrl(lastState?.url || lastState?.safeUrl || '')) {
+    if (
+    lastState?.route !== 'imagine_agent_ready' &&
+    lastState?.route !== 'imagine_normal_ready' &&
+    !isGrokImagineAgentUrl(lastState?.url || lastState?.safeUrl || '')
+  ) {
       await appendAppLog(null, { source: 'main', kind: 'running', text: `grokRoute: navigating to ${GROK_IMAGINE_AGENT_URL}`, details: { sceneId, from: lastState?.safeUrl || '', route: lastState?.route || '' } });
       await page.Page.navigate({ url: GROK_IMAGINE_AGENT_URL }).catch(() => null);
       await waitForCdpLoad(page).catch(() => null);
@@ -2400,7 +3400,7 @@ async function ensureGrokImagineAgentPage(page, sceneId = '', config = {}) {
     if (lastState?.route === 'login_or_challenge') {
       return { ok: false, error: 'Grok is showing login/security challenge before Imagine Agent could become ready.', state: lastState };
     }
-    if (lastState?.route === 'imagine_agent_ready' && (lastState?.hasComposer || lastState?.hasUploadTarget || lastState?.hasSendButton)) {
+    if ((isGrokImagineReadyRoute(lastState?.route) || lastState?.route === 'imagine_agent_ready') && (lastState?.hasComposer || lastState?.hasUploadTarget || lastState?.hasSendButton)) {
       if (recovered) await appendAppLog(null, { source: 'main', kind: 'ok', text: 'grokRoute: recovered to imagine agent', details: { sceneId, ...lastState } });
       await appendAppLog(null, { source: 'main', kind: 'ok', text: 'grokRoute: imagine agent ready', details: { sceneId, ...lastState } });
       return { ok: true, ...lastState };
@@ -2417,21 +3417,21 @@ async function ensureGrokImagineAgentPage(page, sceneId = '', config = {}) {
     }
     await sleep(1400);
     lastState = await waitForGrokImagineAgentReady(page, sceneId, { timeoutMs: 12000, requireComposer: false });
-    if (lastState?.route === 'imagine_agent_ready' && (lastState?.hasComposer || lastState?.hasUploadTarget || lastState?.hasSendButton)) {
+    if ((isGrokImagineReadyRoute(lastState?.route) || lastState?.route === 'imagine_agent_ready') && (lastState?.hasComposer || lastState?.hasUploadTarget || lastState?.hasSendButton)) {
       if (recovered) await appendAppLog(null, { source: 'main', kind: 'ok', text: 'grokRoute: recovered to imagine agent', details: { sceneId, ...lastState } });
       return { ok: true, ...lastState };
     }
   }
-  return { ok: false, error: 'Grok Imagine Agent UI was not ready.', state: lastState };
+  return { ok: false, error: 'Grok Imagine UI was not ready.', state: lastState };
 }
 
 async function assertGrokImagineAgentReady(page, stage = 'send', sceneId = '') {
   const state = await getGrokRouteState(page);
-  if (state?.route === 'imagine_agent_ready' && (state?.hasComposer || state?.hasUploadTarget || state?.hasWorkspace || state?.hasSendButton)) return { ok: true, state };
+  if ((isGrokImagineReadyRoute(state?.route) || state?.route === 'imagine_agent_ready') && (state?.hasComposer || state?.hasUploadTarget || state?.hasWorkspace || state?.hasSendButton)) return { ok: true, state };
   if (state?.route === 'normal_chat') {
     await appendAppLog(null, { source: 'main', kind: 'error', text: 'grokRoute: blocked send because target was normal chat', details: { stage, sceneId, ...state } });
   }
-  return { ok: false, error: `Grok route is not Imagine Agent ready before ${stage}.`, state };
+  return { ok: false, error: `Grok route is not Imagine ready before ${stage}.`, state };
 }
 
 async function closeGrokTemplateModal(page, sceneId = '') {
@@ -2529,7 +3529,217 @@ async function detectLoginWithRetry(page, provider, sceneId = '') {
   return lastState;
 }
 
+async function uploadGrokGenerationInputs(page, { imagePath, sceneId, continuityReferencePaths = [], continuitySettings = {}, continuityReferences = null } = {}) {
+  const route = await ensureGrokImagineAgentPage(page, sceneId, {});
+  if (!route?.ok) throw makeRetryableGrokGenerationError(route?.error || 'route-not-ready-before-upload', { route });
+  await appendAppLog(null, { source: 'main', kind: 'running', text: 'grokRecovery: upload primary keyframe', details: { sceneId, imagePath: path.basename(imagePath || '') } });
+  const uploadResult = await uploadFileViaCdp(page, imagePath, 'grok');
+  if (!uploadResult?.ok) throw makeRetryableGrokGenerationError(uploadResult?.error || 'primary-keyframe-upload-failed', { uploadResult });
+  const settled = await waitForGrokUploadSettled(page, sceneId);
+  await appendAppLog(null, { source: 'main', kind: settled?.ok ? 'ok' : 'running', text: 'grokRecovery: primary upload settled=' + Boolean(settled?.ok), details: { sceneId, settled } });
+
+  const grokRefs = (continuityReferencePaths || []).filter(Boolean).slice(0, 4);
+  const normalizedContinuity = normalizeContinuityReferenceSettings(continuitySettings);
+  await appendAppLog(null, { source: 'main', kind: 'running', text: 'grokContinuity: additional references available count=' + grokRefs.length, details: { sceneId, sourceSceneId: continuityReferences?.sourceSceneId || null, files: grokRefs.map((item) => path.basename(item)) } });
+  if (grokRefs.length && normalizedContinuity.sendToGrok) {
+    let uploadedRefs = 0;
+    for (const refPath of grokRefs) {
+      const extraUpload = await uploadFileViaCdp(page, refPath, 'grok').catch((error) => ({ ok: false, error: error.message }));
+      if (extraUpload?.ok) uploadedRefs += 1;
+      else await appendAppLog(null, { source: 'main', kind: 'running', text: 'grokContinuity: reference upload skipped file=' + path.basename(refPath) + ' reason=' + (extraUpload?.error || 'upload-failed'), details: { sceneId, file: path.basename(refPath), extraUpload } });
+      await sleep(700);
+    }
+    await appendAppLog(null, { source: 'main', kind: uploadedRefs ? 'ok' : 'running', text: 'grokContinuity: uploaded additional reference count=' + uploadedRefs, details: { sceneId, uploadedRefs } });
+  } else {
+    await appendAppLog(null, { source: 'main', kind: 'running', text: 'grokContinuity: skipped additional references reason=' + (grokRefs.length ? 'disabled-for-grok-stability' : 'none-available'), details: { sceneId } });
+  }
+  return { ok: true, uploadResult, settled, referenceCount: grokRefs.length };
+}
+
+async function validateGeneratedVideoFile(filePath) {
+  const stat = await fs.stat(filePath).catch(() => null);
+  if (!stat?.isFile() || stat.size < 64 * 1024) throw makeRetryableGrokGenerationError('invalid-video-file-too-small', { filePath, size: stat?.size || 0 });
+  const duration = await probeVideoDurationSeconds(filePath).catch(() => 0);
+  if (!duration || duration < 0.5) throw makeRetryableGrokGenerationError('invalid-video-duration', { filePath, duration });
+  return { ok: true, filePath, byteLength: stat.size, duration };
+}
+
+async function recoverGrokBeforeGenerationRetry(page, { sceneId, sceneDir, config = {}, reason = '', attempt = 1 } = {}) {
+  await appendAppLog(null, { source: 'main', kind: 'running', text: `grokRecovery: reset before retry ${attempt}, reason=${reason}`, details: { sceneId, reason, attempt } });
+  await ensureGrokImagineAgentPage(page, sceneId, config).catch(() => null);
+  await clearGrokCanvasChat(page, sceneId).catch(() => null);
+  if (/blank|black|request|network|timeout|route|page/i.test(reason)) {
+    await page.Page.reload({ ignoreCache: true }).catch(() => null);
+    await waitForCdpLoad(page).catch(() => null);
+    await sleep(1800);
+    await ensureGrokImagineAgentPage(page, sceneId, config).catch(() => null);
+  }
+  if (sceneDir) await labelGrokCanvas(page, sceneId, sceneDir).catch(() => null);
+}
+
+async function generateGrokVideoWithRecovery(page, { imagePath, motionPrompt, sceneDir, sceneId, config = {}, continuityReferencePaths = [], continuitySettings = {}, continuityReferences = null } = {}) {
+  const configuredRetryLimit = normalizeGrokResultRetryLimit(config);
+  let lastError = null;
+  try {
+    for (let attempt = 1; ; attempt += 1) {
+      const retryIndex = attempt - 1;
+      if (retryIndex > 0) {
+        await recoverGrokBeforeGenerationRetry(page, { sceneId, sceneDir, config, reason: summarizeGrokGenerationError(lastError), attempt: retryIndex });
+      }
+      await appendAppLog(null, { source: 'main', kind: 'running', text: `grokRecovery: continuous generation attempt=${attempt}`, details: { sceneId, retryIndex, configuredRetryLimit, reason: summarizeGrokGenerationError(lastError) } });
+      try {
+        await ensureGrokImagineAgentPage(page, sceneId, config);
+        await labelGrokCanvas(page, sceneId, sceneDir).catch(() => null);
+        const upload = await uploadGrokGenerationInputs(page, { imagePath, sceneId, continuityReferencePaths, continuitySettings, continuityReferences });
+        const beforeVideos = await evaluateOnCdpPage(page, `(${collectVideoUrlsScript.toString()})()`).catch(() => ({ urls: [] }));
+        await appendAppLog(null, { source: 'main', kind: 'running', text: 'grokRecovery: sending exact motion prompt', details: { sceneId, attempt, promptHead: String(motionPrompt || '').slice(0, 220), upload } });
+        const sent = await submitGrokVideoPrompt(page, motionPrompt, { ...config, sceneId, imagePath });
+        if (!sent?.ok) throw makeRetryableGrokGenerationError(sent?.error || 'send-motion-prompt-failed', { sent });
+        const confirmed = await confirmGrokVideoGenerationIfAsked(page, sceneId);
+        await appendAppLog(null, { source: 'main', kind: 'ok', text: 'grokRecovery: send accepted, waiting for valid video', details: { sceneId, attempt, sent, confirmed } });
+        const videoUrl = await waitForNewVideoUrl(page, beforeVideos?.urls || [], { provider: 'grok', sceneId, sceneDir, imagePath, motionPrompt, retryLimit: configuredRetryLimit });
+        if (!videoUrl) throw makeRetryableGrokGenerationError('no-new-video-url', { beforeVideos });
+        const videoPath = path.join(sceneDir, `scene_${String(sceneId).padStart(3, '0')}_video.mp4`);
+        await downloadBrowserAsset(page, videoUrl, videoPath);
+        const validation = await validateGeneratedVideoFile(videoPath);
+        await appendAppLog(null, { source: 'main', kind: 'ok', text: `grokRecovery: valid video received on continuous attempt ${attempt}`, details: { sceneId, videoUrl, videoPath, validation } });
+        await page.close();
+        return { status: retryIndex ? 'video-downloaded-after-grok-retry' : 'video-downloaded', videoPath, retryCount: retryIndex, validation };
+      } catch (error) {
+        lastError = error;
+        const reason = summarizeGrokGenerationError(error);
+        await fs.writeFile(path.join(sceneDir, 'grok_video_error.txt'), maskRouterText(error.stack || error.message || String(error)), 'utf8').catch(() => null);
+        await appendAppLog(null, { source: 'main', kind: 'error', text: `grokRecovery: continuous attempt ${attempt} failed reason=${maskRouterText(reason)}`, details: { sceneId, attempt, configuredRetryLimit, retryable: isRetryableGrokGenerationError(error), error: maskRouterText(error.stack || error.message || String(error)) } });
+        if (!isRetryableGrokGenerationError(error)) break;
+        await appendAppLog(null, { source: 'main', kind: 'running', text: `grokRecovery: retry will re-upload reference image and resend same motion prompt`, details: { sceneId, attempt, reason, imagePath: path.basename(imagePath || '') } });
+      }
+    }
+  } finally {
+    if (lastError) await page.close().catch(() => null);
+  }
+  throw lastError || new Error('Grok did not return a valid video.');
+}
+
+
+async function forceGrokComposerImageUploadAndConfig(page, imagePath, sceneId = '') {
+  await page.Page.bringToFront().catch(() => null);
+
+  const before = await evaluateOnCdpPage(page, `
+    (() => {
+      return {
+        url: location.href,
+        text: String(document.body?.innerText || '').slice(0, 1200),
+        fileInputs: document.querySelectorAll('input[type="file"]').length,
+        textboxes: document.querySelectorAll('textarea, [contenteditable="true"], [role="textbox"]').length,
+      };
+    })()
+  `).catch((error) => ({ ok: false, error: error.message }));
+
+  await appendAppLog(null, {
+    source: 'main',
+    kind: 'running',
+    text: `Scene ${sceneId}: Grok prepare composer upload/config start`,
+    details: before,
+  }).catch(() => null);
+
+  // Đưa ảnh vào file input của composer, không click workspace/gallery/template.
+  const uploadResult = await uploadFileViaCdp(page, imagePath, 'grok', {
+    sceneId,
+    skipRouteCheck: true,
+    preferComposerInput: true,
+    noWorkspaceClick: true,
+  }).catch((error) => ({ ok: false, error: error.message }));
+
+  await appendAppLog(null, {
+    source: 'main',
+    kind: uploadResult?.ok ? 'ok' : 'error',
+    text: `Scene ${sceneId}: Grok composer image upload ${uploadResult?.ok ? 'ok' : 'failed'}`,
+    details: uploadResult,
+  }).catch(() => null);
+
+  if (!uploadResult?.ok) {
+    throw new Error(`Grok upload ảnh vào composer thất bại: ${uploadResult?.error || 'unknown'}`);
+  }
+
+  // Ép mode/config sau khi upload: Video, 720p, 10s, 16:9.
+  const configResult = await evaluateOnCdpPage(page, `
+    (() => {
+      const out = { ok: true, actions: [] };
+
+      const visible = (el) => {
+        const r = el.getBoundingClientRect?.();
+        return r && r.width > 8 && r.height > 8 && r.bottom > 0 && r.right > 0;
+      };
+
+      const textOf = (el) =>
+        String(el.innerText || el.textContent || el.getAttribute?.('aria-label') || el.title || '')
+          .replace(/\\s+/g, ' ')
+          .trim();
+
+      const controls = Array.from(document.querySelectorAll('button, [role="button"], a')).filter(visible);
+
+      function clickByText(pattern, label) {
+        const found = controls.find((el) => pattern.test(textOf(el)));
+        if (found) {
+          found.click();
+          out.actions.push({ action: label, text: textOf(found) });
+          return true;
+        }
+        out.actions.push({ action: label, missing: true });
+        return false;
+      }
+
+      // Không bấm Agent Beta, không bấm template cards.
+      clickByText(/^Video$/i, 'click-video');
+      clickByText(/^720p$/i, 'click-720p');
+      clickByText(/^10s$/i, 'click-10s');
+
+      // Aspect ratio dropdown/chip 16:9 nếu có, nếu không thì bỏ qua.
+      clickByText(/^16:9$/i, 'click-16x9');
+
+      const composer =
+        document.querySelector('[contenteditable="true"]') ||
+        document.querySelector('[role="textbox"]') ||
+        document.querySelector('textarea');
+
+      const composerText = String(composer?.innerText || composer?.value || composer?.textContent || '');
+      const imgs = Array.from(document.querySelectorAll('img')).map((img) => {
+        const r = img.getBoundingClientRect();
+        return {
+          w: Math.round(r.width),
+          h: Math.round(r.height),
+          top: Math.round(r.top),
+          left: Math.round(r.left),
+          src: String(img.src || '').slice(0, 120),
+        };
+      }).filter((x) => x.w > 20 && x.h > 20);
+
+      out.composerTextHead = composerText.slice(0, 300);
+      out.imageCount = imgs.length;
+      out.images = imgs.slice(-10);
+      out.bodyHead = String(document.body?.innerText || '').slice(0, 1200);
+      return out;
+    })()
+  `).catch((error) => ({ ok: false, error: error.message }));
+
+  await appendAppLog(null, {
+    source: 'main',
+    kind: configResult?.ok ? 'ok' : 'error',
+    text: `Scene ${sceneId}: Grok forced Video/720p/10s config ${configResult?.ok ? 'ok' : 'failed'}`,
+    details: configResult,
+  }).catch(() => null);
+
+  return { ok: true, uploadResult, configResult };
+}
+
+
 async function generateVideoWithGenericProvider({ provider, imagePath, motionPrompt, sceneDir, sceneId, config = {}, continuityReferencePaths = [], continuitySettings = {}, continuityReferences = null }) {
+  if (provider === 'grok') {
+    const routeGuard = await evaluateOnCdpPage(await getCdpPage('grok', true), "({ url: location.href, path: location.pathname })").catch(() => null);
+    if (routeGuard?.path?.startsWith('/imagine/agent')) {
+      throw new Error('Grok đang ở Agent mode; đã chặn gửi prompt. Tool phải dùng grok.com/imagine thường.');
+    }
+  }
   const page = await getCdpPage(provider, true);
   const loginState = await detectLoginWithRetry(page, provider, sceneId);
   const title = PROVIDER_META[provider]?.title || provider;
@@ -2551,6 +3761,10 @@ async function generateVideoWithGenericProvider({ provider, imagePath, motionPro
   if (!capability?.ok) {
     await page.close();
     throw new Error(capability?.error || `${title} account này chưa có feature tạo video/upload ảnh. Hãy đổi account/plan rồi chạy lại.`);
+  }
+
+  if (provider === 'grok') {
+    return generateGrokVideoWithRecovery(page, { imagePath, motionPrompt, sceneDir, sceneId, config, continuityReferencePaths, continuitySettings, continuityReferences });
   }
 
   if (provider === 'pixverse') {
@@ -2659,6 +3873,7 @@ async function getCdpPage(provider, createIfMissing = true, options = {}) {
   const meta = PROVIDER_META[provider] || PROVIDER_META.chatgpt;
   const hostname = new URL(meta.url).hostname;
   const targets = await CDP.List({ host: '127.0.0.1', port: CHROME_DEBUG_PORT });
+  if (shouldRecover) await closeUnexpectedProviderTabs(targets, provider).catch(() => null);
   const providerTargets = targets
     .filter((target) => target.type === 'page')
     .filter((target) => target.url?.includes(hostname));
@@ -2690,7 +3905,34 @@ async function getCdpPage(provider, createIfMissing = true, options = {}) {
   if (shouldBringToFront) await client.Page.bringToFront().catch(() => null);
   await waitForCdpLoad(client);
   if (shouldRecover) await recoverProviderFromCacheOrChallenge(client, provider, 'get-page').catch(() => null);
+  if (shouldRecover) await recoverCdpPageIfCrashed(client, provider, 'get-page').catch(() => null);
   return client;
+}
+
+async function closeUnexpectedProviderTabs(targets = [], provider = 'chatgpt') {
+  const providerHost = new URL((PROVIDER_META[provider] || PROVIDER_META.chatgpt).url).hostname;
+  const unwanted = (targets || [])
+    .filter((target) => target.type === 'page')
+    .filter((target) => {
+      const url = String(target.url || '');
+      if (!/^https?:/i.test(url)) return false;
+      let host = '';
+      try { host = new URL(url).hostname.toLowerCase(); } catch (_error) { return false; }
+      if (host === providerHost || host.endsWith(`.${providerHost}`)) return false;
+      return /(^|\.)linkedin\.com$|(^|\.)facebook\.com$|(^|\.)twitter\.com$|(^|\.)x\.com$/i.test(host)
+        || /\/share\b|\/sharing\b|shareArticle|mini=true/i.test(url);
+    });
+  for (const target of unwanted.slice(0, 12)) {
+    await appendAppLog(null, {
+      source: 'main',
+      kind: 'running',
+      text: `browserCleanup: closing unexpected external tab while using ${provider}: ${sanitizeLogString(target.url || '')}`,
+      details: { provider, title: String(target.title || '').slice(0, 120), url: sanitizeLogString(target.url || '') },
+    });
+    const id = encodeURIComponent(target.id || '');
+    if (id) await fetch(`http://127.0.0.1:${CHROME_DEBUG_PORT}/json/close/${id}`).catch(() => null);
+  }
+  return { ok: true, closed: unwanted.length };
 }
 
 async function waitForCdpLoad(client) {
@@ -2703,20 +3945,171 @@ async function waitForCdpLoad(client) {
 }
 
 async function evaluateOnCdpPage(client, expression) {
-  const result = await client.Runtime.evaluate({
-    expression,
-    awaitPromise: true,
-    returnByValue: true,
-    userGesture: true,
-  });
-  if (result.exceptionDetails) {
-    const details = result.exceptionDetails;
-    const exception = details.exception || {};
-    const description = exception.description || exception.value || exception.className || details.text || 'CDP evaluate lỗi.';
-    const location = `${details.url || ''}:${details.lineNumber ?? ''}:${details.columnNumber ?? ''}`;
-    throw new Error(`${details.text || 'CDP evaluate lỗi'}: ${description}${location !== '::' ? ` @ ${location}` : ''}`);
+  async function runEvaluate(expr, returnByValue = true) {
+    const result = await client.Runtime.evaluate({
+      expression: expr,
+      awaitPromise: true,
+      returnByValue,
+      userGesture: true,
+    });
+
+    if (result.exceptionDetails) {
+      const details = result.exceptionDetails;
+      const exception = details.exception || {};
+      const description = exception.description || exception.value || exception.className || details.text || 'CDP evaluate lỗi.';
+      const location = `${details.url || ''}:${details.lineNumber ?? ''}:${details.columnNumber ?? ''}`;
+      throw new Error(`${details.text || 'CDP evaluate lỗi'}: ${description}${location !== '::' ? ` @ ${location}` : ''}`);
+    }
+
+    return result.result?.value;
   }
-  return result.result?.value;
+
+  try {
+    return await runEvaluate(expression, true);
+  } catch (error) {
+    const message = String(error?.message || error || '');
+
+    if (!/Object reference chain is too long|Object couldn't be returned by value|Converting circular structure/i.test(message)) {
+      throw error;
+    }
+
+    const safeExpression = `
+      (async () => {
+        const __seen = new WeakSet();
+        const __maxDepth = 6;
+        const __maxArray = 80;
+        const __maxKeys = 80;
+
+        function __safe(value, depth = 0) {
+          if (value == null) return value;
+
+          const type = typeof value;
+          if (type === 'string') return value.length > 20000 ? value.slice(0, 20000) + '…[truncated]' : value;
+          if (type === 'number' || type === 'boolean') return value;
+          if (type === 'bigint') return String(value);
+          if (type === 'function' || type === 'symbol' || type === 'undefined') return undefined;
+
+          if (depth >= __maxDepth) return '[MaxDepth]';
+
+          if (value instanceof ArrayBuffer) return { type: 'ArrayBuffer', byteLength: value.byteLength };
+          if (ArrayBuffer.isView(value)) {
+            return {
+              type: value.constructor && value.constructor.name || 'TypedArray',
+              length: value.length,
+              byteLength: value.byteLength,
+              sample: Array.from(value.slice ? value.slice(0, 32) : []).slice(0, 32),
+            };
+          }
+
+          if (value instanceof Element) {
+            const rect = value.getBoundingClientRect?.();
+            return {
+              type: 'Element',
+              tag: value.tagName,
+              id: value.id || '',
+              className: String(value.className || '').slice(0, 200),
+              text: String(value.innerText || value.textContent || '').slice(0, 500),
+              box: rect ? { x: rect.x, y: rect.y, w: rect.width, h: rect.height } : null,
+            };
+          }
+
+          if (value instanceof Node) {
+            return {
+              type: 'Node',
+              nodeType: value.nodeType,
+              nodeName: value.nodeName,
+              text: String(value.textContent || '').slice(0, 500),
+            };
+          }
+
+          if (Array.isArray(value)) {
+            if (__seen.has(value)) return '[Circular]';
+            __seen.add(value);
+            return value.slice(0, __maxArray).map((item) => __safe(item, depth + 1));
+          }
+
+          if (type === 'object') {
+            if (__seen.has(value)) return '[Circular]';
+            __seen.add(value);
+
+            const out = {};
+            const keys = Object.keys(value).slice(0, __maxKeys);
+            for (const key of keys) {
+              try {
+                out[key] = __safe(value[key], depth + 1);
+              } catch (_err) {
+                out[key] = '[Unreadable]';
+              }
+            }
+            if (Object.keys(value).length > __maxKeys) out.__truncatedKeys = Object.keys(value).length - __maxKeys;
+            return out;
+          }
+
+          return String(value);
+        }
+
+        try {
+          const __value = await (${expression});
+          return JSON.stringify({ ok: true, value: __safe(__value) });
+        } catch (__error) {
+          return JSON.stringify({
+            ok: false,
+            error: String(__error && (__error.stack || __error.message) || __error),
+          });
+        }
+      })()
+    `;
+
+    const json = await runEvaluate(safeExpression, true);
+    let parsed = null;
+
+    try {
+      parsed = JSON.parse(String(json || '{}'));
+    } catch (parseError) {
+      throw new Error(`CDP safe-eval parse failed after "${message}": ${parseError.message}`);
+    }
+
+    if (!parsed?.ok) {
+      throw new Error(parsed?.error || message);
+    }
+
+    await appendAppLog(null, {
+      source: 'main',
+      kind: 'running',
+      text: 'CDP evaluate fallback: returned safe JSON after Object reference chain error.',
+      details: { originalError: message },
+    }).catch(() => null);
+
+    return parsed.value;
+  }
+}
+
+function isCdpCrashError(error) {
+  return /crash|crashed|Aw, Snap|Out of Memory|cannot find context|execution context.*destroyed|target.*closed|inspected target.*closed|webcontents was destroyed|session closed/i.test(String(error?.message || error || ''));
+}
+
+async function recoverCdpPageIfCrashed(client, provider = 'chatgpt', reason = 'unknown') {
+  const state = await evaluateOnCdpPage(client, `(${detectBrowserCrashPageScript.toString()})()`).catch((error) => ({ ok: false, crashed: isCdpCrashError(error), error: error.message }));
+  if (!state?.crashed) return { ok: true, skipped: true, state };
+  const meta = PROVIDER_META[provider] || PROVIDER_META.chatgpt;
+  await appendAppLog(null, {
+    source: 'main',
+    kind: 'error',
+    text: `${meta.title}: detected crashed tab (${state.reason || state.error || reason}); recovering by opening provider root.`,
+    details: { provider, reason, state },
+  });
+  await client.Page.stopLoading().catch(() => null);
+  await client.Page.navigate({ url: meta.url }).catch(() => null);
+  await waitForCdpLoad(client).catch(() => null);
+  await sleep(2200);
+  const after = await evaluateOnCdpPage(client, `(${detectBrowserCrashPageScript.toString()})()`).catch((error) => ({ ok: false, crashed: isCdpCrashError(error), error: error.message }));
+  if (after?.crashed) {
+    await client.Page.reload({ ignoreCache: true }).catch(() => null);
+    await waitForCdpLoad(client).catch(() => null);
+    await sleep(2200);
+  }
+  await appendAppLog(null, { source: 'main', kind: after?.crashed ? 'error' : 'ok', text: `${meta.title}: crash recovery ${after?.crashed ? 'still crashed' : 'ok'}.`, details: { provider, before: state, after } });
+  return { ok: !after?.crashed, before: state, after };
 }
 
 function sanitizeAssetUrlForLog(value = '') {
@@ -2860,6 +4253,7 @@ function hasVisibleChatGptImageCandidate(extracted = {}) {
 }
 
 function isChatGptActivelyGenerating(snapshot = {}) {
+  if (snapshot?.sendReady && !snapshot?.stopButtonVisible) return false;
   return Boolean(snapshot?.stopButtonVisible || snapshot?.composerBusy || snapshot?.streamingIndicator || snapshot?.preparingImage);
 }
 
@@ -2916,13 +4310,66 @@ function shouldRecoverFromCacheOrChallenge(state, provider) {
   return /cloudflare|security verification|verify you are human|just a moment|checking if the site connection|challenge|ray id|grok\.com\s+performing security/i.test(haystack);
 }
 
+
+async function forceGrokNormalImagineMode(page, sceneId = '') {
+  await page.Page.bringToFront().catch(() => null);
+
+  const result = await evaluateOnCdpPage(page, `
+    (() => {
+      const out = { ok: true, url: location.href, actions: [] };
+
+      // Nếu đang lỡ ở Agent canvas, quay về Imagine thường.
+      if (location.pathname.startsWith('/imagine/agent')) {
+        history.pushState(null, '', '/imagine');
+        location.href = 'https://grok.com/imagine';
+        out.actions.push('redirect-agent-to-imagine');
+        return out;
+      }
+
+      const buttons = Array.from(document.querySelectorAll('button, [role="button"], a'));
+
+      function textOf(el) {
+        return String(el.innerText || el.textContent || el.getAttribute('aria-label') || el.title || '').trim();
+      }
+
+      // Tắt Agent/Beta nếu đang active bằng cách chọn Image trước.
+      const imageBtn = buttons.find((el) => /^image$/i.test(textOf(el)) || /\bimage\b/i.test(textOf(el)));
+      if (imageBtn) {
+        imageBtn.click();
+        out.actions.push('click-image-mode');
+      }
+
+      // Nếu có Video button thì click video vì bước Grok là image-to-video.
+      const videoBtn = buttons.find((el) => /^video$/i.test(textOf(el)) || /\bvideo\b/i.test(textOf(el)));
+      if (videoBtn) {
+        videoBtn.click();
+        out.actions.push('click-video-mode');
+      }
+
+      // Không click Agent Beta / Agent.
+      out.body = String(document.body?.innerText || '').slice(0, 1000);
+      return out;
+    })()
+  `).catch((error) => ({ ok: false, error: error.message }));
+
+  await appendAppLog(null, {
+    source: 'main',
+    kind: result?.ok ? 'ok' : 'error',
+    text: `Scene ${sceneId}: Grok normal Imagine mode ${result?.ok ? 'ready' : 'failed'}`,
+    details: result,
+  }).catch(() => null);
+
+  return result;
+}
+
+
 async function ensureGrokEmptyCanvas(page, sceneId = '', forceNew = false) {
   await page.Page.bringToFront().catch(() => null);
   const current = await evaluateOnCdpPage(page, `({ path: location.pathname.toLowerCase(), url: location.href })`).catch(() => ({ path: '' }));
   if (current?.path?.includes('/imagine/agent/') && current.path.length > '/imagine/agent/'.length) {
     await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: đang ở canvas Grok cũ, tool sẽ thoát ra và tạo Empty Canvas mới.`, details: current });
   }
-  await page.Page.navigate({ url: 'https://grok.com/imagine/agent' }).catch(() => null);
+  await page.Page.navigate({ url: 'https://grok.com/imagine' }).catch(() => null);
   await waitForCdpLoad(page).catch(() => null);
   await sleep(1800);
   for (let attempt = 1; attempt <= 6; attempt += 1) {
@@ -3051,7 +4498,7 @@ async function logGrokSendPreflight(sceneId = '', state = {}, kind = 'running') 
 }
 
 async function waitForGrokSendPreflight(client, prompt, options = {}) {
-  const sceneId = options.sceneId || '';
+  const sceneId = ((typeof options !== 'undefined' && options?.sceneId) || (typeof context !== 'undefined' && context?.sceneId) || '');
   const requireAttachment = options.requireAttachment !== false;
   const timeoutMs = Number(options.timeoutMs || 35000);
   const started = Date.now();
@@ -3064,7 +4511,7 @@ async function waitForGrokSendPreflight(client, prompt, options = {}) {
     if (last?.promptReady && fingerprint && fingerprint === lastFingerprint) stableTicks += 1;
     else stableTicks = last?.promptReady ? 1 : 0;
     lastFingerprint = fingerprint;
-    last = { ...last, promptStable: stableTicks >= 2 };
+    last = { ...last, promptStable: stableTicks >= 3 };
     const ready = last?.route === 'imagine_agent_ready'
       && last.promptReady
       && last.promptStable
@@ -3108,7 +4555,7 @@ async function clickGrokSendButtonOnce(client, sceneId = '') {
 }
 
 async function waitForGrokSendOutcome(client, beforeSubmitState = {}, options = {}) {
-  const sceneId = options.sceneId || '';
+  const sceneId = ((typeof options !== 'undefined' && options?.sceneId) || (typeof context !== 'undefined' && context?.sceneId) || '');
   const started = Date.now();
   const timeoutMs = Number(options.timeoutMs || 24000);
   let lastGenerating = null;
@@ -3134,7 +4581,7 @@ async function waitForGrokSendOutcome(client, beforeSubmitState = {}, options = 
 }
 
 async function retryGrokSendFailure(client, prompt, options = {}, firstOutcome = {}) {
-  const sceneId = options.sceneId || '';
+  const sceneId = ((typeof options !== 'undefined' && options?.sceneId) || (typeof context !== 'undefined' && context?.sceneId) || '');
   let outcome = firstOutcome;
   for (let attempt = 1; attempt <= GROK_SEND_RETRY_LIMIT; attempt += 1) {
     if (!outcome?.retryable) break;
@@ -3204,7 +4651,7 @@ function buildGrokSafeMotionPrompt(originalPrompt = '', retryCount = 1) {
 }
 
 async function recoverGrokAfterContentPolicy(page, options = {}) {
-  const sceneId = options.sceneId || '';
+  const sceneId = ((typeof options !== 'undefined' && options?.sceneId) || (typeof context !== 'undefined' && context?.sceneId) || '');
   const safePrompt = buildGrokSafeMotionPrompt(options.motionPrompt || '', options.retryCount || 1);
   if ((options.retryCount || 1) >= 2) {
     await recoverGrokCanvasAfterLimit(page, { ...options, motionPrompt: safePrompt });
@@ -3218,7 +4665,7 @@ async function recoverGrokAfterContentPolicy(page, options = {}) {
 }
 
 async function recoverGrokCanvasAfterLimit(page, options = {}) {
-  const sceneId = options.sceneId || '';
+  const sceneId = ((typeof options !== 'undefined' && options?.sceneId) || (typeof context !== 'undefined' && context?.sceneId) || '');
   const sceneDir = options.sceneDir;
   await ensureGrokEmptyCanvas(page, sceneId, true);
   const videos = await restoreExistingProjectVideosToGrokCanvas(page, sceneDir, sceneId);
@@ -3333,10 +4780,165 @@ async function recoverProviderFromCacheOrChallenge(client, provider, reason = 'u
   return { ok: !shouldRecoverFromCacheOrChallenge(after, provider), before: state, after, attempt: used + 1 };
 }
 
+async function recoverChatGptBlockingUi(client, context = {}) {
+  // new-chat-mode-no-sidebar-touch:recoverChatGptBlockingUi
+  if (globalThis.__vidoraChatGptNewChatMode) {
+    await appendAppLog(null, {
+      source: 'main',
+      kind: 'running',
+      text: 'chatgptUiRecovery: hard-skipped in New chat mode to avoid touching sidebar history',
+      details: { context, reason: 'new-chat-mode-no-sidebar-touch' },
+    }).catch(() => null);
+    return { ok: true, skipped: true, reason: 'new-chat-mode-no-sidebar-touch', context };
+  }
+  await closeUnexpectedProviderTabs(await CDP.List({ host: '127.0.0.1', port: CHROME_DEBUG_PORT }).catch(() => []), 'chatgpt').catch(() => null);
+  await recoverCdpPageIfCrashed(client, 'chatgpt', context.stage || 'chatgpt-ui-recovery').catch(() => null);
+  const result = await evaluateOnCdpPage(client, `(${dismissChatGptBlockingUiScript.toString()})(${JSON.stringify(context || {})})`).catch((error) => ({ ok: false, error: error.message }));
+  if (result?.imageViewerDetected) {
+    await client.Input.dispatchKeyEvent({ type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27 }).catch(() => null);
+    await client.Input.dispatchKeyEvent({ type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27 }).catch(() => null);
+  }
+  if (result?.actions?.length || result?.blockingDetected || result?.error) {
+    await appendAppLog(null, {
+      source: 'main',
+      kind: result?.actions?.length ? 'running' : 'idle',
+      text: `chatgptUiRecovery: ${result?.actions?.length ? result.actions.join(', ') : result?.blockingDetected ? 'blocking-ui-detected' : result?.error || 'checked'}`,
+      details: { context, result },
+    });
+  }
+  await sleep(result?.actions?.length ? 900 : 250);
+  return result;
+}
+
+async function recoverChatGptResponseChoiceChat(client, context = {}) {
+  const state = await evaluateOnCdpPage(client, `(${detectChatGptResponseChoiceUiScript.toString()})()`).catch((error) => ({ ok: false, error: error.message }));
+  if (!state?.responseChoiceUi && !state?.deletedConversationUi) return { ok: true, skipped: true, state };
+
+  const imageState = await evaluateOnCdpPage(client, `(${readChatGptImageStateScript.toString()})()`).catch((error) => ({ ok: false, error: error.message }));
+  const activeGeneration = isChatGptActivelyGenerating(imageState);
+  const visibleImageCount = Array.isArray(imageState?.urls) ? imageState.urls.length : 0;
+  if (activeGeneration) {
+    await appendAppLog(null, {
+      source: 'main',
+      kind: 'running',
+      text: `Scene ${context.sceneId || ''}: ChatGPT van dang generate, bo qua recovery tao chat moi.`,
+      details: {
+        sceneId: context.sceneId || '',
+        activeGeneration,
+        visibleImageCount,
+        responseChoiceUi: Boolean(state.responseChoiceUi),
+        imageState: sanitizeChatGptImageSnapshot(imageState),
+      },
+    });
+    return { ok: true, skipped: true, reason: 'active-generation', state, imageState: sanitizeChatGptImageSnapshot(imageState) };
+  }
+
+  const targetTitle = String(context.targetTitle || '').trim();
+  const suffix = new Date().toISOString().replace(/[-:TZ.]/g, '').slice(0, 12);
+  const quarantineTitle = targetTitle ? `${targetTitle} - loi 2 phan hoi ${suffix}` : `Vidora loi 2 phan hoi ${suffix}`;
+  await appendAppLog(null, {
+    source: 'main',
+    kind: 'running',
+    text: state.deletedConversationUi
+      ? `Scene ${context.sceneId || ''}: ChatGPT dang o chat da bi xoa; mo chat moi.`
+      : `Scene ${context.sceneId || ''}: ChatGPT dang o man hinh 2 phan hoi; doi ten chat cu va mo chat moi.`,
+    details: { sceneId: context.sceneId || '', targetTitle: sanitizeChatTitleForLog(targetTitle), visibleImageCount, state },
+  });
+
+  let renamedOldChat = null;
+  if (state.responseChoiceUi && String(state.path || '').startsWith('/c/')) {
+    renamedOldChat = await renameChatGptCurrentConversationUntilTitle(client, quarantineTitle, {
+      sceneId: context.sceneId || '',
+      timeoutMs: 25000,
+      waitForRecent: false,
+      force: true,
+      maxAttempts: 1,
+      stableTarget: 1,
+    }).catch((error) => ({ ok: false, error: error.message }));
+    await appendAppLog(null, {
+      source: 'main',
+      kind: renamedOldChat?.ok ? 'ok' : 'error',
+      text: `Scene ${context.sceneId || ''}: quarantine chat 2 phan hoi ${renamedOldChat?.ok ? 'ok' : renamedOldChat?.error || 'failed'}`,
+      details: { quarantineTitle: sanitizeChatTitleForLog(quarantineTitle), renamedOldChat },
+    });
+  }
+
+  const clickedNewChat = await evaluateOnCdpPage(client, `(${clickChatGptStartNewChatScript.toString()})()`).catch((error) => ({ ok: false, error: error.message }));
+  if (clickedNewChat?.ok) await sleep(1400);
+  await invalidateChatGptConversationIdentity(state.deletedConversationUi ? 'chatgpt-deleted-conversation-new-chat' : 'chatgpt-response-choice-new-chat');
+  await client.Page.navigate({ url: 'https://chatgpt.com/' }).catch((error) => appendAppLog(null, { source: 'main', kind: 'error', text: `ChatGPT response-choice recovery navigate root failed: ${error.message}` }));
+  await waitForCdpLoad(client).catch(() => null);
+  await sleep(1800);
+  const after = await getChatGptLocationState(client);
+  return { ok: true, recovered: true, newChat: true, targetTitle, quarantineTitle, renamedOldChat, clickedNewChat, before: state, after };
+}
+
+
+async function forceClickChatGptComposerSubmit(client) {
+  return evaluateOnCdpPage(client, `
+    (() => {
+      const composer =
+        document.querySelector('#prompt-textarea') ||
+        document.querySelector('textarea') ||
+        document.querySelector('[contenteditable="true"]');
+
+      const root = composer?.closest('form') || composer?.closest('[role="main"]') || document;
+
+      const buttons = Array.from(root.querySelectorAll('button'));
+      const candidates = buttons.map((button) => {
+        const rect = button.getBoundingClientRect();
+        const text = String(button.innerText || button.textContent || '').trim();
+        const aria = String(button.getAttribute('aria-label') || button.title || '').trim();
+        const html = String(button.outerHTML || '').slice(0, 500);
+        return { button, rect, text, aria, html };
+      }).filter(({ rect, text, aria, html }) => {
+        if (!rect || rect.width < 12 || rect.height < 12) return false;
+        const t = (text + ' ' + aria + ' ' + html).toLowerCase();
+        if (t.includes('viết hoặc') || t.includes('chỉnh sửa') || t.includes('hỉnh sửa') || t.includes('tạo ảnh') || t.includes('tra cứu')) return false;
+        if (t.includes('send') || t.includes('gửi') || t.includes('submit') || t.includes('arrow-up') || t.includes('data-testid="send-button"') || t.includes('composer-submit')) return true;
+        return false;
+      });
+
+      const picked = candidates[candidates.length - 1];
+      if (!picked) {
+        return { ok: false, error: 'no-real-submit-button', buttonCount: buttons.length };
+      }
+
+      picked.button.click();
+      return {
+        ok: true,
+        selector: 'force-submit-button',
+        text: picked.text,
+        aria: picked.aria,
+        box: { x: picked.rect.x, y: picked.rect.y, w: picked.rect.width, h: picked.rect.height }
+      };
+    })()
+  `);
+}
+
 async function sendPromptViaCdpInput(client, prompt) {
   await client.Page.bringToFront().catch(() => null);
   await sleep(500);
-  const focused = await evaluateOnCdpPage(client, `(${focusPromptInputScript.toString()})()`);
+  if (!globalThis.__vidoraChatGptNewChatMode) {
+    await recoverChatGptBlockingUi(client, { stage: 'before-focus' }).catch(() => null);
+  } else {
+    await appendAppLog(null, {
+      source: 'main',
+      kind: 'running',
+      text: 'chatgptUiRecovery: skipped before-focus in New chat mode',
+      details: { stage: 'before-focus' }
+    }).catch(() => null);
+  }
+  await vidoraClearChatGptInputBeforePaste((typeof client !== 'undefined' ? client : (typeof page !== 'undefined' ? page : null)), {
+    stage: 'before-focus-prompt',
+    sceneId: ((typeof context !== 'undefined' && context?.sceneId) || (typeof options !== 'undefined' && options?.sceneId) || ''),
+  }).catch(() => null);
+
+  let focused = await evaluateOnCdpPage(client, `(${focusPromptInputScript.toString()})()`);
+  if (!focused?.ok) {
+    await recoverChatGptBlockingUi(client, { stage: 'focus-failed', reason: focused?.error || '' }).catch(() => null);
+    focused = await evaluateOnCdpPage(client, `(${focusPromptInputScript.toString()})()`).catch((error) => ({ ok: false, error: error.message }));
+  }
   if (!focused?.ok) {
     return { ok: false, error: focused?.error || 'Không focus được ô nhập prompt.' };
   }
@@ -3354,9 +4956,27 @@ async function sendPromptViaCdpInput(client, prompt) {
   }
 
   let lastClick = null;
-  for (let attempt = 1; attempt <= 10; attempt += 1) {
+  for (let attempt = 1; attempt <= CHATGPT_UI_RECOVERY_SEND_RETRY_LIMIT; attempt += 1) {
+    if (!globalThis.__vidoraChatGptNewChatMode) {
+      await recoverChatGptBlockingUi(client, { stage: 'before-send-click', attempt }).catch(() => null);
+    } else {
+      await appendAppLog(null, {
+        source: 'main',
+        kind: 'running',
+        text: 'chatgptUiRecovery: skipped before-send-click in New chat mode',
+        details: { stage: 'before-send-click', attempt }
+      }).catch(() => null);
+    }
+    if (attempt > 1) {
+      const composer = await evaluateOnCdpPage(client, `(${getComposerTextScript.toString()})()`).catch(() => ({ text: '' }));
+      if (!String(composer?.text || '').includes(prompt.slice(0, Math.min(24, prompt.length)))) {
+        await evaluateOnCdpPage(client, `(${setPromptInputValueScript.toString()})(${JSON.stringify(prompt)})`).catch(() => null);
+        await sleep(500);
+      }
+    }
     lastClick = await evaluateOnCdpPage(client, `(${clickSendButtonScript.toString()})()`).catch((error) => ({ ok: false, error: error.message }));
     if (lastClick?.ok) break;
+    await appendAppLog(null, { source: 'main', kind: 'running', text: `chatgptSendRecovery: send blocked attempt=${attempt}/${CHATGPT_UI_RECOVERY_SEND_RETRY_LIMIT} reason=${lastClick?.error || 'unknown'}`, details: { attempt, lastClick } });
     await sleep(2000);
   }
   if (!lastClick?.ok) {
@@ -3365,6 +4985,10 @@ async function sendPromptViaCdpInput(client, prompt) {
     await sleep(1500);
   }
   const afterSend = await evaluateOnCdpPage(client, `(${getComposerTextScript.toString()})()`).catch(() => ({ text: '' }));
+  const activeGeneration = await evaluateOnCdpPage(client, `(${detectChatGptActiveGenerationScriptStrict.toString()})()`).catch(() => ({ generating: false }));
+  if (activeGeneration?.generating) {
+    return { ok: true, mode: 'active-generation-after-send', selector: focused.selector, send: lastClick?.selector || lastClick?.mode || lastClick?.error, activeGeneration };
+  }
   if (!afterSend?.text || afterSend.text.length < 5) {
     return { ok: true, mode: lastClick?.ok ? 'cdp-insertText+send-retry' : 'cdp-insertText+enter-fallback', selector: focused.selector, send: lastClick?.selector || lastClick?.mode || lastClick?.error };
   }
@@ -3396,27 +5020,44 @@ async function waitForPromptSendAcknowledged(client, beforeCount = 0, timeoutMs 
   const startedAt = Date.now();
   let lastComposer = null;
   let lastAssistant = null;
+  let lastBusy = null;
   while (Date.now() - startedAt < timeoutMs) {
     await sleep(700);
+    lastBusy = await evaluateOnCdpPage(client, `(${detectChatGptActiveGenerationScriptStrict.toString()})()`).catch(() => ({ generating: false }));
+    if (lastBusy?.generating) {
+      return { ok: true, composerCleared: false, assistantAdvanced: false, generating: true, activeGeneration: lastBusy };
+    }
     lastComposer = await evaluateOnCdpPage(client, `(${getComposerTextScript.toString()})()`).catch(() => ({ text: '' }));
     lastAssistant = await evaluateOnCdpPage(client, `(${readLatestAssistantScript.toString()})()`).catch(() => ({ count: beforeCount, generating: false }));
     const composerCleared = !lastComposer?.text || String(lastComposer.text).trim().length < 5;
     const assistantAdvanced = Number(lastAssistant?.count || 0) > Number(beforeCount || 0);
     if (composerCleared || assistantAdvanced || lastAssistant?.generating) {
-      return { ok: true, composerCleared, assistantAdvanced, generating: Boolean(lastAssistant?.generating), lastComposer, lastAssistant };
+      return {
+        ok: true,
+        composerCleared,
+        assistantAdvanced,
+        generating: Boolean(lastAssistant?.generating),
+        lastComposer,
+        lastAssistant,
+      };
     }
   }
-  return { ok: false, error: 'Prompt send was not acknowledged by ChatGPT.', lastComposer, lastAssistant };
+  return { ok: false, error: 'Prompt send was not acknowledged by ChatGPT.', lastComposer: { textLength: String(lastComposer?.text || '').length, selector: lastComposer?.selector || '' }, lastAssistant: { count: lastAssistant?.count || 0, generating: Boolean(lastAssistant?.generating), mode: lastAssistant?.mode || '' }, lastBusy };
 }
 
 async function sendPromptViaCdpInputSingle(client, prompt, context = {}) {
   await client.Page.bringToFront().catch(() => null);
   await sleep(500);
+  await recoverChatGptBlockingUi(client, { ...context, stage: 'single-before-busy-check' }).catch(() => null);
   const busyState = await evaluateOnCdpPage(client, `(${readLatestAssistantScript.toString()})()`).catch(() => ({ generating: false, count: context.beforeCount || 0 }));
   if (busyState?.generating) {
     return { ok: false, error: 'ChatGPT is busy/streaming; duplicate motion prompt send blocked.', state: { count: busyState?.count || 0, mode: busyState?.mode || '' } };
   }
-  const focused = await evaluateOnCdpPage(client, `(${focusPromptInputScript.toString()})()`);
+  let focused = await evaluateOnCdpPage(client, `(${focusPromptInputScript.toString()})()`);
+  if (!focused?.ok) {
+    await recoverChatGptBlockingUi(client, { ...context, stage: 'single-focus-failed', reason: focused?.error || '' }).catch(() => null);
+    focused = await evaluateOnCdpPage(client, `(${focusPromptInputScript.toString()})()`).catch((error) => ({ ok: false, error: error.message }));
+  }
   if (!focused?.ok) {
     return { ok: false, error: focused?.error || 'KhÃ´ng focus Ä‘Æ°á»£c Ã´ nháº­p prompt.' };
   }
@@ -3440,19 +5081,71 @@ async function sendPromptViaCdpInputSingle(client, prompt, context = {}) {
     details: { sceneId: context.sceneId || '', stage: context.stage || '', attemptId: context.attemptId || '', beforeCount: context.beforeCount || 0 },
   });
 
-  await sleep(800);
-  const click = await evaluateOnCdpPage(client, `(${clickSendButtonScript.toString()})()`).catch((error) => ({ ok: false, error: error.message }));
+  let click = null;
   let mode = 'single-button';
-  if (!click?.ok) {
-    await client.Input.dispatchKeyEvent({ type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 });
-    await client.Input.dispatchKeyEvent({ type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 });
-    mode = 'single-enter-fallback';
+  let acknowledged = null;
+  for (let attempt = 1; attempt <= CHATGPT_UI_RECOVERY_SEND_RETRY_LIMIT; attempt += 1) {
+    await recoverChatGptBlockingUi(client, { ...context, stage: 'single-before-send', attempt }).catch(() => null);
+    const activeGeneration = await evaluateOnCdpPage(client, `(${detectChatGptActiveGenerationScriptStrict.toString()})()`).catch(() => ({ generating: false }));
+    if (activeGeneration?.generating) {
+      return { ok: true, mode: 'single-generation-already-started', selector: focused.selector, send: 'active-generation', acknowledged: { ok: true, generating: true, activeGeneration }, recoveryAttempts: attempt - 1 };
+    }
+    const composer = await evaluateOnCdpPage(client, `(${getComposerTextScript.toString()})()`).catch(() => ({ text: '' }));
+    if (!String(composer?.text || '').includes(prompt.slice(0, Math.min(24, prompt.length)))) {
+      await evaluateOnCdpPage(client, `(${setPromptInputValueScript.toString()})(${JSON.stringify(prompt)})`).catch(() => null);
+      await sleep(600);
+    }
+    click = await evaluateOnCdpPage(client, `(${clickSendButtonScript.toString()})()`).catch((error) => ({ ok: false, error: error.message }));
+    mode = click?.ok ? 'single-button' : 'single-enter-fallback';
+    if (!click?.ok) {
+      await appendAppLog(null, { source: 'main', kind: 'running', text: `chatgptSendRecovery: single send blocked attempt=${attempt}/${CHATGPT_UI_RECOVERY_SEND_RETRY_LIMIT} reason=${click?.error || 'unknown'}`, details: { sceneId: context.sceneId || '', attempt, click } });
+      await client.Input.dispatchKeyEvent({ type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 }).catch(() => null);
+      await client.Input.dispatchKeyEvent({ type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 }).catch(() => null);
+    }
+    acknowledged = await waitForPromptSendAcknowledged(client, context.beforeCount || 0, attempt === 1 ? 9000 : 6500);
+    if (acknowledged?.ok) {
+      const trulyStarted = Boolean(
+        acknowledged.generating ||
+        acknowledged.assistantAdvanced ||
+        acknowledged.lastAssistant?.generating ||
+        Number(acknowledged.lastAssistant?.count || 0) > Number(context.beforeCount || 0)
+      );
+
+      if (trulyStarted) {
+        return {
+          ok: true,
+          mode,
+          selector: focused.selector,
+          send: click?.selector || click?.error || mode,
+          acknowledged,
+          recoveryAttempts: attempt - 1,
+        };
+      }
+
+      await appendAppLog(null, {
+        source: 'main',
+        kind: 'running',
+        text: `motionPromptSend: send not truly acknowledged for scene ${context.sceneId || ''}; retrying immediately.`,
+        details: {
+          sceneId: context.sceneId || '',
+          attempt,
+          acknowledged,
+          reason: 'composer-cleared-but-no-new-assistant-and-no-generation',
+        },
+      }).catch(() => null);
+
+      acknowledged = {
+        ok: false,
+        error: 'Composer cleared, but ChatGPT did not start a new assistant response.',
+        previous: acknowledged,
+      };
+    }
+    await recoverChatGptBlockingUi(client, { ...context, stage: 'single-ack-failed', attempt, reason: acknowledged?.error || '' }).catch(() => null);
+    await evaluateOnCdpPage(client, `(${focusPromptInputScript.toString()})()`).catch(() => null);
+    await evaluateOnCdpPage(client, `(${setPromptInputValueScript.toString()})(${JSON.stringify(prompt)})`).catch(() => null);
+    await sleep(700);
   }
-  const acknowledged = await waitForPromptSendAcknowledged(client, context.beforeCount || 0, 15000);
-  if (!acknowledged?.ok) {
-    return { ok: false, error: acknowledged?.error || 'Prompt paste detected, but ChatGPT did not start response.', selector: focused.selector, send: click?.selector || click?.error || mode, acknowledged };
-  }
-  return { ok: true, mode, selector: focused.selector, send: click?.selector || click?.error || mode, acknowledged };
+  return { ok: false, error: acknowledged?.error || 'Prompt paste detected, but ChatGPT did not start response.', selector: focused.selector, send: click?.selector || click?.error || mode, acknowledged };
 }
 
 async function waitForCdpAssistantResponse(client, beforeCount) {
@@ -3471,7 +5164,7 @@ async function waitForCdpAssistantResponse(client, beforeCount) {
         stableTicks = 0;
         lastText = text;
       }
-      if (stableTicks >= 2 && !snapshot.generating) {
+      if (stableTicks >= 3 && !snapshot.generating) {
         await client.close();
         return text;
       }
@@ -3515,6 +5208,21 @@ function sanitizeChatGptImageSnapshot(snapshot = {}) {
 
 async function saveChatGPTGeneratedImageAsset(client, options = {}) {
   const imageAsset = await waitForLatestChatGPTGeneratedImage(client, options);
+  if (isChatGptDotLoadingCanvasAsset(imageAsset)) {
+    await appendAppLog(null, {
+      source: 'main',
+      kind: 'error',
+      text: `Scene ${((typeof options !== 'undefined' && options?.sceneId) || (typeof context !== 'undefined' && context?.sceneId) || '')}: không lưu keyframe vì ảnh lấy được vẫn là canvas loading/chấm chấm.`,
+      details: {
+        method: imageAsset?.method,
+        sourceKind: imageAsset?.sourceKind,
+        width: imageAsset?.width,
+        height: imageAsset?.height,
+        byteLength: imageAsset?.byteLength,
+      },
+    }).catch(() => null);
+    throw new Error('ChatGPT image is still loading/dot canvas; wait for final generated image before saving.');
+  }
   const sourceBuffer = Buffer.from(imageAsset.base64 || '', 'base64');
   const decoded = decodeImageBufferToPng(sourceBuffer, imageAsset.contentType);
   await fs.mkdir(path.dirname(options.outputPath), { recursive: true });
@@ -3523,7 +5231,7 @@ async function saveChatGPTGeneratedImageAsset(client, options = {}) {
   await appendAppLog(null, {
     source: 'main',
     kind: 'ok',
-    text: `Scene ${options.sceneId || ''}: saved ChatGPT keyframe from generated image asset.`,
+    text: `Scene ${((typeof options !== 'undefined' && options?.sceneId) || (typeof context !== 'undefined' && context?.sceneId) || '')}: saved ChatGPT keyframe from generated image asset.`,
     details: {
       outputPath: options.outputPath,
       width: validation.width,
@@ -3538,13 +5246,454 @@ async function saveChatGPTGeneratedImageAsset(client, options = {}) {
   return { ok: true, imagePath: options.outputPath, ...validation };
 }
 
+
+function isLikelyChatGptLoadingPlaceholderImage(asset = {}) {
+  const method = String(asset.method || '').toLowerCase();
+  const sourceKind = String(asset.sourceKind || '').toLowerCase();
+  const width = Number(asset.width || 0);
+  const height = Number(asset.height || 0);
+  const byteLength = Number(asset.byteLength || 0);
+
+  // ChatGPT loading/placeholder thường là canvas vuông 600x600, byte rất nhỏ,
+  // nhìn như chấm chấm, không phải ảnh kết quả thật.
+  if (method === 'canvas' && width <= 700 && height <= 700 && byteLength < 120000) return true;
+
+  // Canvas thật có thể tồn tại, nhưng phải đủ lớn/dày dữ liệu.
+  if (method === 'canvas' && sourceKind === 'canvas' && byteLength < 180000) return true;
+
+  return false;
+}
+
+function isPreferredChatGptRealImageAsset(asset = {}) {
+  const method = String(asset.method || '').toLowerCase();
+  const sourceKind = String(asset.sourceKind || '').toLowerCase();
+  const width = Number(asset.width || 0);
+  const height = Number(asset.height || 0);
+  const byteLength = Number(asset.byteLength || 0);
+
+  if (isLikelyChatGptLoadingPlaceholderImage(asset)) return false;
+
+  // Ưu tiên ảnh thật từ URL/backend.
+  if (method === 'img' && (sourceKind.includes('remote') || sourceKind.includes('url')) && width >= 512 && height >= 512 && byteLength >= 120000) {
+    return true;
+  }
+
+  // Canvas chỉ nhận khi đủ lớn và đủ byte.
+  if (method === 'canvas' && width >= 768 && height >= 768 && byteLength >= 250000) {
+    return true;
+  }
+
+  return false;
+}
+
+
+
+
+function isChatGptDotLoadingCanvasAsset(asset = {}) {
+  const method = String(asset.method || '').toLowerCase();
+  const sourceKind = String(asset.sourceKind || '').toLowerCase();
+  const width = Number(asset.width || 0);
+  const height = Number(asset.height || 0);
+  const byteLength = Number(asset.byteLength || 0);
+  return method === 'canvas' && sourceKind === 'canvas' && width <= 700 && height <= 700 && byteLength < 150000;
+}
+
+
+function isFalseChatGptImageGeneratingState(state = {}) {
+  return Boolean(
+    state.generating &&
+    !state.preparingImage &&
+    !state.stopButtonVisible &&
+    !state.stopButton &&
+    !state.sendReady &&
+    !state.composerBusy &&
+    !String(state.sendText || '').trim()
+  );
+}
+
+
+/* VIDORA_CHATGPT_INPUT_GATE_REAL */
+async function vidoraReadChatGptComposerStateReal(client, context = {}) {
+  if (!client) return { ok: false, error: 'chatgpt-input-gate-no-cdp-target', context };
+  return await evaluateOnCdpPage(client, `(() => {
+    const norm = (v) => String(v || '').trim();
+
+    const composer =
+      document.querySelector('#prompt-textarea') ||
+      document.querySelector('textarea') ||
+      document.querySelector('[contenteditable="true"]');
+
+    const composerText = norm(
+      composer?.value ||
+      composer?.innerText ||
+      composer?.textContent ||
+      ''
+    );
+
+    const buttons = [...document.querySelectorAll('button')].map((button) => {
+      const r = button.getBoundingClientRect();
+      const label = [
+        button.getAttribute('aria-label'),
+        button.getAttribute('data-testid'),
+        button.id,
+        button.innerText,
+        button.textContent
+      ].map(norm).filter(Boolean).join(' | ');
+
+      return {
+        label,
+        id: button.id || '',
+        testid: button.getAttribute('data-testid') || '',
+        aria: button.getAttribute('aria-label') || '',
+        disabled: Boolean(button.disabled || button.getAttribute('aria-disabled') === 'true'),
+        visible: r.width > 8 && r.height > 8,
+        rect: { x: r.x, y: r.y, w: r.width, h: r.height },
+      };
+    });
+
+    const stopButton = buttons.find((b) => {
+      const t = b.label.toLowerCase();
+      return b.visible && (t.includes('stop') || t.includes('dừng'));
+    });
+
+    const sendCandidates = buttons.filter((b) => {
+      const t = b.label.toLowerCase();
+
+      if (!b.visible || b.disabled) return false;
+
+      // CẤM click nhầm mấy nút mode/tool.
+      if (
+        t.includes('viết hoặc') ||
+        t.includes('hỉnh sửa') ||
+        t.includes('chỉnh sửa') ||
+        t.includes('tạo ảnh') ||
+        t.includes('tra cứu') ||
+        t.includes('voice') ||
+        t.includes('micro')
+      ) return false;
+
+      return (
+        b.id === 'composer-submit-button' ||
+        b.testid === 'send-button' ||
+        t.includes('send-button') ||
+        t.includes('composer-submit') ||
+        t.includes('gửi lời nhắc') ||
+        t === 'send' ||
+        t === 'gửi'
+      );
+    });
+
+    const sendButton = sendCandidates
+      .sort((a, b) => (b.rect.y - a.rect.y) || (b.rect.x - a.rect.x))[0] || null;
+
+    const assistantRoots = [
+      ...document.querySelectorAll('[data-message-author-role="assistant"]'),
+      ...document.querySelectorAll('article')
+    ].filter((el) => {
+      const r = el.getBoundingClientRect();
+      const txt = norm(el.innerText || el.textContent);
+      return r.width > 50 && r.height > 20 && txt.length > 0;
+    });
+
+    return {
+      ok: true,
+      url: location.href,
+      path: location.pathname,
+      title: document.title,
+      composerFound: Boolean(composer),
+      composerTextLength: composerText.length,
+      composerTextHead: composerText.slice(0, 900),
+      composerHasText: composerText.length > 5,
+      composerHasPrompt: /SCENE\s*0?\d+|NHIỆM VỤ|TẠO ẢNH|Create exactly one image|Dựa trên ảnh keyframe|MOTION PROMPT|NỘI DUNG CHUYỂN ĐỘNG/i.test(composerText),
+      stopVisible: Boolean(stopButton),
+      sendReady: Boolean(sendButton),
+      sendButton,
+      sendCandidates: sendCandidates.slice(-10),
+      assistantRootCount: assistantRoots.length,
+      latestAssistantText: assistantRoots.length ? norm(assistantRoots[assistantRoots.length - 1].innerText || assistantRoots[assistantRoots.length - 1].textContent).slice(0, 900) : '',
+      buttonTail: buttons.slice(-18),
+    };
+  })()`).catch((error) => ({
+    ok: false,
+    error: error.message,
+    context,
+  }));
+}
+
+async function vidoraClickChatGptRealSendButton(client, state) {
+  if (!client) return { ok: false, error: 'chatgpt-input-gate-no-cdp-target', state };
+  const rect = state?.sendButton?.rect;
+  if (!rect) return { ok: false, error: 'send-button-not-found', state };
+
+  const x = Math.round(rect.x + rect.w / 2);
+  const y = Math.round(rect.y + rect.h / 2);
+
+  await client.Input.dispatchMouseEvent({ type: 'mouseMoved', x, y, button: 'none' }).catch(() => null);
+  await sleep(120);
+  await client.Input.dispatchMouseEvent({ type: 'mousePressed', x, y, button: 'left', clickCount: 1 }).catch(() => null);
+  await sleep(90);
+  await client.Input.dispatchMouseEvent({ type: 'mouseReleased', x, y, button: 'left', clickCount: 1 }).catch(() => null);
+
+  return { ok: true, x, y, sendButton: state.sendButton };
+}
+
+async function vidoraChatGptInputGate(client, context = {}) {
+  let state = await vidoraReadChatGptComposerStateReal((typeof client !== 'undefined' ? client : (typeof page !== 'undefined' ? page : null)), context);
+
+  await appendAppLog(null, {
+    source: 'main',
+    kind: 'running',
+    text: 'ChatGPT INPUT GATE: check khung input trước khi chuyển bước.',
+    details: { context, state },
+  }).catch(() => null);
+
+  if (!state?.ok) {
+    throw new Error(`chatgpt-input-gate-read-failed: ${state?.error || 'unknown'}`);
+  }
+
+  // Đang có nút Stop => đã gửi thật và ChatGPT đang chạy.
+  if (state.stopVisible) {
+    return { ok: true, mode: 'stop-visible-running', state };
+  }
+
+  // Input trống + có assistant message => có thể chuyển bước.
+  if (!state.composerHasText && state.assistantRootCount > 0) {
+    return { ok: true, mode: 'input-empty-assistant-exists', state };
+  }
+
+  // Input trống nhưng chưa có assistant message:
+  // - Sau khi đã vào /c/... và đang ở bước final settle/extract thì đây là case hợp lệ:
+  //   ChatGPT tạo ảnh dạng image-card không có assistant text rõ ràng.
+  // - Chỉ chặn sớm ở root "/" hoặc trước khi có hội thoại thật.
+  if (!state.composerHasText && state.assistantRootCount === 0) {
+    const path = String(state.path || '');
+    const stage = String(context?.stage || '');
+
+    if (
+      path.includes('/c/') &&
+      !state.stopVisible &&
+      (
+        stage.includes('before-final-image-settle') ||
+        stage.includes('before-image-extract-wait') ||
+        stage.includes('after-nv1-sentImage-log')
+      )
+    ) {
+      await appendAppLog(null, {
+        source: 'main',
+        kind: 'ok',
+        text: 'ChatGPT INPUT GATE: input trống + URL /c/...; cho phép tiếp tục extract ảnh dù assistantRootCount=0.',
+        details: { context, state },
+      }).catch(() => null);
+
+      return { ok: true, mode: 'empty-input-conversation-url-allow-extract', state };
+    }
+
+    await appendAppLog(null, {
+      source: 'main',
+      kind: 'error',
+      text: 'ChatGPT INPUT GATE FAIL: input trống nhưng chưa có assistant message mới; không được chờ ảnh/NV2.',
+      details: { context, state },
+    }).catch(() => null);
+
+    throw new Error('chatgpt-input-empty-but-no-assistant-message');
+  }
+
+  // Còn chữ trong input => chưa gửi hoặc gửi lỗi. Retry send thật.
+  if (state.composerHasText) {
+    await appendAppLog(null, {
+      source: 'main',
+      kind: 'error',
+      text: 'ChatGPT INPUT GATE: input còn nội dung => prompt chưa gửi hoặc gửi lỗi. Retry nút gửi thật.',
+      details: { context, state },
+    }).catch(() => null);
+
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      state = await vidoraReadChatGptComposerStateReal((typeof client !== 'undefined' ? client : (typeof page !== 'undefined' ? page : null)), { ...context, attempt });
+      const click = await vidoraClickChatGptRealSendButton((typeof client !== 'undefined' ? client : (typeof page !== 'undefined' ? page : null)), state);
+
+      await sleep(1800);
+
+      const after = await vidoraReadChatGptComposerStateReal((typeof client !== 'undefined' ? client : (typeof page !== 'undefined' ? page : null)), { ...context, attempt, afterClick: true });
+
+      await appendAppLog(null, {
+        source: 'main',
+        kind: (!after.composerHasText || after.stopVisible) ? 'ok' : 'error',
+        text: (!after.composerHasText || after.stopVisible)
+          ? `ChatGPT INPUT GATE: retry ${attempt} gửi được; input đã trống hoặc ChatGPT đang chạy.`
+          : `ChatGPT INPUT GATE: retry ${attempt} vẫn chưa gửi; input còn nội dung.`,
+        details: { context, attempt, click, after },
+      }).catch(() => null);
+
+      if (after.stopVisible) {
+        return { ok: true, mode: 'running-after-retry', attempt, after };
+      }
+
+      if (!after.composerHasText && after.assistantRootCount > 0) {
+        return { ok: true, mode: 'input-empty-after-retry', attempt, after };
+      }
+
+      if (!after.composerHasText && after.assistantRootCount === 0) {
+        await sleep(2500);
+        const later = await vidoraReadChatGptComposerStateReal((typeof client !== 'undefined' ? client : (typeof page !== 'undefined' ? page : null)), { ...context, attempt, later: true });
+        if (later.stopVisible || later.assistantRootCount > 0) {
+          return { ok: true, mode: 'later-after-retry', attempt, later };
+        }
+      }
+    }
+
+    const finalState = await vidoraReadChatGptComposerStateReal((typeof client !== 'undefined' ? client : (typeof page !== 'undefined' ? page : null)), { ...context, final: true });
+
+    await appendAppLog(null, {
+      source: 'main',
+      kind: 'error',
+      text: 'ChatGPT INPUT GATE FAIL: input vẫn còn nội dung sau 3 lần retry. Dừng để tránh chạy sai.',
+      details: { context, finalState },
+    }).catch(() => null);
+
+    throw new Error('chatgpt-input-still-has-text-after-retries');
+  }
+
+  return { ok: true, mode: 'safe-fallback', state };
+}
+
+async function vidoraClearChatGptInputBeforePaste(client, context = {}) {
+  const state = await vidoraReadChatGptComposerStateReal((typeof client !== 'undefined' ? client : (typeof page !== 'undefined' ? page : null)), context);
+  if (!state?.ok || !state.composerHasText) return { ok: true, skipped: true, state };
+
+  await appendAppLog(null, {
+    source: 'main',
+    kind: 'running',
+    text: 'ChatGPT INPUT GATE: trước khi paste prompt mới, input đang có nội dung cũ; xóa sạch.',
+    details: { context, state },
+  }).catch(() => null);
+
+  const cleared = await evaluateOnCdpPage(client, `(() => {
+    const composer =
+      document.querySelector('#prompt-textarea') ||
+      document.querySelector('textarea') ||
+      document.querySelector('[contenteditable="true"]');
+
+    if (!composer) return { ok: false, error: 'composer-not-found' };
+
+    composer.focus();
+
+    if ('value' in composer) {
+      composer.value = '';
+      composer.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContentBackward' }));
+      composer.dispatchEvent(new Event('change', { bubbles: true }));
+    } else {
+      composer.textContent = '';
+      composer.innerHTML = '';
+      composer.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContentBackward' }));
+    }
+
+    const after = String(composer.value || composer.innerText || composer.textContent || '').trim();
+
+    return {
+      ok: after.length === 0,
+      afterLength: after.length,
+      afterHead: after.slice(0, 300),
+    };
+  })()`).catch((error) => ({ ok: false, error: error.message }));
+
+  await appendAppLog(null, {
+    source: 'main',
+    kind: cleared?.ok ? 'ok' : 'error',
+    text: cleared?.ok
+      ? 'ChatGPT INPUT GATE: đã xóa sạch input cũ.'
+      : 'ChatGPT INPUT GATE: xóa input cũ thất bại.',
+    details: { context, cleared },
+  }).catch(() => null);
+
+  return cleared;
+}
+
+async function waitForChatGptImageGenerationDoneBeforeExtract(client, options = {}) {
+  const sceneId = ((typeof options !== 'undefined' && options?.sceneId) || (typeof context !== 'undefined' && context?.sceneId) || '');
+  const startedAt = Date.now();
+  let lastBusyLogAt = 0;
+  let firstIdleAt = 0;
+
+  while (Date.now() - startedAt < 360000) {
+    const imageState = await evaluateOnCdpPage(
+      client,
+      `(${readChatGptImageStateScript.toString()})()`
+    ).catch((error) => ({ ok: false, generating: true, error: error.message }));
+
+    const activeGeneration = await evaluateOnCdpPage(
+      client,
+      `(${detectChatGptActiveGenerationScriptStrict.toString()})()`
+    ).catch((error) => ({ ok: false, generating: true, error: error.message }));
+
+    const busy = Boolean(
+      imageState?.generating ||
+      imageState?.preparingImage ||
+      imageState?.stopButtonVisible ||
+      imageState?.stopVisible ||
+      imageState?.composerBusy ||
+      imageState?.streamingIndicator
+    );
+
+    if (!busy) {
+      if (!firstIdleAt) {
+        firstIdleAt = Date.now();
+        // HOOK_INPUT_GATE_BEFORE_FINAL_SETTLE_REAL
+      await vidoraChatGptInputGate((typeof client !== 'undefined' ? client : (typeof page !== 'undefined' ? page : null)), {
+        sceneId: ((typeof options !== 'undefined' && options?.sceneId) || (typeof context !== 'undefined' && context?.sceneId) || ''),
+        stage: 'before-final-image-settle',
+      });
+
+await appendAppLog(null, {
+          source: 'main',
+          kind: 'running',
+          text: `Scene ${((typeof options !== 'undefined' && options?.sceneId) || (typeof context !== 'undefined' && context?.sceneId) || '')}: ChatGPT stop button gone; waiting 4s for final image to settle before extract.`,
+          details: {
+            imageState: sanitizeChatGptImageSnapshot(imageState),
+            activeGeneration,
+          },
+        }).catch(() => null);
+      }
+
+      if (Date.now() - firstIdleAt >= 4000) {
+        return {
+          ok: true,
+          idleMs: Date.now() - firstIdleAt,
+          waitedMs: Date.now() - startedAt,
+          imageState: sanitizeChatGptImageSnapshot(imageState),
+          activeGeneration,
+        };
+      }
+    } else {
+      firstIdleAt = 0;
+      if (Date.now() - lastBusyLogAt > 10000) {
+        lastBusyLogAt = Date.now();
+        await appendAppLog(null, {
+          source: 'main',
+          kind: 'running',
+          text: `Scene ${sceneId}: ChatGPT còn dấu hiệu đang tạo ảnh; chưa extract keyframe.`,
+          details: {
+            imageState: sanitizeChatGptImageSnapshot(imageState),
+            activeGeneration,
+          },
+        }).catch(() => null);
+      }
+    }
+
+    await sleep(1500);
+  }
+
+  throw new Error(`Scene ${sceneId}: Hết thời gian chờ ChatGPT hoàn tất ảnh trước khi extract.`);
+}
+
+
 async function waitForLatestChatGPTGeneratedImage(client, options = {}) {
   const known = new Set(options.existingUrls || []);
-  const maxAttempts = 3;
   const realStallMs = 120000;
   const minAssistantRootIndex = Number(options.minAssistantRootIndex || 0);
   let lastSnapshot = null;
-  let lastExtract = null;
+  
+    let falseGeneratingTicks = 0;
+let lastExtract = null;
   let lastSignature = '';
   let stableTicks = 0;
   let lastDiagnostic = null;
@@ -3552,10 +5701,10 @@ async function waitForLatestChatGPTGeneratedImage(client, options = {}) {
   await appendAppLog(null, {
     source: 'main',
     kind: 'running',
-    text: `chatgptImageExtract: waiting for latest assistant image for scene ${options.sceneId || ''}`,
+    text: `chatgptImageExtract: waiting for latest assistant image for scene ${((typeof options !== 'undefined' && options?.sceneId) || (typeof context !== 'undefined' && context?.sceneId) || '')}`,
     details: { minAssistantRootIndex, existingUrlCount: known.size },
   });
-  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+  for (let attempt = 1; ; attempt += 1) {
     const attemptStartedAt = Date.now();
     let sawGenerating = false;
     let readyTicks = 0;
@@ -3563,27 +5712,35 @@ async function waitForLatestChatGPTGeneratedImage(client, options = {}) {
     const resendImagePrompt = async (reason, snapshot) => {
       const safeSnapshot = sanitizeChatGptImageSnapshot(snapshot);
       await fs.writeFile(
-        path.join(options.sceneDir, `scene_${String(options.sceneId).padStart(3, '0')}_chatgpt_image_retry_${attempt}_${reason}.json`),
+        path.join(options.sceneDir, `scene_${String(((typeof options !== 'undefined' && options?.sceneId) || (typeof context !== 'undefined' && context?.sceneId) || '')).padStart(3, '0')}_chatgpt_image_retry_${attempt}_${reason}.json`),
         JSON.stringify({ reason, snapshot: safeSnapshot, attempt, elapsedMs: Date.now() - attemptStartedAt }, null, 2),
         'utf8',
       ).catch(() => null);
-      await notifyRenderer('chatgpt-image-retry', `Scene ${options.sceneId}: ChatGPT image not ready (${reason}); retrying NV1.`, { sceneId: options.sceneId, attempt, reason });
-      if (attempt >= maxAttempts) {
-        throw new Error(`ChatGPT did not return a usable generated image asset after ${maxAttempts} NV1 attempts (${reason}).`);
-      }
+      await notifyRenderer('chatgpt-image-retry', `Scene ${((typeof options !== 'undefined' && options?.sceneId) || (typeof context !== 'undefined' && context?.sceneId) || '')}: ChatGPT image not ready (${reason}); retrying NV1 continuously.`, { sceneId: ((typeof options !== 'undefined' && options?.sceneId) || (typeof context !== 'undefined' && context?.sceneId) || ''), attempt, reason });
       const stopped = await evaluateOnCdpPage(client, `(${clickChatGptStopGeneratingScript.toString()})()`).catch((error) => ({ ok: false, error: error.message }));
-      await appendAppLog(null, { source: 'main', kind: stopped?.ok ? 'running' : 'error', text: `Scene ${options.sceneId}: ChatGPT stop before image retry (${reason}): ${stopped?.ok ? stopped.mode : stopped?.error || 'not-found'}`, details: stopped });
+      await appendAppLog(null, { source: 'main', kind: stopped?.ok ? 'running' : 'error', text: `Scene ${((typeof options !== 'undefined' && options?.sceneId) || (typeof context !== 'undefined' && context?.sceneId) || '')}: ChatGPT stop before image retry (${reason}): ${stopped?.ok ? stopped.mode : stopped?.error || 'not-found'}`, details: stopped });
       await sleep(1200);
       const retryPrompt = `${options.prompt}\n\nRETRY ${attempt + 1}: Previous response did not produce a complete usable image asset. Generate exactly one image in this chat now. Do not answer with text only.`;
       await evaluateOnCdpPage(client, `(${prepareChatGptCreateImageScript.toString()})()`).catch(() => null);
       await sleep(800);
       const resent = await sendPromptViaCdpInput(client, retryPrompt);
       if (!resent.ok) throw new Error(resent.error || 'KhÃ´ng gá»­i láº¡i Ä‘Æ°á»£c image prompt vÃ o ChatGPT.');
-      await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${options.sceneId}: resent image prompt attempt ${attempt + 1}/${maxAttempts}.`, details: { resent } });
+      await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${((typeof options !== 'undefined' && options?.sceneId) || (typeof context !== 'undefined' && context?.sceneId) || '')}: resent image prompt continuous attempt ${attempt + 1}.`, details: { resent } });
     };
 
     while (Date.now() - attemptStartedAt < 360000) {
-      await sleep(3000);
+      
+      await waitForChatGptImageGenerationDoneBeforeExtract(client, options);
+await sleep(3000);
+      await recoverCdpPageIfCrashed(client, 'chatgpt', `image-wait-scene-${((typeof options !== 'undefined' && options?.sceneId) || (typeof context !== 'undefined' && context?.sceneId) || '')}`).catch(() => null);
+      await recoverChatGptBlockingUi(client, { sceneId: ((typeof options !== 'undefined' && options?.sceneId) || (typeof context !== 'undefined' && context?.sceneId) || ''), stage: 'image-wait-before-extract' }).catch(() => null);
+
+// HOOK_INPUT_GATE_BEFORE_IMAGE_EXTRACT_REAL
+  await vidoraChatGptInputGate((typeof client !== 'undefined' ? client : (typeof page !== 'undefined' ? page : null)), {
+    sceneId: ((typeof options !== 'undefined' && options?.sceneId) || (typeof context !== 'undefined' && context?.sceneId) || ''),
+    stage: 'before-image-extract-wait',
+  });
+
       const extracted = await extractLatestChatGPTGeneratedImageBytes(client, {
         existingUrls: [...known],
         minAssistantRootIndex,
@@ -3593,6 +5750,31 @@ async function waitForLatestChatGPTGeneratedImage(client, options = {}) {
 
       const snapshot = await evaluateOnCdpPage(client, `(${readChatGptImageStateScript.toString()})()`);
       lastSnapshot = snapshot;
+
+      // false-generating-empty-chat-break
+      if (isFalseChatGptImageGeneratingState(snapshot)) {
+        falseGeneratingTicks = (typeof falseGeneratingTicks === 'number' ? falseGeneratingTicks : 0) + 1;
+
+        await appendAppLog(null, {
+          source: 'main',
+          kind: 'running',
+          text: `Scene ${((typeof options !== 'undefined' && options?.sceneId) || (typeof context !== 'undefined' && context?.sceneId) || '')}: ChatGPT image generating looks stale/empty; tick ${falseGeneratingTicks}/3.`,
+          details: vidoraCompactLogDetails({ imageState: snapshot }),
+        }).catch(() => null);
+
+        if (falseGeneratingTicks >= 3) {
+          await appendAppLog(null, {
+            source: 'main',
+            kind: 'error',
+            text: `Scene ${((typeof options !== 'undefined' && options?.sceneId) || (typeof context !== 'undefined' && context?.sceneId) || '')}: ChatGPT không thực sự tạo ảnh; thoát vòng chờ để retry gửi NV1.`,
+            details: { imageState: snapshot, reason: 'false-generating-empty-chat' },
+          }).catch(() => null);
+
+          throw new Error('false-generating-empty-chat: ChatGPT page is idle/empty but detector says generating.');
+        }
+      } else {
+        falseGeneratingTicks = 0;
+      }
       if (snapshot?.loggedOut) throw new Error(loginRequiredMessage('chatgpt', snapshot.logoutReason || 'ChatGPT logged out while waiting for NV1 image'));
       const activeGeneration = isChatGptActivelyGenerating(snapshot);
       const hasNewAssistantAfterPrompt = Number(snapshot?.assistantCount || 0) > minAssistantRootIndex;
@@ -3602,7 +5784,7 @@ async function waitForLatestChatGPTGeneratedImage(client, options = {}) {
         ? await tryExtractChatGptNetworkImage(client, options.networkCapture).catch((error) => ({ ok: false, mode: 'network-error', error: error.message }))
         : null;
       const screenshotExtract = !activeGeneration && !extracted?.ok && !networkExtract?.ok && extracted?.screenshotCandidate
-        ? await captureChatGptImageElementScreenshot(client, extracted.screenshotCandidate, { sceneId: options.sceneId }).catch((error) => ({ ok: false, mode: 'element-screenshot-error', error: error.message }))
+        ? await captureChatGptImageElementScreenshot(client, extracted.screenshotCandidate, { sceneId: ((typeof options !== 'undefined' && options?.sceneId) || (typeof context !== 'undefined' && context?.sceneId) || '') }).catch((error) => ({ ok: false, mode: 'element-screenshot-error', error: error.message }))
         : null;
       const chosen = extracted?.ok ? extracted : networkExtract?.ok ? networkExtract : screenshotExtract?.ok ? screenshotExtract : null;
       const readiness = classifyChatGptImageReadiness({
@@ -3622,7 +5804,7 @@ async function waitForLatestChatGPTGeneratedImage(client, options = {}) {
         }
         await appendAppLog(null, {
           source: 'main',
-          kind: stableTicks >= 2 ? 'ok' : 'running',
+          kind: stableTicks >= 3 ? 'ok' : 'running',
           text: `chatgptImageExtract: found candidate type=${chosen.method || chosen.sourceKind || 'image'} stable=${stableTicks}/2`,
           details: {
             method: chosen.method || '',
@@ -3635,19 +5817,19 @@ async function waitForLatestChatGPTGeneratedImage(client, options = {}) {
             readinessState: readiness.state,
           },
         });
-        if (stableTicks >= 2) {
+        if (stableTicks >= 3) {
           if (readiness.visibleCandidate) {
             await appendAppLog(null, {
               source: 'main',
               kind: 'ok',
               text: 'chatgptImageExtract: visible image detected; suppressing thinking-stall',
-              details: { sceneId: options.sceneId || '', readinessState: readiness.state, activeGeneration: readiness.activeGeneration },
+              details: { sceneId: ((typeof options !== 'undefined' && options?.sceneId) || (typeof context !== 'undefined' && context?.sceneId) || ''), readinessState: readiness.state, activeGeneration: readiness.activeGeneration },
             });
           }
           await appendAppLog(null, {
             source: 'main',
             kind: 'ok',
-            text: `chatgptImageExtract: saved image via method=${chosen.method || chosen.sourceKind || 'unknown'} for scene ${options.sceneId || ''}`,
+            text: `chatgptImageExtract: saved image via method=${chosen.method || chosen.sourceKind || 'unknown'} for scene ${((typeof options !== 'undefined' && options?.sceneId) || (typeof context !== 'undefined' && context?.sceneId) || '')}`,
             details: { width: chosen.width || 0, height: chosen.height || 0, byteLength: chosen.byteLength || 0, rootIndex: chosen.rootIndex },
           });
           return chosen;
@@ -3664,7 +5846,7 @@ async function waitForLatestChatGPTGeneratedImage(client, options = {}) {
             kind: 'running',
             text: 'chatgptImageExtract: visible image detected; suppressing thinking-stall',
             details: {
-              sceneId: options.sceneId || '',
+              sceneId: ((typeof options !== 'undefined' && options?.sceneId) || (typeof context !== 'undefined' && context?.sceneId) || ''),
               readinessState: readiness.state,
               diagnostic: { ...(lastDiagnostic || {}), reasonSelected: readiness.state },
               extractMode: extracted?.mode || '',
@@ -3678,7 +5860,7 @@ async function waitForLatestChatGPTGeneratedImage(client, options = {}) {
             kind: 'error',
             text: 'chatgptImageExtract: image visible but extraction failed',
             details: {
-              sceneId: options.sceneId || '',
+              sceneId: ((typeof options !== 'undefined' && options?.sceneId) || (typeof context !== 'undefined' && context?.sceneId) || ''),
               rejected: extracted?.diagnostics?.rejected?.slice?.(0, 8) || [],
               imageCandidates: extracted?.diagnostics?.imageCandidates?.slice?.(0, 8) || [],
               networkCandidates: options.networkCapture?.summary?.() || [],
@@ -3695,7 +5877,7 @@ async function waitForLatestChatGPTGeneratedImage(client, options = {}) {
           await appendAppLog(null, {
             source: 'main',
             kind: 'running',
-            text: `Scene ${options.sceneId}: waiting for ChatGPT generated image asset (${snapshot?.preparingImage ? 'preparing-image' : 'thinking'}).`,
+            text: `Scene ${((typeof options !== 'undefined' && options?.sceneId) || (typeof context !== 'undefined' && context?.sceneId) || '')}: waiting for ChatGPT generated image asset (${snapshot?.preparingImage ? 'preparing-image' : 'thinking'}).`,
             details: {
               mode: snapshot?.assistantMode,
               urls: snapshot?.urls?.length || 0,
@@ -3726,7 +5908,7 @@ async function waitForLatestChatGPTGeneratedImage(client, options = {}) {
           kind: 'running',
           text: `chatgptImageExtract: candidate rejected reason=${extracted?.mode || networkExtract?.mode || screenshotExtract?.mode || 'not-ready'}`,
           details: {
-            sceneId: options.sceneId || '',
+            sceneId: ((typeof options !== 'undefined' && options?.sceneId) || (typeof context !== 'undefined' && context?.sceneId) || ''),
             diagnostic: { ...(lastDiagnostic || {}), reasonSelected: readiness.state },
             network: networkExtract,
             screenshot: screenshotExtract,
@@ -3744,17 +5926,16 @@ async function waitForLatestChatGPTGeneratedImage(client, options = {}) {
         break;
       }
     }
-    if (attempt >= maxAttempts) break;
   }
   await fs.writeFile(
-    path.join(options.sceneDir, `scene_${String(options.sceneId).padStart(3, '0')}_chatgpt_image_wait_failed.json`),
+    path.join(options.sceneDir, `scene_${String(((typeof options !== 'undefined' && options?.sceneId) || (typeof context !== 'undefined' && context?.sceneId) || '')).padStart(3, '0')}_chatgpt_image_wait_failed.json`),
     JSON.stringify({ lastSnapshot: sanitizeChatGptImageSnapshot(lastSnapshot), lastExtract, readiness: { ...lastReadiness, state: 'timeout' }, diagnostic: { ...(lastDiagnostic || {}), reasonSelected: 'timeout' }, networkCandidates: options.networkCapture?.summary?.() || [], existingUrlCount: known.size }, null, 2),
     'utf8',
   ).catch(() => null);
   await appendAppLog(null, {
     source: 'main',
     kind: 'error',
-    text: `chatgptImageExtract: diagnostic summary for scene ${options.sceneId || ''}`,
+    text: `chatgptImageExtract: diagnostic summary for scene ${((typeof options !== 'undefined' && options?.sceneId) || (typeof context !== 'undefined' && context?.sceneId) || '')}`,
     details: { readiness: { ...lastReadiness, state: 'timeout' }, diagnostic: { ...(lastDiagnostic || {}), reasonSelected: 'timeout' }, lastExtract, lastSnapshot: sanitizeChatGptImageSnapshot(lastSnapshot), networkCandidates: options.networkCapture?.summary?.() || [] },
   });
   throw new Error('Timed out waiting for a complete ChatGPT generated image asset. Screenshot crop was not saved as keyframe.');
@@ -3858,7 +6039,7 @@ async function checkChatGptCurrentConversationTitle(page, expectedTitle = '', op
       source: 'main',
       kind: 'running',
       text: 'chatTitleCheck: using cached conversation identity',
-      details: { sceneId: options.sceneId || '', reason: options.reason || 'title-check', path: locationState.path || '', title: sanitizeChatTitleForLog(wanted) },
+      details: { sceneId: ((typeof options !== 'undefined' && options?.sceneId) || (typeof context !== 'undefined' && context?.sceneId) || ''), reason: options.reason || 'title-check', path: locationState.path || '', title: sanitizeChatTitleForLog(wanted) },
     });
     return { ok: true, cached: true, currentTitle: wanted, wanted, mode: 'cache', path: locationState.path || '' };
   }
@@ -3867,16 +6048,16 @@ async function checkChatGptCurrentConversationTitle(page, expectedTitle = '', op
       source: 'main',
       kind: 'running',
       text: `chatTitleCheck: skipped reason=rate-limit-${options.reason || 'title-check'}`,
-      details: { sceneId: options.sceneId || '', path: locationState?.path || '', title: sanitizeChatTitleForLog(wanted), lastCheckAgoMs: Date.now() - cached.lastCheckAt },
+      details: { sceneId: ((typeof options !== 'undefined' && options?.sceneId) || (typeof context !== 'undefined' && context?.sceneId) || ''), path: locationState?.path || '', title: sanitizeChatTitleForLog(wanted), lastCheckAgoMs: Date.now() - cached.lastCheckAt },
     });
     return { ok: false, skipped: true, rateLimited: true, error: 'rate-limited-title-check', path: locationState?.path || '' };
   }
-  if (options.force) await appendAppLog(null, { source: 'main', kind: 'running', text: `chatTitleCheck: forced reason=${options.reason || 'title-check'}`, details: { sceneId: options.sceneId || '', title: sanitizeChatTitleForLog(wanted) } });
+  if (options.force) await appendAppLog(null, { source: 'main', kind: 'running', text: `chatTitleCheck: forced reason=${options.reason || 'title-check'}`, details: { sceneId: ((typeof options !== 'undefined' && options?.sceneId) || (typeof context !== 'undefined' && context?.sceneId) || ''), title: sanitizeChatTitleForLog(wanted) } });
   cached.lastCheckAt = Date.now();
   const state = await evaluateOnCdpPage(page, `(() => {
     try {
       const wanted = ${JSON.stringify(wanted)};
-      const m = location.pathname.match(/\/c\/([^/?#]+)/);
+      const m = location.pathname.match(/\\/c\\/([^/?#]+)/);
       const id = m ? m[1] : '';
       const norm = (value) => String(value || '').trim().replace(/\s+/g, ' ');
       const nodes = Array.from(document.querySelectorAll('nav a, aside a, [role="navigation"] a, a[href*="/c/"], nav [role="link"], aside [role="link"], nav li, aside li, nav div, aside div'));
@@ -3901,9 +6082,9 @@ async function checkChatGptCurrentConversationTitle(page, expectedTitle = '', op
   })()`).catch((error) => ({ ok: false, error: error.message }));
   if (state?.ok) {
     updateChatGptConversationIdentity(state, wanted);
-    await appendAppLog(null, { source: 'main', kind: 'ok', text: `chatTitleCheck: verified title=${sanitizeChatTitleForLog(wanted)}`, details: { sceneId: options.sceneId || '', reason: options.reason || 'title-check', path: state.path || '' } });
+    await appendAppLog(null, { source: 'main', kind: 'ok', text: `chatTitleCheck: verified title=${sanitizeChatTitleForLog(wanted)}`, details: { sceneId: ((typeof options !== 'undefined' && options?.sceneId) || (typeof context !== 'undefined' && context?.sceneId) || ''), reason: options.reason || 'title-check', path: state.path || '' } });
   } else if (!state?.skipped) {
-    await appendAppLog(null, { source: 'main', kind: 'running', text: `chatTitleCheck: skipped reason=${state?.error || 'title-mismatch'}`, details: { sceneId: options.sceneId || '', reason: options.reason || 'title-check', path: state?.path || '', currentTitle: sanitizeChatTitleForLog(state?.currentTitle || '') } });
+    await appendAppLog(null, { source: 'main', kind: 'running', text: `chatTitleCheck: skipped reason=${state?.error || 'title-mismatch'}`, details: { sceneId: ((typeof options !== 'undefined' && options?.sceneId) || (typeof context !== 'undefined' && context?.sceneId) || ''), reason: options.reason || 'title-check', path: state?.path || '', currentTitle: sanitizeChatTitleForLog(state?.currentTitle || '') } });
   }
   return state;
 }
@@ -4043,7 +6224,7 @@ async function renameChatGptCurrentConversation(_event, title = '') {
 
 async function waitForChatGptImageOrRetry(client, existingUrls = [], prompt, sceneDir, sceneId) {
   const known = new Set(existingUrls);
-  const maxAttempts = 3;
+  const maxAttempts = Number.POSITIVE_INFINITY;
   const realStallMs = 120000;
   let lastSnapshot = null;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
@@ -4113,6 +6294,10 @@ async function waitForChatGptImageOrRetry(client, existingUrls = [], prompt, sce
         && String(snapshot?.latestAssistantText || '').length > 20
         && !/preparing image|creating image|generating image|đang tạo ảnh|thinking/i.test(String(snapshot?.latestAssistantText || ''))
         && !looksLikeCollapsedUserPrompt(snapshot?.latestAssistantText, 'image');
+      if (textOnlyAnswer && isChatGptPolicyRefusalText(snapshot?.latestAssistantText)) {
+        await notifyChatGptPolicyRefusal(sceneId, 'NV1/image', snapshot?.latestAssistantText);
+      }
+
       if (textOnlyAnswer && isChatGptLimitText(snapshot?.latestAssistantText)) {
         await notifyRenderer('chatgpt-limit-stop', `Scene ${sceneId}: ChatGPT báo limit/hạn mức. Bấm OK để tool dừng hẳn; đổi account hoặc chờ reset rồi bấm Start lại thủ công.`, { sceneId, text: snapshot?.latestAssistantText });
         throw new Error('ChatGPT bị limit/hạn mức. Tool đã dừng theo yêu cầu, không tự gửi lại.');
@@ -4145,7 +6330,7 @@ function isChatGptLimitText(text = '') {
 async function waitForNewVideoUrl(client, existingUrls = [], options = {}) {
   const known = new Set(existingUrls);
   const provider = options.provider || 'grok';
-  const sceneId = options.sceneId || '';
+  const sceneId = ((typeof options !== 'undefined' && options?.sceneId) || (typeof context !== 'undefined' && context?.sceneId) || '');
   const startedAt = Date.now();
   let retryCount = 0;
   let notifiedLimit = false;
@@ -4153,22 +6338,23 @@ async function waitForNewVideoUrl(client, existingUrls = [], options = {}) {
   while (Date.now() - startedAt < 600000) {
     await sleep(5000);
     if (provider === 'grok') {
+      const pageFailure = await evaluateOnCdpPage(client, `(${detectGrokPageFailureScript.toString()})()`).catch((error) => ({ ok: false, error: error.message }));
+      if (pageFailure?.retryable) {
+        await appendAppLog(null, { source: 'main', kind: 'error', text: `Scene ${sceneId}: Grok page/image failure detected: ${pageFailure.reason}`, details: pageFailure });
+        throw makeRetryableGrokGenerationError(pageFailure.reason || 'grok-page-failure', pageFailure);
+      }
       const grokState = await evaluateOnCdpPage(client, `(${detectGrokGenerationProblemScript.toString()})()`).catch((error) => ({ ok: false, error: error.message }));
       if (grokState?.kind === 'login-required') throw new Error(loginRequiredMessage('grok', grokState.reason || 'Grok logged out while generating video'));
       if (grokState?.kind === 'send-failed') throw new Error('grok_send_failed_external_error');
-      if (grokState?.kind === 'unable-finish' && retryCount < 3) {
-        retryCount += 1;
-        await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: Grok unable to finish replying, tự bấm Retry lần ${retryCount}/3.`, details: grokState });
-        await clickGrokRetryButton(client, grokState).catch(() => null);
-        await sleep(8000);
-        continue;
+      if (grokState?.kind === 'unable-finish') {
+        throw makeRetryableGrokGenerationError('unable-to-finish-replying', grokState);
       }
       if (grokState?.kind === 'content-policy') {
         if (!notifiedPolicy) {
           notifiedPolicy = true;
           await notifyRenderer('grok-content-policy', `Scene ${sceneId}: Grok chặn content policy. Tool sẽ tự sửa prompt an toàn hơn và gửi lại / đổi canvas mới nếu cần.`, grokState);
         }
-        if (retryCount < 3 && options.sceneDir && options.imagePath && options.motionPrompt) {
+        if (options.sceneDir && options.imagePath && options.motionPrompt) {
           retryCount += 1;
           const recovered = await recoverGrokAfterContentPolicy(client, { ...options, retryCount }).catch((error) => ({ ok: false, error: error.message }));
           await appendAppLog(null, { source: 'main', kind: recovered?.ok ? 'ok' : 'error', text: `Scene ${sceneId}: recover content policy lần ${retryCount}/3: ${recovered?.ok ? 'ok' : recovered?.error}`, details: recovered });
@@ -4178,15 +6364,33 @@ async function waitForNewVideoUrl(client, existingUrls = [], options = {}) {
         throw new Error('Grok chặn content policy sau 3 lần tự sửa prompt/đổi canvas. Cần sửa scene/prompt thủ công.');
       }
       if (grokState?.kind === 'limit') {
+        const tail = String(grokState.tailSnippet || '');
+        if (/something went wrong|failed to generate|generation failed|couldn'?t generate|unable to generate|error generating|temporarily unavailable|temporarily disabled|not available right now/i.test(tail)
+          && !/quota|usage limit|rate limit|too many requests|daily limit|monthly limit|credits|insufficient/i.test(tail)) {
+          throw makeRetryableGrokGenerationError('grok-generation-failed', grokState);
+        }
         await notifyRenderer('grok-limit-stop', `Scene ${sceneId}: Grok báo limit/lỗi tạo video. Bấm OK để tool dừng hẳn; đổi account/canvas hoặc xử lý trên Grok rồi bấm Start lại thủ công.`, grokState);
         await appendAppLog(null, { source: 'main', kind: 'error', text: `Scene ${sceneId}: Grok limit/generation error detected; stopped without retry.`, details: grokState });
         throw new Error('Grok báo limit/lỗi tạo video. Tool đã dừng theo yêu cầu, không tự gửi lại.');
+      }
+    }
+    if (provider === 'grok') {
+      const generatingState = await evaluateOnCdpPage(client, `(${detectGrokGeneratingStateScript.toString()})({})`).catch((error) => ({ ok: false, error: error.message }));
+      if (generatingState?.progressPercent != null || generatingState?.mode === 'stop-button') {
+        await appendAppLog(null, {
+          source: 'main',
+          kind: 'running',
+          text: `Scene ${sceneId}: Grok still generating; wait until progress/percent disappears before checking output.`,
+          details: { mode: generatingState.mode || '', progressPercent: generatingState.progressPercent ?? null, stopText: generatingState.stopText || '' },
+        });
+        continue;
       }
     }
     const snapshot = await evaluateOnCdpPage(client, `(${collectVideoUrlsScript.toString()})()`);
     const videoUrl = (snapshot?.urls || []).find((url) => !known.has(url));
     if (videoUrl) return videoUrl;
   }
+  throw makeRetryableGrokGenerationError('no-new-video-after-wait', { provider, sceneId, waitedMs: Date.now() - startedAt });
   throw new Error('Hết thời gian chờ Grok tạo video hoặc không detect được video mới.');
 }
 
@@ -4316,10 +6520,10 @@ async function setFirstFileInput(client, filePath) {
 async function uploadFileViaCdp(client, filePath, provider = 'grok') {
   if (provider === 'grok') {
     const route = await ensureGrokImagineAgentPage(client, '', {});
-    if (!route?.ok) return { ok: false, error: route?.error || 'Grok Imagine Agent is not ready before image upload.', route };
+    if (!route?.ok) return { ok: false, error: route?.error || 'Grok Imagine is not ready before image upload.', route };
     const guard = await assertGrokImagineAgentReady(client, 'image-upload', '');
     if (!guard?.ok) return { ok: false, error: guard?.error || 'Grok route guard blocked image upload.', guard };
-    await appendAppLog(null, { source: 'main', kind: 'running', text: 'Grok: copy ảnh vào clipboard, click workspace Empty Canvas rồi Ctrl+V trực tiếp.' });
+    await appendAppLog(null, { source: 'main', kind: 'running', text: 'Grok old workspace upload path blocked: use composer file input instead.' });
     await pasteImageViaClipboard(client, filePath, 'workspace');
     let accepted = await waitForGrokUploadedAsset(client, 18000);
     if (!accepted?.ok) {
@@ -4431,7 +6635,7 @@ async function submitGrokVideoPrompt(client, prompt, config = {}) {
   const forcedMode = await evaluateOnCdpPage(client, `(${forceGrokVideoModeScript.toString()})()`).catch((error) => ({ ok: false, error: error.message }));
   await appendAppLog(null, { source: 'main', kind: forcedMode?.ok ? 'ok' : 'running', text: `Grok video mode: ${forcedMode?.status || forcedMode?.error || 'checked'}`, details: forcedMode });
   await evaluateOnCdpPage(client, `(${dismissGrokConnectorsScript.toString()})()`).catch(() => null);
-  const prepared = { ok: true, skipped: true, status: 'already-prepared-before-upload' };
+  const prepared = { ok: true, skipped: true, status: 'force-config-after-upload' };
   await appendAppLog(null, { source: 'main', kind: prepared?.ok ? 'ok' : 'running', text: `Grok config: ${prepared?.ok ? JSON.stringify(prepared.config || {}) : prepared?.error || 'không đọc được'}`, details: prepared });
   await sleep(500);
   const focused = await evaluateOnCdpPage(client, `(${focusGrokComposerScript.toString()})()`);
@@ -4742,6 +6946,265 @@ function getPromptInputCandidates() {
   ];
 }
 
+function detectBrowserCrashPageScript() {
+  const text = String(document.body?.innerText || '').replace(/\s+/g, ' ').trim();
+  const title = document.title || '';
+  const url = location.href || '';
+  const crashed = /Aw, Snap|Something went wrong while displaying this webpage|Out of Memory|Page crashed|Error code:\s*Out of Memory/i.test(`${title}\n${text}`)
+    || /^chrome-error:\/\//i.test(url);
+  return {
+    ok: true,
+    crashed,
+    reason: crashed ? (/Out of Memory/i.test(text) ? 'out-of-memory' : /^chrome-error:/i.test(url) ? 'chrome-error-page' : 'aw-snap') : '',
+    title,
+    url,
+    textHead: text.slice(0, 260),
+  };
+}
+
+function dismissChatGptBlockingUiScript(context = {}) {
+  const actions = [];
+  const textOf = (node) => `${node?.innerText || node?.textContent || ''} ${node?.getAttribute?.('aria-label') || ''} ${node?.title || ''}`.replace(/\s+/g, ' ').trim();
+  const fold = (value) => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
+  const isUnsafeDismissTarget = (item) => {
+    const text = fold(item?.text || '');
+    const href = fold(item?.node?.href || item?.node?.getAttribute?.('href') || '');
+    return text.length > 140
+      || /create exactly|prompt below|do not answer|nhiem vu|scene|dua tren anh|keyframe|motion prompt|tao anh|xoa tep|delete file|remove file|remove attachment|chia se|share|linkedin|facebook|twitter|x\.com|xem them|show more|learn more|tim hieu|download|tai xuong|copy link|sao chep|open image|open in/i.test(`${text} ${href}`);
+  };
+  const isExactDismissText = (text) => /^(close|dismiss|skip|not now|maybe later|got it|ok|okay|continue generating|x|×|dong|bo qua|de sau)$/.test(fold(text));
+  const visible = (node) => {
+    const rect = node?.getBoundingClientRect?.();
+    const style = node ? window.getComputedStyle(node) : null;
+    return rect && rect.width > 8 && rect.height > 8 && rect.bottom > 0 && rect.right > 0
+      && rect.top < window.innerHeight && rect.left < window.innerWidth
+      && style?.display !== 'none' && style?.visibility !== 'hidden' && Number(style?.opacity ?? 1) > 0;
+  };
+  const clickNode = (node, label) => {
+    if (!node || !visible(node)) return false;
+    const clickLabel = label || textOf(node).slice(0, 80) || 'clicked';
+    if (/^(dismiss|codex-popup|action-required|image-viewer-close)/i.test(clickLabel)
+      && isUnsafeDismissTarget({ node, text: textOf(node) })) {
+      actions.push(`skip-unsafe:${textOf(node).slice(0, 80) || node.tagName || 'unknown'}`);
+      return false;
+    }
+    node.scrollIntoView?.({ block: 'center', inline: 'center' });
+    const rect = node.getBoundingClientRect?.();
+    const x = rect ? rect.x + rect.width / 2 : 0;
+    const y = rect ? rect.y + rect.height / 2 : 0;
+    node.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerType: 'mouse', isPrimary: true, clientX: x, clientY: y }));
+    node.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: x, clientY: y }));
+    node.click?.();
+    node.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: x, clientY: y }));
+    actions.push(clickLabel);
+    return true;
+  };
+  const buttons = [...document.querySelectorAll('button, [role="button"], a, [tabindex], input[type="button"], input[type="submit"]')]
+    .filter(visible)
+    .map((node) => ({ node, text: textOf(node), rect: node.getBoundingClientRect(), disabled: Boolean(node.disabled || node.getAttribute?.('aria-disabled') === 'true') }));
+  const composer = [...document.querySelectorAll('#prompt-textarea, textarea, [contenteditable="true"], [role="textbox"], [data-testid="composer"]')].find(visible);
+  const imageViewerDetected = !composer && [...document.querySelectorAll('img, canvas, picture')].some((node) => {
+    const rect = node.getBoundingClientRect?.();
+    return rect && rect.width > window.innerWidth * 0.55 && rect.height > window.innerHeight * 0.45 && visible(node);
+  });
+  if (imageViewerDetected) {
+    const close = buttons.find((item) => !item.disabled && item.rect.left < 120 && item.rect.top < 150 && /^(close|x|×|đóng)?$/i.test(item.text.trim()))
+      || buttons.find((item) => !item.disabled && item.rect.left < 120 && item.rect.top < 150)
+      || buttons.find((item) => !item.disabled && /close|x|×|đóng/i.test(item.text) && item.rect.top < 180);
+    if (close) clickNode(close.node, `image-viewer-close:${close.text.slice(0, 40) || 'top-left'}`);
+  }
+  const blockingRoots = [...document.querySelectorAll('[role="dialog"], [aria-modal="true"], [data-radix-dialog-content], [data-headlessui-state], .modal, .popover, .toast, .banner, [class*="modal" i], [class*="popover" i], [class*="overlay" i], [class*="toast" i], [class*="banner" i]')]
+    .filter(visible)
+    .map((node) => ({ node, text: textOf(node), rect: node.getBoundingClientRect() }))
+    .filter((item) => /codex|khám phá codex|explore codex|action required|choose|response|banner|download app|tải ứng dụng|learn more|tìm hiểu thêm|overlay|try again|continue|confirm|upgrade|memory|canvas/i.test(item.text)
+      || item.rect.width > window.innerWidth * 0.42 || item.rect.height > window.innerHeight * 0.18);
+
+  const codexRoot = blockingRoots.find((item) => /codex|khám phá codex|download app|tải ứng dụng/i.test(item.text));
+  if (codexRoot) {
+    const close = buttons.find((item) => !item.disabled && /^(close|dismiss|not now|skip|x|×|đóng|bỏ qua|để sau)$/i.test(item.text))
+      || buttons.find((item) => !item.disabled
+        && item.rect.left >= codexRoot.rect.right - 90
+        && item.rect.top >= codexRoot.rect.top
+        && item.rect.top <= codexRoot.rect.top + 90
+        && !/download|tải|learn|tìm hiểu|open|cloud|install|windows|business|contact|liên hệ/i.test(item.text)
+        && (item.text.length <= 2 || /close|x|×/i.test(`${item.text} ${item.node.innerHTML || ''}`)));
+    if (close) clickNode(close.node, `codex-popup:${close.text.slice(0, 60)}`);
+  }
+
+  const dismissPattern = /^(close|dismiss|skip|not now|maybe later|got it|ok|okay|continue generating|x|×|đóng|bỏ qua|để sau)$/i;
+  const dismissButton = buttons.find((item) => !item.disabled && dismissPattern.test(item.text))
+    || buttons.find((item) => !item.disabled
+      && item.text.length <= 80
+      && /close|dismiss|skip|not now|maybe later|got it|x|×/i.test(item.text)
+      && !/codex|download|tải|learn|tìm hiểu|open|cloud|install|windows|business|contact|liên hệ/i.test(item.text)
+      && item.rect.top < window.innerHeight * 0.78);
+  if (dismissButton) clickNode(dismissButton.node, `dismiss:${dismissButton.text.slice(0, 60)}`);
+
+  const choiceRoot = blockingRoots.find((item) => /choose|which response|select a response|2 results|hai kết quả|response 1|option 1/i.test(item.text));
+  if (choiceRoot) {
+    const choice = buttons.find((item) => !item.disabled && /response 1|option 1|choose this|use this|select|continue|a$/i.test(item.text) && item.rect.top >= choiceRoot.rect.top)
+      || buttons.find((item) => !item.disabled && item.rect.top >= choiceRoot.rect.top && item.rect.left >= choiceRoot.rect.left && item.rect.right <= choiceRoot.rect.right);
+    if (choice) clickNode(choice.node, `choose-result:${choice.text.slice(0, 60)}`);
+  }
+
+  const actionRequired = !codexRoot && buttons.find((item) => !item.disabled
+    && /action required|continue|review|confirm|allow|try again/i.test(item.text)
+    && !/codex|download|tải|learn|tìm hiểu|open|cloud|install|windows|business|contact|liên hệ/i.test(item.text));
+  if (actionRequired) clickNode(actionRequired.node, `action-required:${actionRequired.text.slice(0, 60)}`);
+
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true }));
+  document.dispatchEvent(new KeyboardEvent('keyup', { key: 'Escape', code: 'Escape', bubbles: true }));
+  const disabledSend = buttons.find((item) => /send|submit|composer-submit|arrow-up/i.test(`${item.text} ${item.node.innerHTML || ''}`) && item.disabled);
+  return {
+    ok: true,
+    actions,
+    context,
+    imageViewerDetected,
+    blockingDetected: imageViewerDetected || blockingRoots.length > 0 || Boolean(disabledSend),
+    disabledSend: disabledSend ? { text: disabledSend.text, box: { x: disabledSend.rect.x, y: disabledSend.rect.y, width: disabledSend.rect.width, height: disabledSend.rect.height } } : null,
+    roots: blockingRoots.slice(0, 5).map((item) => ({ text: item.text.slice(0, 180), box: { x: item.rect.x, y: item.rect.y, width: item.rect.width, height: item.rect.height } })),
+  };
+}
+
+function detectChatGptResponseChoiceUiScript() {
+  const bodyText = String(document.body?.innerText || '').replace(/\s+/g, ' ').trim();
+  const folded = bodyText.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  const visible = (node) => {
+    const rect = node?.getBoundingClientRect?.();
+    const style = node ? window.getComputedStyle(node) : null;
+    return rect && rect.width > 8 && rect.height > 8 && rect.bottom > 0 && rect.right > 0
+      && rect.top < window.innerHeight && rect.left < window.innerWidth
+      && style?.display !== 'none' && style?.visibility !== 'hidden' && Number(style?.opacity ?? 1) > 0;
+  };
+  const buttons = [...document.querySelectorAll('button, [role="button"]')]
+    .filter(visible)
+    .map((node) => {
+      const rect = node.getBoundingClientRect();
+      const text = String(`${node.innerText || node.textContent || ''} ${node.getAttribute?.('aria-label') || ''}`).replace(/\s+/g, ' ').trim();
+      const foldedText = text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+      return { text, foldedText, box: { x: rect.x, y: rect.y, width: rect.width, height: rect.height } };
+    });
+  const composer = [...document.querySelectorAll('#prompt-textarea, textarea, [data-testid="composer"] [contenteditable="true"], div[contenteditable="true"], [role="textbox"]')]
+    .find((node) => {
+      const rect = node.getBoundingClientRect?.();
+      return rect && rect.width > 80 && rect.height > 16 && rect.bottom > window.innerHeight * 0.55 && visible(node);
+    });
+  const responseChoiceText = /ban dang cho phan hoi ve mot phien ban moi cua chatgpt|ban thich (?:phan hoi|hinh anh) nao hon|which (?:response|image)|choose.*(?:response|image)|select.*(?:response|image)/i.test(folded);
+  const comparisonLabels = /(?:response|phan hoi|image|hinh anh)\s*1.{0,800}(?:response|phan hoi|image|hinh anh)\s*2/i.test(folded);
+  const responseChoiceButtons = buttons.filter((item) => /toi thich (?:phan hoi|hinh anh) nay hon|(?:hinh anh|image)\s*[12]\s*(?:tot hon|is better)|i prefer this (?:response|image)|choose this (?:response|image)|use this (?:response|image)|select (?:response|image)/i.test(item.foldedText));
+  const responseChoiceUi = Boolean(responseChoiceText || responseChoiceButtons.length >= 1 || (comparisonLabels && !composer));
+  const deletedConversationUi = /cuoc tro chuyen da bi xoa|conversation (has been )?deleted|chat (has been )?deleted|this conversation has been deleted/i.test(folded);
+  return {
+    ok: true,
+    responseChoiceUi,
+    deletedConversationUi,
+    hasComposer: Boolean(composer),
+    path: location.pathname || '',
+    title: document.title || '',
+    matchedText: responseChoiceText,
+    comparisonLabels,
+    choiceButtonCount: responseChoiceButtons.length,
+    buttons: responseChoiceButtons.slice(0, 4),
+    tail: bodyText.slice(-500),
+  };
+}
+
+function clickChatGptStartNewChatScript() {
+  const fold = (value) => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
+  const visible = (node) => {
+    const rect = node?.getBoundingClientRect?.();
+    const style = node ? window.getComputedStyle(node) : null;
+    return rect && rect.width > 8 && rect.height > 8 && rect.bottom > 0 && rect.right > 0
+      && rect.top < window.innerHeight && rect.left < window.innerWidth
+      && style?.display !== 'none' && style?.visibility !== 'hidden' && Number(style?.opacity ?? 1) > 0;
+  };
+  const items = [...document.querySelectorAll('a, button, [role="button"], [role="link"]')]
+    .filter(visible)
+    .map((node) => {
+      const rect = node.getBoundingClientRect();
+      const text = `${node.innerText || node.textContent || ''} ${node.getAttribute?.('aria-label') || ''} ${node.title || ''}`;
+      return { node, text, folded: fold(text), rect };
+    });
+  const target = items.find((item) => /bat dau doan chat moi|tao doan chat moi|doan chat moi|new chat|start new chat/.test(item.folded))
+    || items.find((item) => /new|plus|\+/.test(item.folded) && item.rect.left < window.innerWidth * 0.35 && item.rect.top < window.innerHeight * 0.35);
+  if (!target) return { ok: false, error: 'new-chat-button-not-found', candidates: items.slice(0, 12).map((item) => ({ text: item.text.slice(0, 80), box: { x: item.rect.x, y: item.rect.y, width: item.rect.width, height: item.rect.height } })) };
+  target.node.scrollIntoView?.({ block: 'center', inline: 'center' });
+  const x = target.rect.x + target.rect.width / 2;
+  const y = target.rect.y + target.rect.height / 2;
+  target.node.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerType: 'mouse', isPrimary: true, clientX: x, clientY: y }));
+  target.node.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: x, clientY: y }));
+  target.node.click?.();
+  target.node.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: x, clientY: y }));
+  return { ok: true, text: target.text.slice(0, 100), box: { x: target.rect.x, y: target.rect.y, width: target.rect.width, height: target.rect.height } };
+}
+
+function detectChatGptActiveGenerationScript() {
+  const bodyTail = String(document.body?.innerText || '').slice(-5000);
+  const visible = (node) => {
+    const rect = node?.getBoundingClientRect?.();
+    const style = node ? window.getComputedStyle(node) : null;
+    return rect && rect.width > 8 && rect.height > 8 && rect.bottom > 0 && rect.right > 0
+      && rect.top < window.innerHeight && rect.left < window.innerWidth
+      && style?.display !== 'none' && style?.visibility !== 'hidden' && Number(style?.opacity ?? 1) > 0;
+  };
+  const buttons = [...document.querySelectorAll('button, [role="button"]')]
+    .filter(visible)
+    .map((node) => {
+      const rect = node.getBoundingClientRect();
+      const text = `${node.textContent || ''} ${node.getAttribute?.('aria-label') || ''} ${node.title || ''}`.trim();
+      const html = String(node.innerHTML || '').slice(0, 800);
+      return { rect, text, html };
+    });
+  const stopButton = buttons.find((item) => {
+    const nearComposer = item.rect.top > window.innerHeight * 0.58 && item.rect.left > window.innerWidth * 0.45;
+    return nearComposer && (/stop|cancel|dừng/i.test(item.text) || /rect|square|stop-circle|data-icon=["']stop/i.test(item.html));
+  });
+  const busyNode = [...document.querySelectorAll('[aria-busy="true"], [role="progressbar"], [data-testid*="loading"], [data-testid*="spinner"], [class*="result-streaming"], [class*="spinner" i], [class*="loading" i]')].some(visible);
+  const thinkingText = /\bThinking\b|Thinking about your request|Đang suy nghĩ|Generating|Creating|Preparing/i.test(bodyTail);
+  return {
+    ok: true,
+    generating: Boolean(stopButton || busyNode || thinkingText),
+    mode: stopButton ? 'stop-button' : busyNode ? 'busy-node' : thinkingText ? 'thinking-text' : '',
+    stopText: stopButton?.text || '',
+    tailSnippet: bodyTail.slice(-240),
+  };
+}
+
+function detectChatGptActiveGenerationScriptStrict() {
+  const bodyTail = String(document.body?.innerText || '').slice(-5000);
+  const visible = (node) => {
+    const rect = node?.getBoundingClientRect?.();
+    const style = node ? window.getComputedStyle(node) : null;
+    return rect && rect.width > 8 && rect.height > 8 && rect.bottom > 0 && rect.right > 0
+      && rect.top < window.innerHeight && rect.left < window.innerWidth
+      && style?.display !== 'none' && style?.visibility !== 'hidden' && Number(style?.opacity ?? 1) > 0;
+  };
+  const buttons = [...document.querySelectorAll('button, [role="button"]')]
+    .filter(visible)
+    .map((node) => {
+      const rect = node.getBoundingClientRect();
+      const text = `${node.textContent || ''} ${node.getAttribute?.('aria-label') || ''} ${node.title || ''}`.trim();
+      const html = String(node.innerHTML || '').slice(0, 1000);
+      return { rect, text, html };
+    });
+  const nearComposer = (item) => item.rect.top > window.innerHeight * 0.58 && item.rect.left > window.innerWidth * 0.45;
+  const stopButton = buttons.find((item) => nearComposer(item) && (/stop|cancel|dung|dung tra loi/i.test(item.text) || /rect|square|stop-circle|data-icon=["']stop/i.test(item.html)));
+  const sendButton = buttons.find((item) => nearComposer(item) && !/stop|cancel|dung/i.test(item.text) && /send|submit|gui|arrow-up|paper-plane|composer-submit|data-testid=["']send/i.test(`${item.text} ${item.html}`));
+  const busyNode = [...document.querySelectorAll('[aria-busy="true"], [role="progressbar"], [data-testid*="loading"], [data-testid*="spinner"], [class*="result-streaming"], [class*="spinner" i], [class*="loading" i]')].some(visible);
+  const thinkingText = /\bThinking\b|Thinking about your request|Generating|Creating|Preparing/i.test(bodyTail);
+  const sendReady = Boolean(sendButton && !stopButton);
+  return {
+    ok: true,
+    generating: sendReady ? false : Boolean(stopButton || busyNode || thinkingText),
+    doneByComposer: sendReady,
+    sendReady,
+    mode: stopButton ? 'stop-button' : sendReady ? 'send-ready' : busyNode ? 'busy-node' : thinkingText ? 'thinking-text' : '',
+    stopText: stopButton?.text || '',
+    sendText: sendButton?.text || '',
+    tailSnippet: bodyTail.slice(-240),
+  };
+}
+
 function focusPromptInputScript() {
   const selectors = [
     '#prompt-textarea',
@@ -4871,7 +7334,14 @@ function clickSendButtonScript() {
     const hasUpArrowIcon = /M(?:2|8|12)[^<]{0,80}(?:L|V|H)[^<]{0,80}(?:up|arrow)|rotate\(-?90|arrow-up/i.test(label);
     return explicitSend || hasUpArrowIcon;
   });
-  if (!sendButton) return { ok: false, error: 'Không tìm thấy nút send đang enabled.' };
+  if (!sendButton) {
+    const disabledCandidates = unique.map((button) => {
+      const rect = button.getBoundingClientRect?.();
+      const label = `${button.getAttribute?.('aria-label') || ''} ${button.textContent || ''} ${button.dataset?.testid || ''} ${button.innerHTML || ''}`;
+      return rect ? { label: label.replace(/\s+/g, ' ').slice(0, 180), disabled: Boolean(button.disabled || button.getAttribute?.('aria-disabled') === 'true'), box: { x: rect.x, y: rect.y, width: rect.width, height: rect.height } } : null;
+    }).filter(Boolean).filter((item) => /send|submit|gửi|arrow-up|composer-submit|send-button|up/i.test(item.label)).slice(0, 8);
+    return { ok: false, error: 'Không tìm thấy nút send đang enabled.', disabledCandidates };
+  }
   sendButton.scrollIntoView({ block: 'center', inline: 'center' });
   sendButton.focus();
   sendButton.click();
@@ -5203,6 +7673,48 @@ function collectVideoUrlsScript() {
   return { urls: [...new Set(urls)] };
 }
 
+function detectGrokPageFailureScript() {
+  const bodyText = document.body?.innerText || '';
+  const tail = bodyText.slice(-4000);
+  const visible = (node) => {
+    const rect = node.getBoundingClientRect?.();
+    const style = window.getComputedStyle?.(node);
+    return rect && rect.width >= 24 && rect.height >= 24 && rect.bottom > 0 && rect.right > 0
+      && style?.display !== 'none' && style?.visibility !== 'hidden' && Number(style?.opacity ?? 1) > 0;
+  };
+  const media = [...document.querySelectorAll('img, video, canvas')].filter(visible).map((node) => {
+    const rect = node.getBoundingClientRect();
+    return { tag: node.tagName, width: rect.width, height: rect.height, src: node.currentSrc || node.src || '' };
+  });
+  const hasComposer = Boolean([...document.querySelectorAll('textarea, [contenteditable="true"], [role="textbox"], input[type="file"]')].find(visible));
+  const hasGrokShell = /SuperGrok|Imagine|Private|Grok can make mistakes|What would you like to create|Type to imagine|What do you want to know/i.test(bodyText);
+  const requestFailure = /ERR_|Aw, Snap|This site can'?t be reached|Page crashed|Out of Memory|request failed|network error|failed to fetch|timeout|timed out|could not load|failed to load|image failed|media failed/i.test(tail);
+  const generationFailure = /something went wrong|failed to generate|generation failed|couldn'?t generate|unable to generate|error generating|try again/i.test(tail);
+  const completeBlank = document.readyState === 'complete' && bodyText.trim().length < 24 && media.length === 0;
+  const blackOrEmptyApp = document.readyState === 'complete' && !hasGrokShell && !hasComposer && media.length === 0 && bodyText.trim().length < 120;
+  const badMedia = media.some((item) => /blob:|data:|http/i.test(item.src) && (item.width < 32 || item.height < 32));
+  let reason = '';
+  if (/^about:blank/i.test(location.href)) reason = 'about-blank-page';
+  else if (requestFailure) reason = 'request-or-media-load-failed';
+  else if (completeBlank) reason = 'blank-page';
+  else if (blackOrEmptyApp) reason = 'black-or-empty-grok-page';
+  else if (badMedia) reason = 'invalid-media-render';
+  else if (generationFailure) reason = 'generation-failed-message';
+  return {
+    ok: true,
+    retryable: Boolean(reason),
+    reason,
+    url: location.href,
+    readyState: document.readyState,
+    textLength: bodyText.length,
+    hasGrokShell,
+    hasComposer,
+    mediaCount: media.length,
+    media: media.slice(0, 8),
+    tailSnippet: tail.slice(-700),
+  };
+}
+
 function clickUploadButtonScript(provider = 'grok') {
   const visible = (node) => {
     const rect = node.getBoundingClientRect?.();
@@ -5309,6 +7821,7 @@ function getGrokRouteStateScript() {
   let route = 'unknown';
   if (!isGrok) route = 'external';
   else if (challenge || login) route = 'login_or_challenge';
+  else if (!isImagineAgent && path === '/imagine' && (hasComposer || hasUploadTarget || hasGallery)) route = 'imagine_agent_ready';
   else if (!isImagineAgent) route = hasNormalChatComposer || path === '/' ? 'normal_chat' : 'wrong_grok_route';
   else if (isAgentCanvas && (hasComposer || hasUploadTarget || hasWorkspace)) route = 'imagine_agent_ready';
   else if (!isAgentCanvas && (hasComposer || (hasUploadTarget && hasSendButton) || (hasEmptyCanvas && hasWorkspace))) route = 'imagine_agent_ready';
@@ -6359,6 +8872,7 @@ function readLatestAssistantScript() {
   const composerButtons = buttons.filter((item) => item.rect.top > window.innerHeight * 0.72 && item.rect.left > window.innerWidth * 0.55);
   const stopButton = composerButtons.some((item) => /stop|cancel|dừng/i.test(item.text) || /<rect|data-icon=["']stop|stop-circle|square/i.test(item.html));
   const voiceReady = composerButtons.some((item) => /voice|mic|microphone|record|dictate/i.test(item.text) || /waveform|audio|voice|mic/i.test(item.html));
+  const sendReady = composerButtons.some((item) => !/stop|cancel|dung/i.test(item.text) && /send|submit|gui|arrow-up|paper-plane|composer-submit/i.test(`${item.text} ${item.html}`)) && !stopButton;
   const thinkingText = /Thinking about your request|Đang suy nghĩ|Generating|Creating/i.test(bodyTail);
   const roleNodes = [...document.querySelectorAll('[data-message-author-role="assistant"]')]
     .filter((node) => (node.innerText || '').trim().length > 20);
@@ -6376,8 +8890,9 @@ function readLatestAssistantScript() {
   return {
     count: nodes.length,
     text: last ? last.innerText.trim() : '',
-    generating: stopButton || (thinkingText && !voiceReady),
+    generating: sendReady ? false : (stopButton || (thinkingText && !voiceReady)),
     stopButton,
+    sendReady,
     voiceReady,
     composerButtonCount: buttons.length,
     mode: roleNodes.length ? 'assistant-role' : 'fallback-non-user',
@@ -6444,6 +8959,8 @@ function readChatGptImageStateScript() {
   const buttonText = buttons.map((item) => item.text).filter(Boolean).join(' | ');
   const stopButton = buttons.find((item) => /stop generating|stop responding|stop|cancel|dừng/i.test(item.text) || (/rect|square|stop/i.test(item.html) && item.rect.left > window.innerWidth * 0.55 && item.rect.top > window.innerHeight * 0.55));
   const stopButtonVisible = Boolean(stopButton);
+  const sendButton = buttons.find((item) => item.rect.left > window.innerWidth * 0.45 && item.rect.top > window.innerHeight * 0.58 && !/stop generating|stop responding|stop|cancel|dung/i.test(item.text) && /send|submit|gui|arrow-up|paper-plane|composer-submit/i.test(`${item.text} ${item.html}`));
+  const sendReady = Boolean(sendButton && !stopButtonVisible);
   const streamingIndicator = stopButtonVisible || [...document.querySelectorAll('[aria-busy="true"], [role="progressbar"], [data-testid*="loading"], [data-testid*="spinner"], [class*="result-streaming"]')].some(visible);
   const composerNodes = [...document.querySelectorAll('#prompt-textarea, textarea, [contenteditable="true"], [role="textbox"], [data-testid="composer"]')]
     .filter(visible);
@@ -6487,7 +9004,7 @@ function readChatGptImageStateScript() {
   if (!urls.length && visibleImageBoxes.length && !loadingMediaText && renderedImageHint) urls.push(`chatgpt-custom-box-y${visibleImageBoxes[0].y}`);
 
   const hasVisibleMedia = urls.length > 0;
-  const generating = stopButtonVisible || streamingIndicator || composerBusy || (preparingImage && !hasVisibleMedia) || (thinking && !hasVisibleMedia);
+  const generating = sendReady ? false : (stopButtonVisible || streamingIndicator || composerBusy || (preparingImage && !hasVisibleMedia) || (thinking && !hasVisibleMedia));
   const roleAssistantNodes = [...document.querySelectorAll('[data-message-author-role="assistant"]')]
     .filter((node) => (node.innerText || '').trim().length > 20);
   const fallbackAssistantNodes = [...document.querySelectorAll('article, .message, [class*="response"], [class*="markdown"]')]
@@ -6506,6 +9023,8 @@ function readChatGptImageStateScript() {
     stopButton,
     preparingImage,
     stopButtonVisible,
+    sendReady,
+    sendText: sendButton?.text || '',
     composerBusy,
     streamingIndicator,
     loggedOut,
@@ -6544,6 +9063,106 @@ function sanitizeFileName(value) {
   return String(value).replace(/[<>:"/\\|?*]+/g, '-').replace(/\s+/g, '-').slice(0, 80) || 'ai-scene-project';
 }
 
+
+/* vidora-crash-guard-main-installed */
+const VIDORA_CRASH_LOG = path.join(app.getPath('userData'), 'vidora-crash.log');
+
+function writeCrashLog(label, error, extra = {}) {
+  try {
+    const payload = {
+      time: new Date().toISOString(),
+      label,
+      message: error?.message || String(error || ''),
+      stack: error?.stack || '',
+      extra,
+    };
+    fs.appendFileSync(VIDORA_CRASH_LOG, JSON.stringify(payload, null, 2) + '\n---\n', 'utf8');
+    console.error('[VidoraCrash]', label, payload.message, payload.stack || '');
+  } catch (_error) {}
+}
+
+process.on('uncaughtException', (error) => {
+  writeCrashLog('main:uncaughtException', error);
+});
+
+process.on('unhandledRejection', (reason) => {
+  writeCrashLog('main:unhandledRejection', reason instanceof Error ? reason : new Error(String(reason)));
+});
+
+app.on('render-process-gone', (_event, webContents, details) => {
+  writeCrashLog('electron:render-process-gone', new Error(details?.reason || 'render-process-gone'), {
+    reason: details?.reason,
+    exitCode: details?.exitCode,
+    url: webContents?.getURL?.(),
+  });
+});
+
+app.on('child-process-gone', (_event, details) => {
+  writeCrashLog('electron:child-process-gone', new Error(details?.reason || 'child-process-gone'), details || {});
+});
+
+app.on('gpu-process-crashed', (_event, killed) => {
+  writeCrashLog('electron:gpu-process-crashed', new Error('gpu-process-crashed'), { killed });
+});
+
+
+
+/* vidora-quit-exit-trace-installed */
+function vidoraTraceExit(label, extra = {}) {
+  try {
+    const fs2 = require('fs');
+    const path2 = require('path');
+    const logPath = path2.join(app.getPath('userData'), 'vidora-exit-trace.log');
+    const payload = {
+      time: new Date().toISOString(),
+      label,
+      extra,
+      stack: new Error(label).stack,
+    };
+    fs2.appendFileSync(logPath, JSON.stringify(payload, null, 2) + '\n---\n', 'utf8');
+    console.log('[VidoraExitTrace]', label, JSON.stringify(extra || {}));
+  } catch (e) {
+    try { console.log('[VidoraExitTraceFailed]', label, e?.message || e); } catch (_) {}
+  }
+}
+
+process.on('exit', (code) => {
+  try { console.log('[VidoraProcessExit]', code); } catch (_) {}
+});
+
+process.on('beforeExit', (code) => {
+  try { console.log('[VidoraProcessBeforeExit]', code); } catch (_) {}
+});
+
+app.on('before-quit', (event) => {
+  vidoraTraceExit('app:before-quit', { exitCode: process.exitCode || 0 });
+});
+
+app.on('will-quit', (event) => {
+  vidoraTraceExit('app:will-quit', { exitCode: process.exitCode || 0 });
+});
+
+app.on('quit', (_event, exitCode) => {
+  vidoraTraceExit('app:quit', { exitCode });
+});
+
+app.on('window-all-closed', () => {
+  vidoraTraceExit('app:window-all-closed', { note: 'all windows closed' });
+});
+
+app.on('browser-window-created', (_event, win) => {
+  try {
+    win.on('closed', () => vidoraTraceExit('browser-window:closed', { title: win.getTitle?.() || '' }));
+    win.webContents.on('render-process-gone', (_event2, details) => {
+      vidoraTraceExit('webContents:render-process-gone', details || {});
+    });
+    win.webContents.on('unresponsive', () => {
+      vidoraTraceExit('webContents:unresponsive', { title: win.getTitle?.() || '' });
+    });
+  } catch (_) {}
+});
+
+
 app.whenReady().then(() => {
   ipcMain.handle('app:append-log', appendAppLog);
   ipcMain.handle('app:get-log-path', getAppLogPath);
@@ -6561,7 +9180,7 @@ app.whenReady().then(() => {
   ipcMain.handle('browser:open-login', openWebLogin);
   ipcMain.handle('browser:check-login', checkWebLogin);
   ipcMain.handle('browser:send-prompt', sendPromptViaWeb);
-  ipcMain.handle('pipeline:run-scene', runScenePipeline);
+  ipcMain.handle('pipeline:run-scene', safeIpcHandler(runScenePipeline));
   ipcMain.handle('output:choose-folder', chooseOutputFolder);
   ipcMain.handle('project:choose-root-folder', chooseProjectRootFolder);
   ipcMain.handle('folder:choose', chooseFolder);
@@ -6603,8 +9222,10 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', () => {
+  writeCrashLog('electron:window-all-closed', new Error('All windows closed'), { note: 'App kept alive for crash debugging.' });
   if (process.platform !== 'darwin') {
-    app.quit();
+    // Trong lúc debug pipeline, không quit im lặng. Người dùng có thể Ctrl+C ở terminal.
+    return;
   }
 });
 
