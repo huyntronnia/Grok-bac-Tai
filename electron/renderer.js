@@ -225,6 +225,7 @@ let isRunning = false;
 let autoContinuing = false;
 let currentProjectFilePath = '';
 let projectDirty = false;
+let veoupAutomationInFlight = false;
 let lastMissingAssetCount = 0;
 let projectRuntime = {
   currentStage: 'idle',
@@ -878,6 +879,23 @@ function isImageMotionOnlyModeEnabled() {
   return Boolean(project?.imageMotionOnlyMode || document.querySelector('#image-motion-only-mode')?.checked);
 }
 
+function forceChatGptImageMotionOnlyWorkflow() {
+  if (project) project.imageMotionOnlyMode = true;
+  ensureImageMotionOnlyModeControl();
+
+  const checkbox = document.querySelector('#image-motion-only-mode');
+  if (checkbox) checkbox.checked = true;
+
+  if (grokRouterEnabledToggle) grokRouterEnabledToggle.checked = false;
+  if (continuityGrokToggle) continuityGrokToggle.checked = false;
+
+  window.videoPlannerAPI?.setAccountRouterEnabled?.(false)
+    .then(() => refreshGrokRouterStatus?.())
+    .catch((error) => safeAddPipelineLog?.('renderer', 'error', `Could not disable Grok router: ${error.message || error}`));
+
+  persist?.();
+}
+
 function ensureImageMotionOnlyModeControl() {
   try {
     if (document.querySelector('#image-motion-only-mode-card')) {
@@ -1026,7 +1044,13 @@ async function runFullPipeline() {
 
   autoRunBtn.disabled = true;
   const videoPlatform = getSelectedVideoPlatform();
-  setStatus(`Đang chạy full pipeline: ChatGPT tạo ảnh → ${videoPlatform.label} tạo video → lưu theo scene...`, 'running');
+  const imageMotionOnlyMode = isImageMotionOnlyModeEnabled();
+  setStatus(
+    imageMotionOnlyMode
+      ? 'Running ChatGPT-only workflow: keyframe + motion prompt, skipping Grok/video...'
+      : `Running full pipeline: ChatGPT keyframe -> ${videoPlatform.label} video -> save by scene...`,
+    'running'
+  );
 
   for (let i = 0; i < scenesToRun.length; i++) {
     const scene = scenesToRun[i];
@@ -1092,7 +1116,7 @@ projectName: project.name,
         videoProvider: videoPlatform.value,
         videoAccount: getSelectedVideoAccount(videoPlatform.value),
         routingPolicy: grokRoutingPolicySelect?.value || 'manual',
-        accountRouterEnabled: Boolean(grokRouterEnabledToggle?.checked),
+        accountRouterEnabled: isImageMotionOnlyModeEnabled() ? false : Boolean(grokRouterEnabledToggle?.checked),
         videoConfig: getVideoProviderConfig(),
         imageProvider: getImageGenerationSettings(),
         continuityReferences: getContinuityReferenceSettings(),
@@ -1111,16 +1135,16 @@ projectName: project.name,
           result?.videoStatus === 'skipped-image-motion-only'
         )
       ) {
-        scene.imagePath = result.imagePath || scene.imagePath || '';
+        scene.imagePath = result.keyframeOutputPath || result.imagePath || scene.imagePath || '';
         scene.imageDataUrl = result.imageDataUrl || scene.imageDataUrl || '';
         scene.motionPrompt = result.motionPrompt || scene.motionPrompt || '[saved: motion_prompt.txt]';
-        scene.motionPromptPath = result.motionPromptPath || scene.motionPromptPath || 'motion_prompt.txt';
+        scene.motionPromptPath = result.motionPromptOutputPath || result.motionPromptPath || scene.motionPromptPath || 'motion_prompt.txt';
         scene.videoStatus = 'skipped-image-motion-only';
         scene.videoPath = '';
         scene.videoUrl = '';
         scene.status = 'done';
         scene.motionPrompt = result.motionPrompt || scene.motionPrompt || '[saved: motion_prompt.txt]';
-        scene.motionPromptPath = result.motionPromptPath || scene.motionPromptPath || 'motion_prompt.txt';
+        scene.motionPromptPath = result.motionPromptOutputPath || result.motionPromptPath || scene.motionPromptPath || 'motion_prompt.txt';
         scene.progressStep = 'motion';
         scene.error = '';
         scene.updatedAt = new Date().toISOString();
@@ -1160,10 +1184,10 @@ projectName: project.name,
 
 
       if (isImageMotionOnlyModeEnabled() && result?.imageMotionOnlyMode) {
-        scene.imagePath = result.imagePath || scene.imagePath;
+        scene.imagePath = result.keyframeOutputPath || result.imagePath || scene.imagePath;
         scene.imageDataUrl = result.imageDataUrl || scene.imageDataUrl;
         scene.motionPrompt = result.motionPrompt || scene.motionPrompt || '';
-        scene.motionPromptPath = result.motionPromptPath || scene.motionPromptPath || '';
+        scene.motionPromptPath = result.motionPromptOutputPath || result.motionPromptPath || scene.motionPromptPath || '';
         scene.videoStatus = 'skipped-image-motion-only';
         scene.status = 'done';
         scene.progressStep = 'motion';
@@ -1283,6 +1307,17 @@ projectName: project.name,
       scene.updatedAt = new Date().toISOString();
       persist();
       render();
+      if (isRetryableChatGptWorkflowError(message) && scene.pipelineRetryCount <= 5) {
+        scene.status = scene.imagePath ? 'motion_prompt_pending' : 'image_pending';
+        scene.progressStep = scene.imagePath ? 'motion' : 'image';
+        scene.error = `ChatGPT retryable pipeline error; retry ${scene.pipelineRetryCount}/5: ${message}`;
+        safeAddPipelineLog?.('renderer', 'running', `ChatGPT retryable pipeline error on scene ${scene.id}; retry ${scene.pipelineRetryCount}/5.`, { message });
+        persist();
+        render();
+        i--;
+        await sleep(2500);
+        continue;
+      }
       if (/Object reference chain is too long|Cannot find context with specified id|Execution context was destroyed|Target closed/i.test(message)) {
         scene.status = 'error';
         scene.progressStep = scene.imagePath ? 'motion' : 'image';
@@ -1307,10 +1342,74 @@ projectName: project.name,
     if (unfinished) return queueAutoContinue();
     await mergeAndShowFinalPreview();
   }
-  setStatus('Không còn scene cần chạy trong batch hiện tại.', 'ok');
+  setStatus('Kh?ng c?n scene c?n ch?y trong batch hi?n t?i.', 'ok');
+
   render();
+
+  await maybeRunVeoUpAutomationAfterPipeline('runFullPipeline-complete');
 }
 
+
+function isSceneCompleteForVeoUp(scene) {
+  if (!scene || scene.status === 'skipped') return true;
+  if (scene.videoStatus === 'skipped-image-motion-only') return Boolean(scene.imagePath && (scene.motionPrompt || scene.motionPromptPath));
+  if (scene.status === 'done') return Boolean(scene.imagePath && (scene.motionPrompt || scene.motionPromptPath));
+  return Boolean(scene.videoPath || scene.videoUrl || scene.finalVideoPath || scene.outputVideoPath || scene.status === 'video_done');
+}
+
+function isProjectCompleteForVeoUp() {
+  return Boolean(project?.scenes?.length) && project.scenes.every(isSceneCompleteForVeoUp);
+}
+
+async function maybeRunVeoUpAutomationAfterPipeline(reason = 'pipeline-complete') {
+  if (veoupAutomationInFlight) return;
+  if (projectRuntime?.veoupAutomationResult?.ok) return;
+  if (!window.videoPlannerAPI?.runVeoUpAutomation || !isProjectCompleteForVeoUp()) return;
+
+  veoupAutomationInFlight = true;
+  projectRuntime = {
+    ...projectRuntime,
+    veoupAutomationTriggeredAt: new Date().toISOString(),
+    veoupAutomationReason: reason,
+  };
+  persist();
+
+  safeAddPipelineLog?.('renderer', 'running', 'VeoUp automation: starting after completed Vidora pipeline.', { reason, outputFolder });
+  setStatus('Pipeline complete. Starting VeoUp automation...', 'running');
+
+  const result = await window.videoPlannerAPI.runVeoUpAutomation({
+    outputFolder,
+    projectName: project?.name || projectNameInput?.value || '',
+    scenes: (project?.scenes || []).map((scene) => ({
+      id: scene.id,
+      imagePath: scene.imagePath || scene.keyframeOutputPath || '',
+      keyframeOutputPath: scene.keyframeOutputPath || '',
+      motionPrompt: scene.motionPrompt || '',
+      motionPromptPath: scene.motionPromptPath || '',
+      motionPromptOutputPath: scene.motionPromptOutputPath || '',
+      status: scene.status || '',
+      videoStatus: scene.videoStatus || '',
+    })),
+  }).catch((error) => ({ ok: false, error: error.message || String(error) }));
+
+  projectRuntime = { ...projectRuntime, veoupAutomationResult: result };
+  persist();
+  safeAddPipelineLog?.(
+    'renderer',
+    result?.ok ? 'ok' : 'error',
+    result?.ok
+      ? `VeoUp automation complete: ${result.imageCount || 0} images, ${result.promptLineCount || 0} prompts.`
+      : `VeoUp automation failed: ${result?.error || 'validation mismatch'}`,
+    result
+  );
+  setStatus(
+    result?.ok
+      ? 'Pipeline complete. VeoUp automation loaded images and prompts.'
+      : `Pipeline complete, but VeoUp automation failed: ${result?.error || 'validation mismatch'}`,
+    result?.ok ? 'ok' : 'error'
+  );
+  veoupAutomationInFlight = false;
+}
 function getSelectedWebProvider() {
   return providerSelect.value === 'grok' ? 'grok' : 'chatgpt';
 }
@@ -1455,6 +1554,9 @@ async function waitForProviderReady(providerValue, label) {
   throw new Error(`Đã hủy khi đang chờ ${label} login/verify.`);
 }
 
+function isRetryableChatGptWorkflowError(message = '') {
+  return /pre-extract-wait|chatgpt-image-tool-error|text-only-answer|no-usable-image|real_stall|still loading|Timed out waiting for a complete ChatGPT generated image asset|Timed out waiting|missing-motion-prompt-signals|retryable-bad-motion-text|bad-response-idle|no-assistant-after-send/i.test(String(message || ''));
+}
 function parseLoginRequiredError(message = '', scene = null) {
   const text = String(message || '');
   const explicit = text.match(/LOGIN_REQUIRED:(chatgpt|grok|pixverse)\b/i)?.[1]?.toLowerCase();
@@ -1496,6 +1598,7 @@ async function startPipelineFromClick(event) {
     return;
   }
   setStatus('Đã bấm Start pipeline. Đang khởi động workflow...', 'running');
+  forceChatGptImageMotionOnlyWorkflow();
   await autoRunRoute();
 }
 window.startPipelineFromClick = startPipelineFromClick;
@@ -1505,6 +1608,7 @@ async function autoRunRoute() {
     createProject();
     if (!project || !project.scenes?.length) return;
   }
+  forceChatGptImageMotionOnlyWorkflow();
   if (isRunning) return;
   setRunning(true);
   paused = false;

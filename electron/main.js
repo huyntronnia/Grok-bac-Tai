@@ -72,6 +72,7 @@ const ffmpegPath = require('ffmpeg-static');
 const fs = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
+const { executeVeoUpAutomation } = require('./veoupAutomation');
 
 const VIDEO_EXTENSIONS = new Set(['.mp4', '.mov', '.mkv', '.webm', '.avi', '.m4v']);
 const webWindows = new Map();
@@ -2118,7 +2119,37 @@ async function findSceneKeyframePathSafe(sceneDir, sceneId) {
   return '';
 }
 
+async function persistImageMotionOnlySharedOutputs({ projectDir, sceneDir, sceneId, imagePath, motionPrompt }) {
+  const safeProjectDir = projectDir || path.dirname(sceneDir);
+  const sceneToken = `scene_${String(sceneId).padStart(3, '0')}`;
+  const keyframesDir = path.join(safeProjectDir, 'keyframes');
+  const motionPromptsDir = path.join(safeProjectDir, 'motion_prompts');
+  await fs.mkdir(keyframesDir, { recursive: true });
+  await fs.mkdir(motionPromptsDir, { recursive: true });
+
+  const sourceImagePath = imagePath && await pathExists(imagePath)
+    ? imagePath
+    : await findSceneKeyframePathSafe(sceneDir, sceneId);
+  let keyframeOutputPath = '';
+  if (sourceImagePath) {
+    const extension = path.extname(sourceImagePath) || '.png';
+    keyframeOutputPath = path.join(keyframesDir, `${sceneToken}_keyframe${extension}`);
+    if (path.resolve(sourceImagePath) !== path.resolve(keyframeOutputPath)) {
+      await fs.copyFile(sourceImagePath, keyframeOutputPath);
+    }
+  }
+
+  let motionPromptOutputPath = '';
+  if (String(motionPrompt || '').trim()) {
+    motionPromptOutputPath = path.join(motionPromptsDir, `${sceneToken}_motion_prompt.txt`);
+    await fs.writeFile(motionPromptOutputPath, String(motionPrompt || '').trim(), 'utf8');
+  }
+
+  return { keyframeOutputPath, motionPromptOutputPath, keyframesDir, motionPromptsDir };
+}
+
 async function buildImageMotionOnlyPipelineResult({
+  projectDir,
   sceneDir,
   sceneId,
   imagePath,
@@ -2126,16 +2157,26 @@ async function buildImageMotionOnlyPipelineResult({
   finalImagePrompt = '',
   continuityReferenceState = null,
 }) {
+  const sharedOutputs = await persistImageMotionOnlySharedOutputs({ projectDir, sceneDir, sceneId, imagePath, motionPrompt });
+  const resultImagePath = sharedOutputs.keyframeOutputPath || imagePath;
+  const resultMotionPromptPath = sharedOutputs.motionPromptOutputPath || path.join(sceneDir, 'motion_prompt.txt');
+
   return {
     sceneDir,
     phase: 'motion_prompt',
     imageMotionOnlyMode: true,
     skipVideoGeneration: true,
-    imagePath,
-    imageDataUrl: imagePath ? await imageFileToDataUrl(imagePath).catch(() => '') : '',
+    imagePath: resultImagePath,
+    keyframeOutputPath: sharedOutputs.keyframeOutputPath,
+    imageDataUrl: resultImagePath ? await imageFileToDataUrl(resultImagePath).catch(() => '') : '',
     imagePromptUsed: finalImagePrompt || '',
     motionPrompt,
-    motionPromptPath: path.join(sceneDir, 'motion_prompt.txt'),
+    motionPromptPath: resultMotionPromptPath,
+    motionPromptOutputPath: sharedOutputs.motionPromptOutputPath,
+    sharedOutputFolders: {
+      keyframesDir: sharedOutputs.keyframesDir,
+      motionPromptsDir: sharedOutputs.motionPromptsDir,
+    },
     videoPath: '',
     videoProvider: 'none',
     videoStatus: 'skipped-image-motion-only',
@@ -2207,25 +2248,30 @@ if (!outputFolder) throw new Error('Chưa chọn folder output.');
         } catch (_error) {}
       }
 
-      await appendAppLog(null, {
-        source: 'main',
-        kind: 'ok',
-        text: `Scene ${sceneId}: Image + motion only: đã có sẵn motion_prompt.txt; bỏ qua Grok/Veo/video.`,
-        details: {
-          imagePath: imageMotionOnlySafeImagePath ? path.basename(imageMotionOnlySafeImagePath) : '',
-          motionPromptRef: 'motion_prompt.txt',
-          reason: 'existing motion_prompt.txt; skipping video provider',
-        },
-      }).catch(() => null);
+      if (!imageMotionOnlySafeImagePath) {
+        await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: Image + motion only: existing motion_prompt.txt found but keyframe is missing; generating keyframe.` }).catch(() => null);
+      } else {
+        await appendAppLog(null, {
+          source: 'main',
+          kind: 'ok',
+          text: `Scene ${sceneId}: Image + motion only: existing motion_prompt.txt + keyframe found, skipping Grok/Veo/video.`,
+          details: {
+            imagePath: path.basename(imageMotionOnlySafeImagePath),
+            motionPromptRef: 'motion_prompt.txt',
+            reason: 'existing motion_prompt.txt and keyframe in image-motion-only mode',
+          },
+        }).catch(() => null);
 
-      return await buildImageMotionOnlyPipelineResult({
-        sceneDir,
-        sceneId,
-        imagePath: imageMotionOnlySafeImagePath,
-        motionPrompt,
-        finalImagePrompt: '',
-        continuityReferenceState: null,
-      });
+        return await buildImageMotionOnlyPipelineResult({
+          projectDir,
+          sceneDir,
+          sceneId,
+          imagePath: imageMotionOnlySafeImagePath,
+          motionPrompt,
+          finalImagePrompt: '',
+          continuityReferenceState: null,
+        });
+      }
     }
     }
   }
@@ -2247,30 +2293,37 @@ if (!outputFolder) throw new Error('Chưa chọn folder output.');
   if (imageMotionOnlyMode && String(motionPrompt || '').trim()) {
     const imageMotionOnlySafeImagePath = await findSceneKeyframePathSafe(sceneDir, sceneId);
 
-    await appendAppLog(null, {
-      source: 'main',
-      kind: 'ok',
-      text: `Scene ${sceneId}: Image + motion only: đã có motion prompt, bỏ qua toàn bộ Grok/Veo/video.`,
-      details: {
-        imagePath: imageMotionOnlySafeImagePath ? path.basename(imageMotionOnlySafeImagePath) : '',
-        motionPromptRef: 'motion_prompt.txt',
-        reason: 'final guard before video provider in image-motion-only mode',
-      },
-    }).catch(() => null);
+    if (imageMotionOnlySafeImagePath) {
+      await appendAppLog(null, {
+        source: 'main',
+        kind: 'ok',
+        text: `Scene ${sceneId}: Image + motion only: existing motion prompt + keyframe found, skipping Grok/Veo/video.`,
+        details: {
+          imagePath: path.basename(imageMotionOnlySafeImagePath),
+          motionPromptRef: 'motion_prompt.txt',
+          reason: 'existing motion prompt and keyframe in image-motion-only mode',
+        },
+      }).catch(() => null);
 
-    return await buildImageMotionOnlyPipelineResult({
-      sceneDir,
-      sceneId,
-      imagePath: imageMotionOnlySafeImagePath,
-      motionPrompt,
-      finalImagePrompt: '',
-      continuityReferenceState: null,
-    });
+      return await buildImageMotionOnlyPipelineResult({
+        projectDir,
+        sceneDir,
+        sceneId,
+        imagePath: imageMotionOnlySafeImagePath,
+        motionPrompt,
+        finalImagePrompt: '',
+        continuityReferenceState: null,
+      });
+    }
+
+    await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: Image + motion only: motion prompt exists but keyframe is missing; generating keyframe before finishing.` }).catch(() => null);
   }
 
-  await appendAppLog(null, { source: 'main', kind: 'info', text: `Scene ${sceneId}: video router ${videoProvider}/${videoAccount || 'default'} (${routingPolicy})`,
-    details: { videoProvider, videoAccount: maskRouterText(videoAccount), routingPolicy, accountRouterEnabled: routerActive, routerSandbox: 'dev_sandbox_grok_account_router' },
-  });
+  if (!imageMotionOnlyMode) {
+    await appendAppLog(null, { source: 'main', kind: 'info', text: `Scene ${sceneId}: video router ${videoProvider}/${videoAccount || 'default'} (${routingPolicy})`,
+      details: { videoProvider, videoAccount: maskRouterText(videoAccount), routingPolicy, accountRouterEnabled: routerActive, routerSandbox: 'dev_sandbox_grok_account_router' },
+    });
+  }
   let imagePath = options.imagePath || '';
   if (imagePath && !(await pathExists(imagePath))) imagePath = '';
   const expectedImagePath = path.join(sceneDir, `scene_${String(sceneId).padStart(3, '0')}_keyframe.png`);
@@ -2320,24 +2373,15 @@ if (!outputFolder) throw new Error('Chưa chọn folder output.');
       },
     }).catch(() => null);
 
-    return {
+    return await buildImageMotionOnlyPipelineResult({
+      projectDir,
       sceneDir,
-      phase: 'motion_prompt',
-      imageMotionOnlyMode: true,
+      sceneId,
       imagePath,
-      imageDataUrl: imagePath ? await imageFileToDataUrl(imagePath).catch(() => '') : '',
-      imagePromptUsed: finalImagePrompt,
       motionPrompt,
-      motionPromptPath: path.join(sceneDir, 'motion_prompt.txt'),
-      videoPath: '',
-      videoProvider: 'none',
-      videoStatus: 'skipped-image-motion-only',
-      videoError: '',
-      continuityReferencePaths: continuityReferenceState?.paths || [],
-      continuityReferenceSourceScene: continuityReferenceState?.sourceSceneId || null,
-      generatedContinuityReferences: { ok: false, skipped: true, reason: 'image-motion-only-mode', sourceSceneId: sceneId, paths: [] },
-      router: null,
-    };
+      finalImagePrompt,
+      continuityReferenceState,
+    });
   }
 }
   }
@@ -2356,6 +2400,29 @@ if (!outputFolder) throw new Error('Chưa chọn folder output.');
     await appendAppLog(null, { source: 'main', kind: 'ok', text: `PIPELINE Scene ${sceneId}: đã lưu motion_prompt.txt.` });
   }
   await fs.writeFile(path.join(sceneDir, 'motion_prompt.txt'), motionPrompt, 'utf8');
+
+  if (imageMotionOnlyMode) {
+    await appendAppLog(null, {
+      source: 'main',
+      kind: 'ok',
+      text: `Scene ${sceneId}: Image + motion only mode: saved keyframe + motion prompt, skipping Grok/Veo/video.`,
+      details: {
+        imagePath: imagePath ? path.basename(imagePath) : '',
+        motionPromptRef: 'motion_prompt.txt',
+        reason: 'final image-motion-only guard after NV2',
+      },
+    }).catch(() => null);
+
+    return await buildImageMotionOnlyPipelineResult({
+      projectDir,
+      sceneDir,
+      sceneId,
+      imagePath,
+      motionPrompt,
+      finalImagePrompt,
+      continuityReferenceState,
+    });
+  }
 
   const checkpointFields = {
     projectName,
@@ -2536,6 +2603,35 @@ async function generateImageWithImageApi({ imagePrompt, sceneDir, sceneId, confi
 }
 
 
+function normalizeChatGptRetryText(text = '') {
+  return String(text || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\u0111/g, 'd')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function isRetryableChatGptToolErrorText(text = '', stage = '') {
+  const normalized = normalizeChatGptRetryText(text);
+  const raw = String(text || '').toLowerCase();
+  if (!normalized && !raw) return false;
+  const imageToolFailed =
+    /khong the tao anh/.test(normalized) ||
+    /cong cu tao anh.*(gap loi|loi)/.test(normalized) ||
+    /hay gui lai yeu cau.*tao lai anh/.test(normalized) ||
+    /(image|generation).*tool.*(error|failed)/i.test(raw) ||
+    /(cannot|can't|couldn'?t|unable to).{0,80}(create|generate).{0,80}image/i.test(raw);
+  const motionRefusal =
+    /khong the tao motion prompt/.test(normalized) ||
+    /khong the tao.*motion prompt/.test(normalized) ||
+    /anh hien tai khong co/.test(normalized) ||
+    /keyframe.*(does not|doesn't|missing|khong co)/i.test(raw);
+  if (stage === 'image') return imageToolFailed;
+  if (stage === 'motion') return motionRefusal || imageToolFailed;
+  return imageToolFailed || motionRefusal;
+}
 function isChatGptPolicyRefusalText(text = '') {
   const t = String(text || '').toLowerCase();
   return (
@@ -3027,6 +3123,7 @@ async function generateMotionPromptWithChatGPTOnce({ imagePath, prompt, sceneDir
   const instruction = [
     'Dựa trên ảnh keyframe vừa được upload, hãy thực hiện NHIỆM VỤ 2 để tạo MOTION PROMPT cho video.',
     'Chỉ trả về prompt motion cuối cùng, không giải thích, không markdown thừa.',
+    'If the uploaded keyframe differs from the written scene, still write the motion prompt from the visible keyframe. Do not refuse, do not explain mismatch, do not ask for a new image.',
     prompt,
   ].join('\n\n');
   const sent = await sendPromptViaCdpInputSingle(page, instruction, { sceneId, stage: 'motion_prompt', attemptId: lockInfo.attemptId, beforeCount: before?.count || 0 });
@@ -3035,9 +3132,12 @@ async function generateMotionPromptWithChatGPTOnce({ imagePath, prompt, sceneDir
   let latest = '';
   let lastState = null;
   let recoveredOnce = 0;
+  let motionAttemptStartedAt = startedAt;
+  let lastBadMotionText = '';
+  let badMotionTextTicks = 0;
   const retryMotionPrompt = async (reason, state) => {
     recoveredOnce += 1;
-    await fs.writeFile(path.join(sceneDir, `scene_${String(sceneId).padStart(3, '0')}_chatgpt_motion_recovery_${recoveredOnce}_${reason}.json`), JSON.stringify({ reason, state, elapsedMs: Date.now() - startedAt }, null, 2), 'utf8').catch(() => null);
+    await fs.writeFile(path.join(sceneDir, `scene_${String(sceneId).padStart(3, '0')}_chatgpt_motion_recovery_${recoveredOnce}_${reason}.json`), JSON.stringify({ reason, state, elapsedMs: Date.now() - motionAttemptStartedAt }, null, 2), 'utf8').catch(() => null);
     await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: NV2 bị kẹt (${reason}), retry ${recoveredOnce}/3: F5 → Stop → F5 → upload lại ảnh → gửi lại NV2.` });
     await page.Page.reload({ ignoreCache: true }).catch(() => null);
     await waitForCdpLoad(page).catch(() => null);
@@ -3062,14 +3162,17 @@ async function generateMotionPromptWithChatGPTOnce({ imagePath, prompt, sceneDir
     await waitForCdpLoad(page).catch(() => null);
     await sleep(2200);
     const uploadAgain = await uploadFileViaCdp(page, imagePath, 'chatgpt').catch((error) => ({ ok: false, error: error.message }));
-    if (!uploadAgain?.ok) return true;
+
     await appendAppLog(null, { source: 'main', kind: uploadAgain?.ok ? 'ok' : 'error', text: `Scene ${sceneId}: NV2 recovery upload lại keyframe: ${uploadAgain?.ok ? 'ChatGPT đã nhận ảnh' : uploadAgain?.error || 'failed'}`, details: uploadAgain });
     if (!uploadAgain?.ok) throw new Error(uploadAgain?.error || 'Không upload lại được keyframe trước khi retry NV2.');
     await sleep(1500);
     const beforeRetry = await evaluateOnCdpPage(page, `(${readLatestAssistantScript.toString()})()`).catch(() => ({ count: 0, text: '' }));
     const resent = await sendPromptViaCdpInput(page, instruction);
-    if (!resent?.ok) return true;
+
     if (!resent?.ok) throw new Error(resent?.error || 'Không gửi lại Nhiệm vụ 2 sau recovery.');
+    motionAttemptStartedAt = Date.now();
+    lastBadMotionText = '';
+    badMotionTextTicks = 0;
     await appendAppLog(null, { source: 'main', kind: 'ok', text: `Scene ${sceneId}: đã gửi lại NV2 sau recovery ${recoveredOnce}/3.`, details: { resent, beforeRetry } });
     return true;
   };
@@ -3094,7 +3197,7 @@ async function generateMotionPromptWithChatGPTOnce({ imagePath, prompt, sceneDir
       }
 
       await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: đang chờ ChatGPT trả NV2, chưa thấy assistant response mới.`, details: state });
-      if (Date.now() - startedAt > 25000 && await retryMotionPrompt('no-assistant-after-send', state)) continue;
+      if (Date.now() - motionAttemptStartedAt > 25000 && await retryMotionPrompt('no-assistant-after-send', state)) continue;
       continue;
     }
     latest = state.text.trim();
@@ -3102,9 +3205,21 @@ async function generateMotionPromptWithChatGPTOnce({ imagePath, prompt, sceneDir
     const quality = validateMotionPromptResponse(latest, { beforeText: before?.text || '', instruction, taskPrompt: prompt });
     const composerIdle = !state.stopButton && !state.generating;
     const composerDone = composerIdle && (state.voiceReady || quality.ok);
+    const retryableBadMotionText = freshAssistant && !quality.ok && isRetryableChatGptToolErrorText(latest, 'motion');
+    const normalizedBadMotionText = normalizeChatGptRetryText(latest);
+    if (freshAssistant && !quality.ok && (retryableBadMotionText || quality.error === 'missing-motion-prompt-signals' || quality.error === 'too-short')) {
+      if (normalizedBadMotionText && normalizedBadMotionText === lastBadMotionText) badMotionTextTicks += 1;
+      else {
+        lastBadMotionText = normalizedBadMotionText;
+        badMotionTextTicks = 1;
+      }
+    } else if (quality.ok) {
+      lastBadMotionText = '';
+      badMotionTextTicks = 0;
+    }
     if (freshAssistant && composerDone && quality.ok) break;
-    if (freshAssistant && composerIdle && !quality.ok && Date.now() - startedAt > 25000 && await retryMotionPrompt(quality.error || 'bad-response-idle', state)) continue;
-    if (!freshAssistant && composerIdle && Date.now() - startedAt > 25000 && await retryMotionPrompt('stuck-after-user-message', state)) continue;
+    if (freshAssistant && !quality.ok && (composerIdle || retryableBadMotionText || badMotionTextTicks >= 3) && Date.now() - motionAttemptStartedAt > 25000 && await retryMotionPrompt(retryableBadMotionText ? 'retryable-bad-motion-text' : (quality.error || 'bad-response-idle'), state)) continue;
+    if (!freshAssistant && composerIdle && Date.now() - motionAttemptStartedAt > 25000 && await retryMotionPrompt('stuck-after-user-message', state)) continue;
     {
         const policyCheckText =
           typeof latestText !== 'undefined' ? latestText :
@@ -5613,6 +5728,8 @@ async function waitForChatGptImageGenerationDoneBeforeExtract(client, options = 
   const startedAt = Date.now();
   let lastBusyLogAt = 0;
   let firstIdleAt = 0;
+  let retryableImageTextTicks = 0;
+  let lastRetryableImageText = '';
 
   while (Date.now() - startedAt < 360000) {
     const imageState = await evaluateOnCdpPage(
@@ -5624,6 +5741,32 @@ async function waitForChatGptImageGenerationDoneBeforeExtract(client, options = 
       client,
       `(${detectChatGptActiveGenerationScriptStrict.toString()})()`
     ).catch((error) => ({ ok: false, generating: true, error: error.message }));
+    const latestAssistantText = String(imageState?.latestAssistantText || '').trim();
+    const normalizedRetryText = normalizeChatGptRetryText(latestAssistantText);
+    if (latestAssistantText && isRetryableChatGptToolErrorText(latestAssistantText, 'image') && !(imageState?.urls || []).length) {
+      if (normalizedRetryText && normalizedRetryText === lastRetryableImageText) retryableImageTextTicks += 1;
+      else {
+        lastRetryableImageText = normalizedRetryText;
+        retryableImageTextTicks = 1;
+      }
+      await appendAppLog(null, {
+        source: 'main',
+        kind: 'running',
+        text: `Scene ${sceneId}: ChatGPT returned retryable image tool text; tick ${retryableImageTextTicks}/2 before NV1 retry.`,
+        details: { reason: 'chatgpt-image-tool-error-text-before-extract', latestAssistantText: latestAssistantText.slice(0, 600) },
+      }).catch(() => null);
+      if (retryableImageTextTicks >= 2) {
+        return {
+          ok: false,
+          retryReason: 'chatgpt-image-tool-error-text-before-extract',
+          imageState: sanitizeChatGptImageSnapshot(imageState),
+          activeGeneration,
+        };
+      }
+    } else {
+      lastRetryableImageText = '';
+      retryableImageTextTicks = 0;
+    }
 
     const busy = Boolean(
       imageState?.generating ||
@@ -5730,7 +5873,12 @@ let lastExtract = null;
 
     while (Date.now() - attemptStartedAt < 360000) {
       
-      await waitForChatGptImageGenerationDoneBeforeExtract(client, options);
+      const preExtractWait = await waitForChatGptImageGenerationDoneBeforeExtract(client, options)
+        .catch((error) => ({ ok: false, retryReason: 'pre-extract-wait-timeout', error: error.message }));
+      if (!preExtractWait?.ok) {
+        await resendImagePrompt(preExtractWait?.retryReason || 'pre-extract-wait-failed', preExtractWait?.imageState || lastSnapshot || { error: preExtractWait?.error || 'unknown' });
+        break;
+      }
 await sleep(3000);
       await recoverCdpPageIfCrashed(client, 'chatgpt', `image-wait-scene-${((typeof options !== 'undefined' && options?.sceneId) || (typeof context !== 'undefined' && context?.sceneId) || '')}`).catch(() => null);
       await recoverChatGptBlockingUi(client, { sceneId: ((typeof options !== 'undefined' && options?.sceneId) || (typeof context !== 'undefined' && context?.sceneId) || ''), stage: 'image-wait-before-extract' }).catch(() => null);
@@ -9039,6 +9187,29 @@ function readChatGptImageStateScript() {
   };
 }
 
+
+async function runVeoUpAutomation(_event, payload = {}) {
+  await appendAppLog(null, {
+    source: 'main',
+    kind: 'running',
+    text: 'VeoUp automation: starting after completed Vidora pipeline.',
+    details: { outputFolder: payload?.outputFolder || '', projectName: payload?.projectName || '' },
+  }).catch(() => null);
+
+  const result = await executeVeoUpAutomation(payload);
+
+  await appendAppLog(null, {
+    source: 'main',
+    kind: result?.ok ? 'ok' : 'error',
+    text: result?.ok
+      ? `VeoUp automation: loaded ${result.imageCount || 0} keyframes and ${result.promptLineCount || 0} prompts.`
+      : `VeoUp automation failed: ${result?.error || 'validation mismatch'}`,
+    details: result,
+  }).catch(() => null);
+
+  return result;
+}
+
 async function exportProject(_event, payload) {
   const result = await dialog.showSaveDialog({
     title: 'Export project JSON',
@@ -9201,6 +9372,7 @@ app.whenReady().then(() => {
   ipcMain.handle('project:create-session-file', createProjectSessionFile);
   ipcMain.handle('project:open-session-file', openProjectSessionFile);
   ipcMain.handle('project:ensure-scene-folders', ensureProjectSceneFolders);
+  ipcMain.handle('veoup:run-automation', safeIpcHandler(runVeoUpAutomation));
 
   ensureUserPromptFile(HARD_PROMPT_FILENAME).catch((error) => {
     appendAppLog(null, {

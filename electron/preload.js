@@ -34,6 +34,7 @@ contextBridge.exposeInMainWorld('videoPlannerAPI', {
   chooseOutputFolder: () => ipcRenderer.invoke('output:choose-folder'),
   sendPromptViaWeb: (options) => ipcRenderer.invoke('browser:send-prompt', options),
   runScenePipeline: (options) => ipcRenderer.invoke('pipeline:run-scene', options),
+  runVeoUpAutomation: (options) => ipcRenderer.invoke('veoup:run-automation', options),
   generateScenePrompts: (options) => ipcRenderer.invoke('ai:generate-scene-prompts', options),
   exportProject: (payload) => ipcRenderer.invoke('project:export', payload),
   newProjectSession: (options) => ipcRenderer.invoke('project:new-session', options),
