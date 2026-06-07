@@ -3283,6 +3283,60 @@ modelInput?.addEventListener('input', () => {
     markProjectDirty();
     persist();
   }));
+
+/* VIDORA_HARD_PROMPT_FILE_PICKER_UI_V2 */
+function ensureHardPromptFilePickerUi() {
+  const openBtn = document.getElementById('openHardPromptBtn');
+  if (!openBtn || document.getElementById('chooseHardPromptBtn')) return;
+
+  const wrap = document.createElement('div');
+  wrap.className = 'setting-row';
+  wrap.style.marginTop = '8px';
+  wrap.style.display = 'flex';
+  wrap.style.gap = '8px';
+  wrap.style.alignItems = 'center';
+  wrap.style.flexWrap = 'wrap';
+
+  const chooseBtn = document.createElement('button');
+  chooseBtn.id = 'chooseHardPromptBtn';
+  chooseBtn.type = 'button';
+  chooseBtn.className = openBtn.className || 'secondary';
+  chooseBtn.textContent = 'Chọn file hard prompt';
+
+  const label = document.createElement('span');
+  label.id = 'hardPromptFileLabel';
+  label.style.opacity = '0.8';
+  label.style.fontSize = '12px';
+  label.textContent = 'Đang dùng file hard prompt mặc định';
+
+  wrap.appendChild(chooseBtn);
+  wrap.appendChild(label);
+  openBtn.insertAdjacentElement('afterend', wrap);
+
+  async function refreshLabel() {
+    const info = await window.videoPlannerAPI?.getHardPromptFile?.().catch(() => null);
+    if (!info?.ok) return;
+    label.textContent = info.usingCustomFile
+      ? `Hard prompt: ${info.filePath}`
+      : `Hard prompt mặc định: ${info.filePath}`;
+  }
+
+  chooseBtn.addEventListener('click', async () => {
+    const result = await window.videoPlannerAPI?.chooseHardPromptFile?.().catch((error) => ({ ok: false, error: error.message }));
+    if (result?.ok) {
+      setStatus(`Đã chọn file hard prompt: ${result.filePath}`, 'ok');
+      await refreshLabel();
+    } else if (!result?.canceled) {
+      setStatus(`Không chọn được file hard prompt: ${result?.error || 'unknown'}`, 'error');
+    }
+  });
+
+  refreshLabel().catch(() => null);
+}
+
+ensureHardPromptFilePickerUi();
+document.addEventListener('DOMContentLoaded', ensureHardPromptFilePickerUi);
+
 settingsSaveBtn?.addEventListener('click', saveSettingsDialog);
 copyLogBtn?.addEventListener('click', copyPipelineLog);
 

@@ -4,6 +4,8 @@ contextBridge.exposeInMainWorld('videoPlannerAPI', {
   appendAppLog: (entry) => ipcRenderer.invoke('app:append-log', entry),
   getAppLogPath: () => ipcRenderer.invoke('app:get-log-path'),
   openHardPromptFile: () => ipcRenderer.invoke('prompt:open-hard-file'),
+  getHardPromptFile: () => ipcRenderer.invoke('prompt:get-hard-file'),
+  chooseHardPromptFile: () => ipcRenderer.invoke('prompt:choose-hard-file'),
   openGrokRouterFolder: () => ipcRenderer.invoke('router:open-grok-folder'),
   getGrokRouterStatus: () => ipcRenderer.invoke('router:get-status'),
   listGrokAccountsSafe: () => ipcRenderer.invoke('router:list-accounts-safe'),

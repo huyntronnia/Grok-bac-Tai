@@ -1072,8 +1072,93 @@ async function ensureUserPromptFile(filename = HARD_PROMPT_FILENAME) {
   }
 }
 
+
+/* VIDORA_HARD_PROMPT_FILE_PICKER_V2 */
+const HARD_PROMPT_CONFIG_FILENAME = 'hard-prompt-config.json';
+
+function getHardPromptConfigPath() {
+  return path.join(app.getPath('userData'), HARD_PROMPT_CONFIG_FILENAME);
+}
+
+async function readHardPromptConfig() {
+  try {
+    const raw = await fs.readFile(getHardPromptConfigPath(), 'utf8');
+    const data = JSON.parse(raw);
+    return data && typeof data === 'object' ? data : {};
+  } catch (_error) {
+    return {};
+  }
+}
+
+async function writeHardPromptConfig(config = {}) {
+  const configPath = getHardPromptConfigPath();
+  await fs.mkdir(path.dirname(configPath), { recursive: true });
+  await fs.writeFile(configPath, JSON.stringify(config, null, 2), 'utf8');
+  return config;
+}
+
 async function resolveEditablePromptPath(filename = HARD_PROMPT_FILENAME) {
+  const config = await readHardPromptConfig();
+  const selectedPath = String(config.hardPromptPath || '').trim();
+
+  if (selectedPath) {
+    try {
+      await fs.access(selectedPath);
+      return selectedPath;
+    } catch (error) {
+      await appendAppLog(null, {
+        source: 'main',
+        kind: 'error',
+        text: 'promptFile: selected hard prompt file missing; fallback to AppData default.',
+        details: { selectedPath, error: error.message },
+      }).catch(() => null);
+    }
+  }
+
   return ensureUserPromptFile(filename);
+}
+
+async function getHardPromptFileInfo() {
+  const config = await readHardPromptConfig();
+  const filePath = await resolveEditablePromptPath(HARD_PROMPT_FILENAME);
+  return {
+    ok: true,
+    filePath,
+    selectedPath: config.hardPromptPath || '',
+    usingCustomFile: Boolean(config.hardPromptPath),
+  };
+}
+
+async function chooseHardPromptFile() {
+  const result = await dialog.showOpenDialog({
+    title: 'Chọn file hard prompt 2 nhiệm vụ',
+    properties: ['openFile'],
+    filters: [
+      { name: 'Text files', extensions: ['txt'] },
+      { name: 'All files', extensions: ['*'] },
+    ],
+  });
+
+  if (result.canceled || !result.filePaths?.[0]) {
+    return { ok: false, canceled: true };
+  }
+
+  const filePath = result.filePaths[0];
+  await fs.access(filePath);
+
+  await writeHardPromptConfig({
+    hardPromptPath: filePath,
+    updatedAt: new Date().toISOString(),
+  });
+
+  await appendAppLog(null, {
+    source: 'main',
+    kind: 'ok',
+    text: 'promptFile: selected custom hard prompt file.',
+    details: { filePath },
+  }).catch(() => null);
+
+  return { ok: true, filePath, usingCustomFile: true };
 }
 
 async function openHardPromptFile() {
@@ -9338,6 +9423,8 @@ app.whenReady().then(() => {
   ipcMain.handle('app:append-log', appendAppLog);
   ipcMain.handle('app:get-log-path', getAppLogPath);
   ipcMain.handle('prompt:open-hard-file', openHardPromptFile);
+  ipcMain.handle('prompt:get-hard-file', getHardPromptFileInfo);
+  ipcMain.handle('prompt:choose-hard-file', chooseHardPromptFile);
   ipcMain.handle('router:open-grok-folder', openGrokRouterFolder);
   ipcMain.handle('router:get-status', getGrokRouterStatus);
   ipcMain.handle('router:list-accounts-safe', listGrokAccountsSafe);
