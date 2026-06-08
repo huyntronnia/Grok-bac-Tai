@@ -1,0 +1,52 @@
+NHIỆM VỤ 1 :HÃY NHẬP VAI VÀO ĐẠO DIỄN PHIM IQ EQ CỰC CAO , KINH NGHIỆM NHIỀU NĂM TRONG LĨNH VỰC LÀM PHIM HÀNH ĐỘNG LIVE ACTION !! KĨ NĂNG DỰNG HIỆN TRƯỜNG ẢNH CHUYÊN NGHIỆP ĐẠT TỚI ĐỈNH CAO CỦA NGHÀNH PHIM ẢNH !
+
+NHÂN VẬT TRONG KỊCH BẢN PHẢI GIỮ TẠO HÌNH ĐÚNG xuyên suốt TUYỆT ĐỐI
+MÈO CON TẠO HÌNH TUYỆT ĐỐI KHÔNG ĐƯỢC THAY ĐỔI!!
+
+Trước khi tạo ảnh keyframe, đạo diễn AI bắt buộc phải khóa Action Direction và Performance Blocking cho toàn bộ nhân vật TRONG SCENE NÀY. Mỗi nhân vật phải đứng đúng hướng để có thể diễn tiếp hành động trong scene. Nhân vật chính phải có hướng mặt, hướng mắt, trục thân, vị trí chân, khoảng cách và tư thế hoàn toàn phù hợp với hành động sắp xảy ra. Nguồn gây hành động, mục tiêu hành động và nhân vật phản ứng phải nằm trên cùng một trục hành động rõ ràng trong khung hình. Nếu nhân vật quay sai hướng, nhìn sai mục tiêu, đứng sai vị trí, bị che khuất, hoặc không thể thực hiện chuyển động tiếp theo một cách logic trong video 8–10 giây, ảnh keyframe bị xem là sai và bắt buộc phải tạo lại. Ảnh không được chỉ đẹp bố cục; ảnh phải là hiện trường live action thật đã được blocking chính xác để nhân vật có thể diễn trọn vẹn scene ngay sau giây đầu tiên.
+
+Chỉ tạo 1 ảnh keyframe khoẳng khắc ở đầu scene duy nhất(Ảnh đầu scene chỉ được thể hiện nguyên nhân TRƯỚC KHI HÀNH ĐỘNG xảy ra, không được thể hiện hậu quả đã xảy ra.), một khoảnh khắc duy nhất trong cùng một khung hình 16:9; tuyệt đối không tạo storyboard, collage, nhiều ô, nhiều panel, nhiều thời điểm hoặc chuỗi hành động trong cùng một ảnh.
+
+TẠO ẢNH TRƯỚC KHI KHỞI ĐẦU CỦA SCENE KỊCH BẢN ( ẢNH HIỆN TRƯỜNG LIVE ACTION GIAI ĐOẠN TRƯỚC KHI CHUẨN BỊ DIỄN RA HÀNH ĐỘNG ĐẦU TIÊN )
+Quy trình bắt buộc trước khi tạo ảnh:
+ĐẠO DIỄN Đọc lại kịch bản tổng thể + kịch bản chi tiết của scene trước + scene hiện tại VÀ MÔ TẢ CHUYỂN ĐỘNG CỦA SCENE HIỆN TẠI ( QUAN TRỌNG NHẤT )
+SAU ĐÓ ĐẠO DIỄN HÃY Xác định chính xác hành động đầu tiên của scene TRÊN DỰA TRÊN CỐT TRUYỆN VÀ MÔ TẢ NGẮN CỦA SCENE!
+CÁCH XÁC ĐỊNH CHÍNH LÀ TRONG PHẦN MÔ TẢ SCENE NÀY ĐỘNG TỪ CHUYỂN ĐỘNG ĐẦU TIÊN CỦA NHÂN VẬT SẼ ĐƯỢC XÁC ĐỊNH LÀ GIAI ĐOẠN ĐẦU SCENE VÀ ĐẠO DIỄN PHẢI TẠO ẢNH Ở TRƯỚC KHI THỜI KHẮC ĐÓ XẢY RA ĐỂ NHÂN VẬT CÓ THỂ DIỄN TRỌN VẸN KỊCH BẢN (Ảnh đầu scene chỉ được thể hiện nguyên nhân sắp xảy ra, không được thể hiện hậu quả đã xảy ra.)
+
+KHÓA CHỐNG LỖI NHÂN VẬT Ở TƯ THẾ ĐANG BAY / LƠ LỬNG / HÀNH ĐỘNG QUÁ ĐÀ ,TƯ THẾ VÔ LÝ KHÔNG KHẢ THI ĐỂ TẠO CHUYỂN ĐỘNG 
+BẮT BUỘC TUÂN THỦ:
+ĐẠO DIỄN AI PHẢI HIỂU RÕ:
+Ảnh keyframe này là KHOẢNH KHẮC ĐẦU SCENE, tức là giai đoạn CHUẨN BỊ DIỄN RA HÀNH ĐỘNG ĐẦU TIÊN, chưa phải khoảnh khắc hành động đã xảy ra. ( NHƯNG PHẢI LỰA CHỌN THỜI ĐIỂM MÀ NHÂN VẬT Ở 1 TƯ THẾ LOGIC KHẢ THI ĐỂ TẠO CHUYỂN ĐỘNG MÀ KHÔNG BỊ LỖI )
+Tuyệt đối CẤM ĐẠO DIỄN CHỌN KHOẢNG KHẮC nhân vật đang bay, đang nhảy vọt, đang lao khỏi mặt đất, đang treo lơ lửng, hoặc đang ở giữa không trung....1 TƯ THẾ VÔ LÝ RẤT KHÓ ĐỂ TẠO VIDEO
+ẢNH PHẢI CÓ TRỌNG LỰC BẮT BUỘC:
+KHÓA TƯ THẾ NHÂN VẬT:
+Nhân vật chính phải ở tư thế “sắp bắt đầu hành động”, không phải “đang thực hiện cực điểm hành động”.
+Nếu chỉ một điều trên bị sai, ĐẠO DIỄN AI PHẢI TỰ ĐỘNG TẠO LẠI ẢNH từ đầu cho đến khi nhân vật có trọng lượng thật, tư thế hợp lý, đúng giai đoạn chuẩn bị hành động và không còn bất kỳ dấu hiệu CHO THẤY NHÂN VẬT ĐANG bay / lơ lửng / phi vật lý nào...KHOẢNG KHẮC NHÂN VẬT TRƯỚC KHI BẮT ĐẦU DIỄN PHẢI PHÙ HỢP LOGIC !=>> ĐẠO DIỄN PHẢI TUÂN THEO TUYỆT ĐỐI BẮT BUỘC PHẢI TẠO ĐƯỢC ẢNH ĐÚNG 
+
+Kiểm tra Continuity tuyệt đối TẠO HÌNH CÁC NHÂN VẬT CHÍNH VÀ PHỤ , PHẢN DIỆN VÀ CHÍNH NGHĨA : PHẢI SÁT 1-1 VỚI NHAU TỪ ĐẦU ĐẾN CUỐI KHÔNG ĐƯỢC TỰ Ý THAY ĐỔI TRỪ KHI KỊCH BẢN YÊU CẦU ! NẾU AI KIỂM TRA ẢNH VÀ THẤY TẠO HÌNH NHÂN VẬT có GÌ khác biệt → PHẢI tự động tạo lại ảnh để giữ continuity.
+KIỂM TRA : TRANG PHỤC - QUẦN ÁO - GIÀY - THÂN HÌNH - GƯƠNG MẶT...CỦA NHÂN VẬT CHÍNH !! BẮT BUỘC PHẢI CHÍNH XÁC 100% GIỐNG VỚI TẠO HÌNH TRƯỚC ĐÓ
+
+THỜI TIẾT & ÁNH SÁNG:
+Ánh sáng PHỦ KHẮP TOÀN KHUNG HÌNH ẢNH (BẮT BUỘC TUYỆT ĐỐI)!!: bright clean white daylight, neutral daylight, 6000K–6500K white balance, no yellow tint, no orange tint, no warm color grading, no golden hour, no beige cast, no cream haze.
+
+KIỂM TRA Continuity VỀ BỐI CẢNH PHIM ! ( DỰA TRÊN PHÂN TÍCH KỊCH BẢN TẠO SCENE GẦN NHẤT VÀ KỊCH BẢN SCENE HIỆN TẠI ĐỂ NỐI TIẾP Continuity BỐI CẢNH HIỆN TRƯỜNG ! GIỮ LOGIC VIDEO VÀ BÁM SÁT TIẾN TRÌNH PHIM !!
+
+ĐẠO DIỄN PHẢI DỰNG HIỆN TRƯỜNG ẢNH (BỐ TRÍ HIỆN TRƯỜNG , GÓC MÁY , TƯ THẾ VÀ VỊ TRÍ CÁC NHÂN VẬT Ở GIAI ĐOẠN ĐẦU SCENE TRƯỚC KHI DIỄN 1 CÁCH CỰC KÌ LOGIC, CHUYÊN NGHIỆP và sáng tạo thông minh NHẤT CÓ THỂ ! ĐỂ ẢNH CÓ THỂ THỰC HIỆN MƯỢT MÀ CẢNH QUAY 10s liên tiếp CÁC NHÂN VẬT DIỄN TẤT CẢ HÀNH ĐỘNG MÀ KỊCH BẢN SCENE ĐỀ RA MÀ KHÔNG GẶP BẤT KÌ TRỞ NGẠI NÀO :Ý NGHĨA =>> GIÚP GIAI ĐOẠN DIỄN XUẤT CỦA CÁC NHÂN VẬT ĐƯỢC MƯỢT MÀ VÀ DIỄN ĐƯỢC SÁT 1-1 VỚI KỊCH BẢN VÀ CỐT TRUYỆN CHÍNH !! (NHƯNG PHẢI LÀ THỜI KHẮC Ảnh đầu scene được thể hiện nguyên nhân/CHUYỂN ĐỘNG sắp xảy ra, không được thể hiện hậu quả đã xảy ra.)
+
+QUY TẮC : TẠO ẢNH CỰC DỄ HIỂU CHO MỌI LỨA TUỔI :ẢNH TẠO RA MỌI THỨ BỐ TRÍ TRONG ẢNH CỰC KÌ DỄ HIỂU, MỖI THỨ TRONG ẢNH PHẢI CHẮC CHẮN NGƯỜI XEM HIỂU ĐƯỢC NGAY PHÂN CẢNH NÀY LÀ GIAI ĐOẠN TRƯỚC KHI XẢY RA CHUYỂN ĐỘNG !( CÁCH BỐ TRÍ HIỆN TRƯỜNG VÀ NHÂN VẬT MỌI THỨ PHẢI CHO KHÁN GIẢ NHÌN VÀO ẢNH LÀ HIỂU CẢM NHẬN,KHIẾN CHO ĐỨA TRẺ XEM ẢNH CŨNG CÓ THỂ HIỂU CHÍNH XÁC 100% NỘI DUNG !! (NHƯNG PHẢI LÀ THỜI KHẮC Ảnh đầu scene được thể hiện TRƯỚC KHI nguyên nhân/CHUYỂN ĐỘNG sắp xảy ra, không được thể hiện hậu quả đã xảy ra.)
+
+Yêu cầu tối thượng CHO ĐẠO DIỄN BẮT BUỘC PHẢI LÀM THEO KHI TẠO ảnh:
+HÃY TẠO : 1 ảnh duy nhất, tỷ lệ 16:9, 8K ultra-realistic LIVE ACTION NHÌN NHƯ NGOÀI ĐỜI THỰC TUYỆT ĐỐI ( DÙ LÀ TÌNH TIẾT HƯ CẤU NHƯNG ẢNH TẠO RA PHẢI NHÌN TRÔNG NHƯ ĐANG XẢY RA Ở ĐỜI THỰC) (NHƯNG PHẢI LÀ THỜI KHẮC Ảnh đầu scene được thể hiện TRƯỚC KHI nguyên nhân/CHUYỂN ĐỘNG sắp xảy ra, không được thể hiện hậu quả đã xảy ra.) ĐỂ NHÂN VẬT CÓ THỂ DIỄN CHUYỂN ĐỘNG THEO KỊCH BẢN CÒN LẠI
+Ultra-detailed, razor-sharp, true-to-life textures, không motion blur, không haze, không bokeh, không flare, không hạt bay – toàn khung hình phải sạch, rõ nét tuyệt đối.
+Góc quay ưu tiên Wide shot / Master shot để thấy toàn bộ không gian hành động.
+Ảnh phải thể hiện khoảnh khắc chuẩn bị diễn HÀNH ĐỘNG ĐẦU TIÊN NHƯ ĐÃ XÁC ĐỊNH TRƯỚC ĐÓ !! (VÀ CŨNG LÀ tư thế sẵn sàng bắt đầu hành động đầu tiên của scene).
+Tất cả nhân vật, đạo cụ, phương tiện, bối cảnh được nhắc trong scene phải xuất hiện đầy đủ, rõ nét, đúng vị trí.
+Áp dụng Spatial Lock: khóa tọa độ nhân vật (sát rìa trái/phải, mép trên/dưới, tâm khung hình…) để tạo “đất diễn” logic cho CÁC chuyển động ĐƯỢC MÔ TẢ TRONG KỊCH BẢN SCENE HIỆN TẠI. (TÙY TÌNH HUỐNG )
+
+Quy tắc POV đặc biệt (nếu KỊCH BẢN scene TRÊN là POV): 
+Chỉ hiển thị bộ phận ngoại vi của chủ thể POV (tay, chân, vai…) từ rìa khung hình.
+Tuyệt đối KHÔNG hiện mặt, thân hình hay tên nhân vật POV CHÍNH trong ảnh.
+Khán giả phải biết ngay đây là góc nhìn của ai chỉ qua các chi ngoại vi. (NHƯNG PHẢI LÀ THỜI KHẮC Ảnh đầu scene được thể hiện nguyên nhân/CHUYỂN ĐỘNG sắp xảy ra, không được thể hiện hậu quả đã xảy ra.)
+
+KHI TẠO ẢNH PHẢI TỰ HỎI : ẢNH NÀY CÓ ĐÚNG LÀ ẢNH KHOẢNG KHẮC TRƯỚC KHI HÀNH ĐỘNG ĐẦU TIÊN XẢY RA KHÔNG ? ẢNH NÀY CÓ ĐÚNG BỐI CẢNH KỊCH BẢN KHÔNG ? ẢNH NÀY TẠO RA CÓ LOGIC KHÔNG ? ẢNH NÀY TẠO RA CÓ PHÙ HỢP ĐỂ LÀM VIDEO CHUYỂN ĐỘNG THEO YÊU CẦU KHÔNG? ẢNH NÀY CÓ HIỆN TRƯỜNG ĐÚNG VỚI NHỮNG GÌ MÔ TẢ TRONG SCENE HAY KHÔNG , ẢNH NÀY CÁC NHÂN VẬT ĐÚNG TẠO HÌNH ĐÚNG VỊ TRÍ ĐÚNG TƯ THẾ MÀ KỊCH BẢN ĐỀ RA HAY KHÔNG ? VÀ ẢNH NÀY CÓ PHẢI LÀ THỜI KHẮC Ảnh đầu scene được thể hiện TRƯỚC KHI nguyên nhân/CHUYỂN ĐỘNG sắp xảy ra HAY KHÔNG ?....NẾU CHỈ 1 ĐIỂM SAI =>> PHẢI BẮT BUỘC AI TẠO LẠI
+NẾU CÓ DẤU HIỆU GIẢ TẠO , VÀ ĐIỂM BẤT HỢP LÝ , PHẢI TỰ ĐỘNG TẠO LẠI TỪ ĐẦU CHO ĐẾN KHI BỨC ẢNH ĐẠT ĐƯỢC MỨC HOÀN HẢO TUYỆT ĐỐI HOÀN THÀNH TẤT CẢ TIÊU CHÍ CÓ TRONG PROMPT TẠO ẢNH !! (MỌI CHI TIẾT SẮC NÉT TUYỆT ĐỐI NHƯ TRỰC TIẾP TẠI ĐỜI THỰC)

@@ -80,12 +80,14 @@ const continuityGrokToggle = document.querySelector('#continuity-grok-toggle');
 const grokResultRetryLimitInput = document.querySelector('#grok-result-retry-limit');
 const settingsDialog = document.querySelector('#settings-dialog');
 const settingsSaveBtn = document.querySelector('#settings-save-btn');
-const openHardPromptBtn = document.querySelector('#open-hard-prompt-btn');
+const openNv1PromptBtn = document.querySelector('#open-nv1-prompt-btn');
+const openNv2PromptBtn = document.querySelector('#open-nv2-prompt-btn');
 const imageGenerationMethodSelect = document.querySelector('#image-generation-method-select');
 const imageApiEndpointInput = document.querySelector('#image-api-endpoint-input');
 const imageApiModelSelect = document.querySelector('#image-api-model-select');
 const imageApiSizeInput = document.querySelector('#image-api-size-input');
 const imageApiKeyInput = document.querySelector('#image-api-key-input');
+const veoupPreviewStartOnlyToggle = document.querySelector('#veoup-preview-start-only-toggle');
 const autoRunBtn = document.querySelector('#auto-run-btn');
 const startPipelineInlineBtn = document.querySelector('#start-pipeline-inline-btn');
 const webSessionStatus = document.querySelector('#web-session-status');
@@ -337,6 +339,7 @@ function moveProjectActionsOutsideSettings() {
 function openSettingsDialog() {
   embedRouterPanelInSettings();
   moveProjectActionsOutsideSettings();
+  updateVeoUpSetupUI().catch(() => null);
   settingsDialog?.showModal?.();
 }
 
@@ -1038,7 +1041,41 @@ async function runFullPipeline() {
       render();
       return;
     }
+
+    if (isImageMotionOnlyModeEnabled() && project && outputFolder) {
+      const allScenesComplete = project.scenes.every(scene => 
+        scene.status === 'done' || 
+        scene.videoStatus === 'skipped-image-motion-only' ||
+        Boolean(scene.imagePath && (scene.motionPrompt || scene.motionPromptPath))
+      );
+      if (allScenesComplete) {
+        setStatus('Không có scene cần chạy. Đang tự động quét project và chạy VeoUp...', 'running');
+        try {
+          console.log('[VeoUp Handoff] Auto-triggering scanProjectAndRunVeoUp from runFullPipeline...');
+          const res = await window.videoPlannerAPI.scanProjectAndRunVeoUp({
+            projectDir: outputFolder,
+            expectedSceneCount: project.scenes.length,
+            projectName: project.name || ''
+          });
+          if (res && res.ok) {
+            setStatus(`Tự động chạy VeoUp thành công! ${res.imageCount} ảnh đã nạp.`, 'ok');
+            render();
+            return;
+          } else {
+            setStatus(`Resume stopped: no runnable scene in current batch. Tự động chạy VeoUp lỗi: ${res?.error || 'Unknown error'}`, 'error');
+            render();
+            return;
+          }
+        } catch (err) {
+          setStatus(`Resume stopped: no runnable scene. Tự động chạy VeoUp lỗi: ${err.message || err}`, 'error');
+          render();
+          return;
+        }
+      }
+    }
+
     setStatus('Resume stopped: no runnable scene in current batch.', 'error');
+    render();
     return;
   }
 
@@ -1380,6 +1417,7 @@ async function maybeRunVeoUpAutomationAfterPipeline(reason = 'pipeline-complete'
   const result = await window.videoPlannerAPI.runVeoUpAutomation({
     outputFolder,
     projectName: project?.name || projectNameInput?.value || '',
+    previewStartButtonOnly: Boolean(veoupPreviewStartOnlyToggle?.checked),
     scenes: (project?.scenes || []).map((scene) => ({
       id: scene.id,
       imagePath: scene.imagePath || scene.keyframeOutputPath || '',
@@ -1822,6 +1860,9 @@ const scenes = project?.scenes || [];
   renderFinalPreview();
   renderAssetReviewModal();
   renderProjectSessionStatus();
+  if (typeof updateScanButtonVisibility === 'function') {
+    updateScanButtonVisibility();
+  }
 }
 
 async function handleTableClick(event) {
@@ -3027,7 +3068,7 @@ async function openProjectSessionFlow() {
 }
 
 function persist() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify({ project, activeBatchIds, paused, outputFolder, currentProjectFilePath, projectDirty, projectRuntime, grokRouter: getGrokRouterSettings(), reviewSettings: getReviewSettings(), imageGeneration: getImageGenerationSettings(), continuityReferences: getContinuityReferenceSettings(), grokRecovery: getGrokRecoverySettings() }));
+  localStorage.setItem(STORAGE_KEY, JSON.stringify({ project, activeBatchIds, paused, outputFolder, currentProjectFilePath, projectDirty, projectRuntime, grokRouter: getGrokRouterSettings(), reviewSettings: getReviewSettings(), imageGeneration: getImageGenerationSettings(), continuityReferences: getContinuityReferenceSettings(), grokRecovery: getGrokRecoverySettings(), veoupPreviewStartOnly: Boolean(veoupPreviewStartOnlyToggle?.checked) }));
 }
 
 async function reconcileSavedAssets() {
@@ -3091,6 +3132,7 @@ function restore() {
     applyReviewSettings(saved.reviewSettings || { skipReview: saved.skipReview });
     applyContinuityReferenceSettings(saved.continuityReferences || saved.project?.continuityReferences || {});
     applyGrokRecoverySettings(saved.grokRecovery || {});
+    if (veoupPreviewStartOnlyToggle) veoupPreviewStartOnlyToggle.checked = Boolean(saved.veoupPreviewStartOnly);
     currentProjectFilePath = saved.currentProjectFilePath || '';
     projectDirty = Boolean(saved.projectDirty);
     projectRuntime = { ...projectRuntime, ...(saved.projectRuntime || {}) };
@@ -3284,6 +3326,10 @@ modelInput?.addEventListener('input', () => {
     persist();
   }));
 
+veoupPreviewStartOnlyToggle?.addEventListener('change', () => {
+  persist();
+});
+
 /* VIDORA_HARD_PROMPT_FILE_PICKER_UI_V2 */
 function ensureHardPromptFilePickerUi() {
   const openBtn = document.getElementById('openHardPromptBtn');
@@ -3340,9 +3386,14 @@ document.addEventListener('DOMContentLoaded', ensureHardPromptFilePickerUi);
 settingsSaveBtn?.addEventListener('click', saveSettingsDialog);
 copyLogBtn?.addEventListener('click', copyPipelineLog);
 
-openHardPromptBtn?.addEventListener('click', async () => {
-  const result = await window.videoPlannerAPI?.openHardPromptFile?.().catch((error) => ({ ok: false, error: error.message }));
-  setStatus(result?.ok ? 'Đã mở file 2 NHIỆM VỤ BẰNG PROMPT.txt.' : `Không mở được file prompt cứng: ${result?.error || 'unknown'}`, result?.ok ? 'ok' : 'error');
+openNv1PromptBtn?.addEventListener('click', async () => {
+  const result = await window.videoPlannerAPI?.openHardPromptFile?.('NV1_TAO_ANH').catch((error) => ({ ok: false, error: error.message }));
+  setStatus(result?.ok ? 'Đã mở file NV1_TAO_ANH.txt.' : `Không mở được file NV1_TAO_ANH.txt: ${result?.error || 'unknown'}`, result?.ok ? 'ok' : 'error');
+});
+
+openNv2PromptBtn?.addEventListener('click', async () => {
+  const result = await window.videoPlannerAPI?.openHardPromptFile?.('NV2_MOTION_PROMPT').catch((error) => ({ ok: false, error: error.message }));
+  setStatus(result?.ok ? 'Đã mở file NV2_MOTION_PROMPT.txt.' : `Không mở được file NV2_MOTION_PROMPT.txt: ${result?.error || 'unknown'}`, result?.ok ? 'ok' : 'error');
 });
 
 window.addEventListener('error', (event) => {
@@ -3372,3 +3423,312 @@ restore();
 
 setTimeout(ensureImageMotionOnlyModeControl, 0);
 document.addEventListener('DOMContentLoaded', ensureImageMotionOnlyModeControl);
+
+async function updateVeoUpSetupUI() {
+  const statusEl = document.querySelector('#veoup-setup-status');
+  const displayEl = document.querySelector('#veoup-coords-display');
+  const deleteBtn = document.querySelector('#veoup-delete-setup-btn');
+  const stepsEl = document.querySelector('#veoup-calibration-steps');
+  
+  if (!statusEl || !displayEl) return;
+  
+  try {
+    const config = await window.videoPlannerAPI?.getVeoUpCoordinateConfig?.();
+    if (config) {
+      statusEl.textContent = 'Đã thiết lập';
+      statusEl.style.color = '#4caf50';
+      
+      displayEl.innerHTML = `
+        <div style="margin-top: 5px; color: var(--text);">Tọa độ hiện tại (Maximized):</div>
+        <div>Blue Box Offset: X=${config.blueBoxOffsetX}, Y=${config.blueBoxOffsetY}</div>
+        <div>Red Box Offset: X=${config.redBoxOffsetX}, Y=${config.redBoxOffsetY}</div>
+        <div>Start Button Offset: X=${config.startButtonOffsetX}, Y=${config.startButtonOffsetY}</div>
+        <div style="font-size:0.8em; color:var(--muted); margin-top:5px;">Lưu tại: AppData/userData/veoup-coordinates.json</div>
+      `;
+      if (deleteBtn) deleteBtn.style.display = 'inline-block';
+    } else {
+      statusEl.textContent = 'Chưa thiết lập';
+      statusEl.style.color = 'var(--muted)';
+      displayEl.textContent = 'Chưa có tọa độ VeoUp. Hãy chạy “Thiết lập tọa độ VeoUp”.';
+      if (deleteBtn) deleteBtn.style.display = 'none';
+    }
+    if (stepsEl) stepsEl.style.display = 'none';
+  } catch (err) {
+    console.error('Failed to get VeoUp coordinate config:', err);
+    statusEl.textContent = 'Lỗi tải config';
+    statusEl.style.color = 'var(--danger)';
+  }
+}
+
+function updateScanButtonVisibility() {
+  const scanRunBtn = document.querySelector('#veoup-scan-run-btn');
+  if (!scanRunBtn) return;
+  scanRunBtn.style.display = (project && outputFolder) ? 'inline-block' : 'none';
+}
+
+// VeoUp calibration UI bindings
+(function initVeoUpCalibration() {
+  const veoupStartSetupBtn = document.querySelector('#veoup-start-setup-btn');
+  const veoupSetupStatus = document.querySelector('#veoup-setup-status');
+  const veoupCalibrationSteps = document.querySelector('#veoup-calibration-steps');
+  const veoupCoordsDisplay = document.querySelector('#veoup-coords-display');
+  const veoupDeleteSetupBtn = document.querySelector('#veoup-delete-setup-btn');
+  const veoupCancelSetupBtn = document.querySelector('#veoup-cancel-setup-btn');
+
+  let activeCalibrationOffsets = {};
+  let isCalibrating = false;
+
+  const setStepActive = (stepNum) => {
+    // Update visual rows opacity
+    const row1 = document.querySelector('#veoup-step-1-row');
+    const row2 = document.querySelector('#veoup-step-2-row');
+    const row3 = document.querySelector('#veoup-step-3-row');
+    
+    if (row1) row1.style.opacity = stepNum === 1 ? '1.0' : '0.5';
+    if (row2) row2.style.opacity = stepNum === 2 ? '1.0' : '0.5';
+    if (row3) row3.style.opacity = stepNum === 3 ? '1.0' : '0.5';
+
+    const inst = document.querySelector('#veoup-calibration-instruction');
+    if (!inst) return;
+
+    if (stepNum === 1) {
+      inst.textContent = 'Bước 1/3: Đưa chuột vào giữa vùng “Đã chọn 0 ảnh”, sau đó nhấn Enter.';
+    } else if (stepNum === 2) {
+      inst.textContent = 'Bước 2/3: Đưa chuột vào giữa ô nhập prompt, sau đó nhấn Enter.';
+    } else if (stepNum === 3) {
+      inst.textContent = 'Bước 3/3: Đưa chuột vào giữa nút “Bắt đầu tạo video”, sau đó nhấn Enter.';
+    } else {
+      inst.textContent = '';
+    }
+  };
+
+  const runCalibrationLoop = async () => {
+    isCalibrating = true;
+    
+    // Reset visual statuses
+    const s1 = document.querySelector('#veoup-step-1-status');
+    const s2 = document.querySelector('#veoup-step-2-status');
+    const s3 = document.querySelector('#veoup-step-3-status');
+    
+    if (s1) { s1.textContent = 'Chờ ghi nhận'; s1.className = 'badge'; }
+    if (s2) { s2.textContent = 'Chờ ghi nhận'; s2.className = 'badge'; }
+    if (s3) { s3.textContent = 'Chờ ghi nhận'; s3.className = 'badge'; }
+    
+    // Step 1: Blue Box
+    setStepActive(1);
+    if (s1) { s1.textContent = 'Đợi nhấn Enter...'; s1.className = 'badge warning'; }
+    
+    let step1Done = false;
+    while (!step1Done && isCalibrating) {
+      const res = await window.videoPlannerAPI?.captureVeoUpCoordinate?.('blueBox');
+      if (!isCalibrating) return; // calibration was cancelled while awaiting
+      if (res && res.ok) {
+        activeCalibrationOffsets = res.offsets || {};
+        if (s1) {
+          s1.textContent = `Đã ghi (X=${activeCalibrationOffsets.blueBoxOffsetX}, Y=${activeCalibrationOffsets.blueBoxOffsetY})`;
+          s1.className = 'badge success';
+        }
+        step1Done = true;
+      } else {
+        if (res?.error && (res.error.includes('cancelled') || res.error.includes('No active calibration') || res.error.includes('Calibration cancelled'))) {
+          cleanupSetupUI();
+          return;
+        }
+        // Validation failed
+        const msg = res?.error || 'Tọa độ Blue Box chưa đúng, hãy đưa chuột vào đúng vùng bấm mở ảnh rồi nhấn Enter lại.';
+        const inst = document.querySelector('#veoup-calibration-instruction');
+        if (inst) inst.textContent = msg;
+        if (s1) { s1.textContent = 'Thử lại...'; s1.className = 'badge danger'; }
+      }
+    }
+
+    if (!isCalibrating) return;
+
+    // Step 2: Red Box
+    setStepActive(2);
+    if (s2) { s2.textContent = 'Đợi nhấn Enter...'; s2.className = 'badge warning'; }
+    
+    let step2Done = false;
+    while (!step2Done && isCalibrating) {
+      const res = await window.videoPlannerAPI?.captureVeoUpCoordinate?.('redBox');
+      if (!isCalibrating) return;
+      if (res && res.ok) {
+        activeCalibrationOffsets = res.offsets || {};
+        if (s2) {
+          s2.textContent = `Đã ghi (X=${activeCalibrationOffsets.redBoxOffsetX}, Y=${activeCalibrationOffsets.redBoxOffsetY})`;
+          s2.className = 'badge success';
+        }
+        step2Done = true;
+      } else {
+        if (res?.error && (res.error.includes('cancelled') || res.error.includes('No active calibration') || res.error.includes('Calibration cancelled'))) {
+          cleanupSetupUI();
+          return;
+        }
+        if (s2) { s2.textContent = 'Lỗi, thử lại...'; s2.className = 'badge danger'; }
+      }
+    }
+
+    if (!isCalibrating) return;
+
+    // Step 3: Start Button
+    setStepActive(3);
+    if (s3) { s3.textContent = 'Đợi nhấn Enter...'; s3.className = 'badge warning'; }
+    
+    let step3Done = false;
+    while (!step3Done && isCalibrating) {
+      const res = await window.videoPlannerAPI?.captureVeoUpCoordinate?.('startButton');
+      if (!isCalibrating) return;
+      if (res && res.ok) {
+        if (res.needsConfirmation) {
+          const confirmed = confirm('Bạn có nhìn thấy con trỏ chuột di chuyển đến đúng vị trí nút "Bắt đầu tạo video" (Start Video) trên VeoUp không?');
+          if (confirmed) {
+            const saveRes = await window.videoPlannerAPI?.saveVeoUpCoordinateConfig?.({
+              ...res.offsets,
+              startButtonValidated: true
+            });
+            if (saveRes && saveRes.ok) {
+              if (s3) {
+                s3.textContent = 'Hoàn tất';
+                s3.className = 'badge success';
+              }
+              step3Done = true;
+              isCalibrating = false;
+              alert('Căn chỉnh tọa độ VeoUp hoàn tất! Cấu hình đã được lưu.');
+              await updateVeoUpSetupUI();
+            } else {
+              alert('Không lưu được cấu hình: ' + (saveRes?.error || 'Unknown error'));
+            }
+          } else {
+            const inst = document.querySelector('#veoup-calibration-instruction');
+            if (inst) inst.textContent = 'Căn chỉnh nút Start không khớp, vui lòng di chuột trên VeoUp và nhấn Enter lại.';
+            if (s3) { s3.textContent = 'Thử lại...'; s3.className = 'badge danger'; }
+          }
+        }
+      } else {
+        if (res?.error && (res.error.includes('cancelled') || res.error.includes('No active calibration') || res.error.includes('Calibration cancelled'))) {
+          cleanupSetupUI();
+          return;
+        }
+        const msg = res?.error || 'Tọa độ nút Start Button không hợp lệ. Vui lòng di chuột đúng vị trí và nhấn Enter lại.';
+        const inst = document.querySelector('#veoup-calibration-instruction');
+        if (inst) inst.textContent = msg;
+        if (s3) { s3.textContent = 'Lỗi, thử lại...'; s3.className = 'badge danger'; }
+      }
+    }
+  };
+
+  const cleanupSetupUI = () => {
+    isCalibrating = false;
+    veoupSetupStatus.textContent = 'Đã hủy';
+    veoupSetupStatus.style.color = 'var(--danger)';
+    if (veoupCalibrationSteps) veoupCalibrationSteps.style.display = 'none';
+    veoupCoordsDisplay.textContent = 'Đã hủy quá trình thiết lập.';
+    
+    // Reset visual statuses
+    const s1 = document.querySelector('#veoup-step-1-status');
+    const s2 = document.querySelector('#veoup-step-2-status');
+    const s3 = document.querySelector('#veoup-step-3-status');
+    if (s1) { s1.textContent = 'Chờ ghi nhận'; s1.className = 'badge'; }
+    if (s2) { s2.textContent = 'Chờ ghi nhận'; s2.className = 'badge'; }
+    if (s3) { s3.textContent = 'Chờ ghi nhận'; s3.className = 'badge'; }
+  };
+
+  veoupStartSetupBtn?.addEventListener('click', async () => {
+    veoupStartSetupBtn.disabled = true;
+    const oldText = veoupStartSetupBtn.textContent;
+    veoupStartSetupBtn.textContent = 'Đang mở/tối đa hóa VeoUp...';
+    veoupSetupStatus.textContent = 'Đang kết nối...';
+    veoupSetupStatus.style.color = 'var(--muted)';
+    veoupCoordsDisplay.textContent = 'Đang khởi chạy hoặc kết nối tới VeoUp và phóng to cửa sổ...';
+    
+    try {
+      const res = await window.videoPlannerAPI?.startVeoUpCoordinateSetup?.();
+      if (res && res.ok) {
+        veoupSetupStatus.textContent = 'Đang thiết lập';
+        veoupSetupStatus.style.color = '#ff9800';
+        if (veoupCalibrationSteps) veoupCalibrationSteps.style.display = 'block';
+        veoupCoordsDisplay.textContent = 'Đang trong quá trình hiệu chuẩn. Vui lòng di chuột trên VeoUp và nhấn Enter.';
+        
+        // Start the hotkey waiting loop
+        runCalibrationLoop().catch((err) => {
+          console.error('[VeoUp Setup] Calibration loop error:', err);
+        });
+      } else {
+        veoupSetupStatus.textContent = 'Thất bại';
+        veoupSetupStatus.style.color = 'var(--danger)';
+        veoupCoordsDisplay.textContent = `Lỗi: ${res?.error || 'Không tìm thấy hoặc không mở được cửa sổ VeoUp.'}`;
+      }
+    } catch (err) {
+      veoupSetupStatus.textContent = 'Thất bại';
+      veoupSetupStatus.style.color = 'var(--danger)';
+      veoupCoordsDisplay.textContent = `Lỗi: ${err.message || err}`;
+    } finally {
+      veoupStartSetupBtn.disabled = false;
+      veoupStartSetupBtn.textContent = oldText;
+    }
+  });
+
+  veoupCancelSetupBtn?.addEventListener('click', async () => {
+    isCalibrating = false;
+    await window.videoPlannerAPI?.cancelVeoUpCoordinateSetup?.();
+    cleanupSetupUI();
+    await updateVeoUpSetupUI();
+  });
+
+  veoupDeleteSetupBtn?.addEventListener('click', async () => {
+    if (!confirm('Bạn có chắc chắn muốn xóa tọa độ VeoUp đã thiết lập? Bạn sẽ cần thiết lập lại trước khi chạy VeoUp.')) return;
+    try {
+      const res = await window.videoPlannerAPI?.deleteVeoUpCoordinateConfig?.({
+        projectDir: outputFolder
+      });
+      if (res && res.ok) {
+        alert('Đã xóa tọa độ VeoUp. Vui lòng thiết lập lại trước khi chạy VeoUp.');
+        await updateVeoUpSetupUI();
+      } else {
+        alert('Không xóa được tọa độ: ' + (res?.error || 'Unknown error'));
+      }
+    } catch (err) {
+      alert('Lỗi: ' + (err.message || err));
+    }
+  });
+})();
+
+// Project scanning logic
+(function initVeoUpProjectScan() {
+  const scanRunBtn = document.querySelector('#veoup-scan-run-btn');
+
+  scanRunBtn?.addEventListener('click', async () => {
+    if (!project || !outputFolder) {
+      alert('Vui lòng tạo hoặc mở project trước.');
+      return;
+    }
+    
+    scanRunBtn.disabled = true;
+    const oldText = scanRunBtn.textContent;
+    scanRunBtn.textContent = 'Đang quét & chạy VeoUp...';
+    setStatus('Đang quét project và khởi chạy VeoUp...', 'running');
+    
+    try {
+      const res = await window.videoPlannerAPI?.scanProjectAndRunVeoUp?.({
+        projectDir: outputFolder,
+        expectedSceneCount: project.scenes.length,
+        projectName: project.name || '',
+        previewStartButtonOnly: Boolean(veoupPreviewStartOnlyToggle?.checked)
+      });
+      if (res && res.ok) {
+        setStatus(`Quét project thành công! Chạy VeoUp hoàn tất: ${res.imageCount} ảnh.`, 'ok');
+        alert(`Hoàn tất chạy VeoUp cho ${res.imageCount} scenes!`);
+      } else {
+        const errMsg = res?.error || 'Có lỗi xảy ra.';
+        setStatus(`Lỗi quét project hoặc chạy VeoUp: ${errMsg}`, 'error');
+        alert(`Lỗi: ${errMsg}`);
+      }
+    } catch (err) {
+      setStatus(`Lỗi: ${err.message || err}`, 'error');
+      alert(`Lỗi: ${err.message || err}`);
+    } finally {
+      scanRunBtn.disabled = false;
+      scanRunBtn.textContent = oldText;
+    }
+  });
+})();

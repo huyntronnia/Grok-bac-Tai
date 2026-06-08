@@ -202,6 +202,7 @@
             <button id="save-project-btn" class="ghost success" type="button">Save Project</button>
             <button id="choose-output-folder-btn" class="ghost" type="button">Chọn/đổi folder lưu</button>
             <button id="save-session-btn" class="ghost" type="button">Lưu session</button>
+            <button id="veoup-scan-run-btn" class="ghost success" type="button" style="display: none;">Quét project & chạy VeoUp</button>
             <button id="auto-run-btn" class="ghost primary" type="button"
               onclick="window.startPipelineFromClick?.(event)">Start pipeline</button>
           </div>
@@ -489,8 +490,11 @@
 
       <section class="settings-section">
         <h3>Prompt cứng</h3>
-        <p class="settings-help">Mở file 2 NHIỆM VỤ BẰNG PROMPT.txt trong thư mục dữ liệu app để xem/chỉnh prompt nền.</p>
-        <button id="open-hard-prompt-btn" class="ghost" type="button">Mở 2 NHIỆM VỤ BẰNG PROMPT.txt</button>
+        <p class="settings-help">Mở các file prompt cứng trong thư mục dữ liệu app để xem/chỉnh prompt nền.</p>
+        <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+          <button id="open-nv1-prompt-btn" class="ghost" type="button">Mở NV1_TAO_ANH.txt</button>
+          <button id="open-nv2-prompt-btn" class="ghost" type="button">Mở NV2_MOTION_PROMPT.txt</button>
+        </div>
       </section>
 
       <section class="settings-section">
@@ -529,6 +533,47 @@
           <div>
             <strong>Grok</strong>
             <div id="web-grok-account-list" class="credential-account-list"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="settings-section">
+        <h3>Thiết lập tọa độ VeoUp</h3>
+        <p class="settings-help">Căn chỉnh tọa độ Blue Box, Red Box và Start Video để tự động hóa thao tác trong ứng dụng VeoUp (ở chế độ phóng to/maximized).</p>
+        <div class="veoup-calibration-ui">
+          <div class="calibration-row" style="display: flex; align-items: center; justify-content: space-between; gap: 10px;">
+            <button id="veoup-start-setup-btn" class="ghost primary" type="button">1. Bắt đầu căn lề (Mở/Tối đa hóa VeoUp)</button>
+            <span id="veoup-setup-status" class="setup-status" style="font-size: 0.9em; font-weight: 700; color: var(--muted);">Chưa thiết lập</span>
+          </div>
+          <div class="calibration-steps" id="veoup-calibration-steps" style="display: none; margin-top: 10px; padding: 10px; border: 1px dashed var(--line); border-radius: 12px; background: rgba(0,0,0,0.15);">
+            <p id="veoup-calibration-instruction" style="font-size: 0.95em; color: #ff9800; margin-bottom: 12px; font-weight: 700;"></p>
+            <div style="display: flex; flex-direction: column; gap: 8px; font-size: 0.9em;">
+              <div id="veoup-step-1-row" style="display: flex; align-items: center; justify-content: space-between; padding: 4px 8px; border-radius: 6px; background: rgba(255,255,255,0.03); opacity: 0.5;">
+                <span>Bước 1/3: Vùng "Đã chọn 0 ảnh" (Blue Box)</span>
+                <span id="veoup-step-1-status" class="badge">Chờ ghi nhận</span>
+              </div>
+              <div id="veoup-step-2-row" style="display: flex; align-items: center; justify-content: space-between; padding: 4px 8px; border-radius: 6px; background: rgba(255,255,255,0.03); opacity: 0.5;">
+                <span>Bước 2/3: Vùng nhập prompt (Red Box)</span>
+                <span id="veoup-step-2-status" class="badge">Chờ ghi nhận</span>
+              </div>
+              <div id="veoup-step-3-row" style="display: flex; align-items: center; justify-content: space-between; padding: 4px 8px; border-radius: 6px; background: rgba(255,255,255,0.03); opacity: 0.5;">
+                <span>Bước 3/3: Nút "Bắt đầu tạo video" (Start Button)</span>
+                <span id="veoup-step-3-status" class="badge">Chờ ghi nhận</span>
+              </div>
+            </div>
+            <div style="margin-top: 12px; text-align: right;">
+              <button id="veoup-cancel-setup-btn" class="ghost mini danger" type="button" style="min-height:30px; height:30px; font-size:11px;">Hủy thiết lập</button>
+            </div>
+          </div>
+          <div id="veoup-coords-display" style="margin-top: 10px; font-size: 0.85em; font-family: monospace; color: var(--muted);"></div>
+          <div style="margin-top: 8px;">
+            <label class="settings-toggle" style="display: flex; align-items: center; gap: 8px; font-size: 0.9em; cursor: pointer;">
+              <input id="veoup-preview-start-only-toggle" type="checkbox" />
+              <span>Chỉ di chuyển chuột tới nút Start để kiểm tra, không bấm tạo video</span>
+            </label>
+          </div>
+          <div class="dialog-actions compact-actions" style="margin-top: 10px;">
+            <button id="veoup-delete-setup-btn" class="ghost danger" type="button" style="min-height:34px; height:34px; font-size:12px;">Xóa tọa độ đã lưu</button>
           </div>
         </div>
       </section>

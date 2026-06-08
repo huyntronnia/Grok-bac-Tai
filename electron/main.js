@@ -66,13 +66,23 @@ console.error = (...args) => {
 };
 
 
-const { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, Menu, shell, safeStorage } = require('electron');
+const { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, Menu, shell, safeStorage, globalShortcut } = require('electron');
 const CDP = require('chrome-remote-interface');
 const ffmpegPath = require('ffmpeg-static');
 const fs = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
-const { executeVeoUpAutomation } = require('./veoupAutomation');
+const {
+  executeVeoUpAutomation,
+  findVeoupExecutable,
+  startCoordinateSetup,
+  captureVeoUpCoordinate,
+  getVeoUpCoordinateConfig,
+  saveVeoUpCoordinateConfig,
+  deleteVeoUpCoordinateConfig,
+  cancelCoordinateSetup,
+  scanProjectAndRunVeoUp,
+} = require('./veoupAutomation');
 
 const VIDEO_EXTENSIONS = new Set(['.mp4', '.mov', '.mkv', '.webm', '.avi', '.m4v']);
 const webWindows = new Map();
@@ -1022,6 +1032,34 @@ function getUserPromptDir() {
   return path.join(app.getPath('userData'), 'prompts');
 }
 
+async function ensureAndMigratePrompts() {
+  const promptDir = getUserPromptDir();
+  const oldFilePath = path.join(promptDir, '2 NHIỆM VỤ BẰNG PROMPT.txt');
+  const nv1Path = path.join(promptDir, 'NV1_TAO_ANH.txt');
+  const nv2Path = path.join(promptDir, 'NV2_MOTION_PROMPT.txt');
+
+  await fs.mkdir(promptDir, { recursive: true });
+
+  const oldExists = await pathExists(oldFilePath);
+  const nv1Exists = await pathExists(nv1Path);
+  const nv2Exists = await pathExists(nv2Path);
+
+  if (!nv1Exists) {
+    if (oldExists) {
+      const oldContent = await fs.readFile(oldFilePath, 'utf8');
+      await fs.writeFile(nv1Path, oldContent, 'utf8');
+      await appendAppLog(null, { source: 'main', kind: 'ok', text: `Migrated old prompt file content into NV1_TAO_ANH.txt` });
+    } else {
+      await fs.writeFile(nv1Path, '', 'utf8');
+    }
+  }
+
+  if (!nv2Exists) {
+    await fs.writeFile(nv2Path, '', 'utf8');
+  }
+}
+
+
 function sanitizePromptSourcePathForLog(filePath = '') {
   const value = String(filePath || '');
   if (!value) return '';
@@ -1161,8 +1199,14 @@ async function chooseHardPromptFile() {
   return { ok: true, filePath, usingCustomFile: true };
 }
 
-async function openHardPromptFile() {
-  const filePath = await resolveEditablePromptPath(HARD_PROMPT_FILENAME);
+async function openHardPromptFile(event, key) {
+  const fileKey = typeof event === 'string' ? event : key;
+  if (fileKey !== 'NV1_TAO_ANH' && fileKey !== 'NV2_MOTION_PROMPT') {
+    throw new Error(`Invalid or unauthorized prompt file key: ${fileKey}`);
+  }
+  await ensureAndMigratePrompts();
+  const promptDir = getUserPromptDir();
+  const filePath = path.join(promptDir, `${fileKey}.txt`);
   await appendAppLog(null, { source: 'main', kind: 'info', text: `promptFile: opening file=${filePath}` });
   const error = await shell.openPath(filePath);
   if (error) throw new Error(`Cannot open editable prompt file at ${filePath}: ${error}`);
@@ -1170,14 +1214,14 @@ async function openHardPromptFile() {
 }
 
 async function loadHardPromptTasks() {
-  const filePath = await resolveEditablePromptPath(HARD_PROMPT_FILENAME);
-  await appendAppLog(null, { source: 'main', kind: 'info', text: `promptFile: reading file=${filePath}` });
-  const content = await fs.readFile(filePath, 'utf8');
-  const task2Index = content.search(/NHIỆM\s*VỤ\s*2\s*:/i);
-  if (task2Index < 0) return { task1: content.trim(), task2: content.trim() };
-  const task1 = content.slice(0, task2Index).trim();
-  const task2 = content.slice(task2Index).trim();
-  return { task1, task2 };
+  await ensureAndMigratePrompts();
+  const promptDir = getUserPromptDir();
+  const nv1Path = path.join(promptDir, 'NV1_TAO_ANH.txt');
+  const nv2Path = path.join(promptDir, 'NV2_MOTION_PROMPT.txt');
+  await appendAppLog(null, { source: 'main', kind: 'info', text: `promptFile: reading NV1 from ${nv1Path} and NV2 from ${nv2Path}` });
+  const task1 = await fs.readFile(nv1Path, 'utf8').catch(() => '');
+  const task2 = await fs.readFile(nv2Path, 'utf8').catch(() => '');
+  return { task1: task1.trim(), task2: task2.trim() };
 }
 
 function buildTaskPrompt({ task = '', script = '', sceneText = '', sceneId = '' } = {}) {
@@ -2233,6 +2277,184 @@ async function persistImageMotionOnlySharedOutputs({ projectDir, sceneDir, scene
   return { keyframeOutputPath, motionPromptOutputPath, keyframesDir, motionPromptsDir };
 }
 
+async function checkIfAllScenesComplete(projectDir) {
+  let entries = [];
+  try {
+    entries = await fs.readdir(projectDir, { withFileTypes: true });
+  } catch (err) {
+    return { complete: false, sceneDirs: [] };
+  }
+
+  const sceneDirs = entries
+    .filter(entry => entry.isDirectory() && /^scene_\d+/i.test(entry.name))
+    .map(entry => path.join(projectDir, entry.name));
+
+  if (sceneDirs.length === 0) {
+    return { complete: false, sceneDirs: [] };
+  }
+
+  // Sort scene directories ascending by numeric suffix
+  sceneDirs.sort((a, b) => {
+    const aMatch = path.basename(a).match(/\d+/);
+    const bMatch = path.basename(b).match(/\d+/);
+    const aNum = aMatch ? parseInt(aMatch[0], 10) : 0;
+    const bNum = bMatch ? parseInt(bMatch[0], 10) : 0;
+    return aNum - bNum;
+  });
+
+  for (const sceneDir of sceneDirs) {
+    // Check if motion_prompt.txt exists and has content
+    const motionPromptPath = path.join(sceneDir, 'motion_prompt.txt');
+    try {
+      const stat = await fs.stat(motionPromptPath);
+      if (stat.size <= 0) return { complete: false, sceneDirs };
+    } catch (err) {
+      return { complete: false, sceneDirs };
+    }
+
+    // Check if any keyframe image exists
+    const sceneId = parseInt(path.basename(sceneDir).match(/\d+/)[0], 10);
+    const keyframePath = await findSceneKeyframePathSafe(sceneDir, sceneId);
+    if (!keyframePath) {
+      return { complete: false, sceneDirs };
+    }
+  }
+
+  return { complete: true, sceneDirs };
+}
+
+async function buildVeoUpPromptsReadyFile({ projectDir, sceneDirs, expectedSceneCount }) {
+  const flattenedPrompts = [];
+
+  for (const sceneDir of sceneDirs) {
+    const motionPromptPath = path.join(sceneDir, 'motion_prompt.txt');
+    let rawPrompt = '';
+    try {
+      rawPrompt = await fs.readFile(motionPromptPath, 'utf8');
+    } catch (err) {
+      throw new Error(`Scene folder ${path.basename(sceneDir)} is missing motion_prompt.txt.`);
+    }
+
+    const flattened = rawPrompt
+      .replace(/\r\n/g, '\n')
+      .replace(/\r/g, '\n')
+      .split('\n')
+      .map(line => line.trim())
+      .filter(Boolean)
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    if (!flattened) {
+      throw new Error(`Scene folder ${path.basename(sceneDir)} has an empty motion prompt.`);
+    }
+
+    flattenedPrompts.push(flattened);
+  }
+
+  if (expectedSceneCount !== undefined && expectedSceneCount > 0 && flattenedPrompts.length !== expectedSceneCount) {
+    throw new Error(`Prompt line count mismatch: collected ${flattenedPrompts.length} prompts, expected ${expectedSceneCount}.`);
+  }
+
+  const batchText = flattenedPrompts.join('\n');
+  const promptsReadyPath = path.join(projectDir, 'veoup_prompts_ready.txt');
+  await fs.writeFile(promptsReadyPath, batchText, 'utf8');
+
+  // Verify file exists and is not empty
+  try {
+    const stat = await fs.stat(promptsReadyPath);
+    if (stat.size <= 0) {
+      throw new Error('veoup_prompts_ready.txt is empty.');
+    }
+  } catch (err) {
+    throw new Error(`Failed to write or verify veoup_prompts_ready.txt: ${err.message}`);
+  }
+
+  return promptsReadyPath;
+}
+
+async function handleImageMotionOnlyCompletion({
+  projectDir,
+  sceneDir,
+  sceneId,
+  imagePath,
+  motionPrompt,
+  finalImagePrompt,
+  continuityReferenceState,
+  options = {},
+}) {
+  const check = await checkIfAllScenesComplete(projectDir);
+
+  if (check.complete) {
+    await appendAppLog(null, {
+      source: 'main',
+      kind: 'running',
+      text: `Batch prompt aggregated at project root. Proceeding to dynamic VeoUp app launch and macro injection.`,
+    }).catch(() => null);
+
+    let promptsReadyPath = '';
+    try {
+      promptsReadyPath = await buildVeoUpPromptsReadyFile({
+        projectDir,
+        sceneDirs: check.sceneDirs,
+        expectedSceneCount: check.sceneDirs.length
+      });
+    } catch (err) {
+      await appendAppLog(null, {
+        source: 'main',
+        kind: 'error',
+        text: `Prompt aggregation failed: ${err.message}`,
+      }).catch(() => null);
+      throw err;
+    }
+
+    const scenes = [];
+    for (const dir of check.sceneDirs) {
+      const id = parseInt(path.basename(dir).match(/\d+/)[0], 10);
+      const keyframePath = await findSceneKeyframePathSafe(dir, id);
+      scenes.push({
+        id,
+        imagePath: keyframePath,
+        keyframeOutputPath: keyframePath,
+        motionPromptPath: path.join(dir, 'motion_prompt.txt')
+      });
+    }
+
+    const veoupResult = await runVeoUpAutomation(null, {
+      projectName: 'project',
+      outputFolder: projectDir,
+      scenes,
+      autoStartVideoGeneration: Boolean(options.autoStartVideoGeneration || options.autoStartVeoUpGeneration)
+    }).catch((err) => ({ ok: false, error: err.message || String(err) }));
+
+    if (veoupResult && veoupResult.ok) {
+      await appendAppLog(null, {
+        source: 'main',
+        kind: 'ok',
+        text: `Image + motion + prompt aggregation + VeoUp automation completed.`,
+        details: veoupResult
+      }).catch(() => null);
+    } else {
+      await appendAppLog(null, {
+        source: 'main',
+        kind: 'error',
+        text: `Image + motion outputs completed, but VeoUp automation failed: ${veoupResult?.error || 'mismatch'}`,
+        details: veoupResult
+      }).catch(() => null);
+    }
+  }
+
+  return await buildImageMotionOnlyPipelineResult({
+    projectDir,
+    sceneDir,
+    sceneId,
+    imagePath,
+    motionPrompt,
+    finalImagePrompt,
+    continuityReferenceState,
+  });
+}
+
 async function buildImageMotionOnlyPipelineResult({
   projectDir,
   sceneDir,
@@ -2347,7 +2569,7 @@ if (!outputFolder) throw new Error('Chưa chọn folder output.');
           },
         }).catch(() => null);
 
-        return await buildImageMotionOnlyPipelineResult({
+        return await handleImageMotionOnlyCompletion({
           projectDir,
           sceneDir,
           sceneId,
@@ -2355,6 +2577,7 @@ if (!outputFolder) throw new Error('Chưa chọn folder output.');
           motionPrompt,
           finalImagePrompt: '',
           continuityReferenceState: null,
+          options,
         });
       }
     }
@@ -2390,7 +2613,7 @@ if (!outputFolder) throw new Error('Chưa chọn folder output.');
         },
       }).catch(() => null);
 
-      return await buildImageMotionOnlyPipelineResult({
+      return await handleImageMotionOnlyCompletion({
         projectDir,
         sceneDir,
         sceneId,
@@ -2398,6 +2621,7 @@ if (!outputFolder) throw new Error('Chưa chọn folder output.');
         motionPrompt,
         finalImagePrompt: '',
         continuityReferenceState: null,
+        options,
       });
     }
 
@@ -2451,14 +2675,14 @@ if (!outputFolder) throw new Error('Chưa chọn folder output.');
     await appendAppLog(null, {
       source: 'main',
       kind: 'ok',
-      text: `Scene ${sceneId}: Image + motion only mode: đã lưu keyframe và motion_prompt.txt, bỏ qua Grok/Veo/video.`,
+      text: `Scene ${sceneId}: Batch prompt aggregated at project root. Proceeding to dynamic VeoUp app launch and macro injection.`,
       details: {
         imagePath: imagePath ? path.basename(imagePath) : '',
         motionPromptRef: 'motion_prompt.txt',
       },
     }).catch(() => null);
 
-    return await buildImageMotionOnlyPipelineResult({
+    return await handleImageMotionOnlyCompletion({
       projectDir,
       sceneDir,
       sceneId,
@@ -2466,6 +2690,7 @@ if (!outputFolder) throw new Error('Chưa chọn folder output.');
       motionPrompt,
       finalImagePrompt,
       continuityReferenceState,
+      options,
     });
   }
 }
@@ -2490,7 +2715,7 @@ if (!outputFolder) throw new Error('Chưa chọn folder output.');
     await appendAppLog(null, {
       source: 'main',
       kind: 'ok',
-      text: `Scene ${sceneId}: Image + motion only mode: saved keyframe + motion prompt, skipping Grok/Veo/video.`,
+      text: `Scene ${sceneId}: Batch prompt aggregated at project root. Proceeding to dynamic VeoUp app launch and macro injection.`,
       details: {
         imagePath: imagePath ? path.basename(imagePath) : '',
         motionPromptRef: 'motion_prompt.txt',
@@ -2498,7 +2723,7 @@ if (!outputFolder) throw new Error('Chưa chọn folder output.');
       },
     }).catch(() => null);
 
-    return await buildImageMotionOnlyPipelineResult({
+    return await handleImageMotionOnlyCompletion({
       projectDir,
       sceneDir,
       sceneId,
@@ -2506,6 +2731,7 @@ if (!outputFolder) throw new Error('Chưa chọn folder output.');
       motionPrompt,
       finalImagePrompt,
       continuityReferenceState,
+      options,
     });
   }
 
@@ -3262,39 +3488,151 @@ async function generateMotionPromptWithChatGPTOnce({ imagePath, prompt, sceneDir
     return true;
   };
 
+  const NV2_STALLED_NO_PROGRESS_TIMEOUT_MS = 45000;
+  const NV2_ACTIVE_POLL_INTERVAL_MS = 3500;
+  const NV2_FORCE_VALIDATE_NO_PROGRESS_MS = 15000;
+
+  let lastEffectiveTextLength = 0;
+  let lastProgressAt = Date.now();
+  let peakAssistantText = '';
+  let peakAssistantTextLength = 0;
+  let previousIsStillGenerating = false;
+
   while (true) {
-    await sleep(3000);
+    await sleep(NV2_ACTIVE_POLL_INTERVAL_MS);
     const state = await evaluateOnCdpPage(page, `(${readLatestAssistantScript.toString()})()`).catch(() => null);
     lastState = state;
-    if (!state?.text) {
-      {
-        const policyCheckText =
-          typeof latestText !== 'undefined' ? latestText :
-          typeof text !== 'undefined' ? text :
-          typeof responseText !== 'undefined' ? responseText :
-          typeof latest?.text !== 'undefined' ? latest.text :
-          typeof latestAssistantText !== 'undefined' ? latestAssistantText :
-          '';
 
-        if (isChatGptPolicyRefusalText(policyCheckText)) {
-          await notifyChatGptPolicyRefusal(sceneId, 'NV2/motion-prompt', policyCheckText);
-        }
+    const currentText = state?.text ? state.text.trim() : '';
+    const isStillGenerating = Boolean(
+      state?.generating === true ||
+      state?.generation === true ||
+      state?.streamingIndicator === true ||
+      state?.stopButton === true
+    );
+
+    // Track peak text during the current NV2 generation cycle
+    if (currentText.length > peakAssistantTextLength) {
+      peakAssistantText = currentText;
+      peakAssistantTextLength = currentText.length;
+    }
+
+    const effectiveText = currentText.length > 0 ? currentText : peakAssistantText;
+    const effectiveTextLength = effectiveText.length;
+
+    if (effectiveTextLength > lastEffectiveTextLength) {
+      lastEffectiveTextLength = effectiveTextLength;
+      lastProgressAt = Date.now(); // reset progress timer since length grew
+    }
+
+    // We track noProgressForMs based on lastProgressAt (which updates when text grows)
+    const noProgressForMs = Date.now() - lastProgressAt;
+
+    const finishedNow = (previousIsStillGenerating === true && isStillGenerating === false);
+    previousIsStillGenerating = isStillGenerating;
+
+    const MIN_MOTION_PROMPT_TEXT_LENGTH = 100;
+    const shouldForceValidateBecauseTextStalled =
+      isStillGenerating === true &&
+      effectiveTextLength > MIN_MOTION_PROMPT_TEXT_LENGTH &&
+      noProgressForMs >= NV2_FORCE_VALIDATE_NO_PROGRESS_MS;
+
+    // Log progress details clearly without exposing content
+    console.log('[NV2] polling', {
+      effectiveTextLength,
+      peakAssistantTextLength,
+      noProgressForMs,
+      isStillGenerating,
+      streamingIndicator: state?.streamingIndicator,
+      generating: state?.generating,
+      generation: state?.generation,
+      finishedNow,
+      shouldForceValidateBecauseTextStalled
+    });
+
+    await appendAppLog(null, {
+      source: 'main',
+      kind: 'running',
+      text: `[NV2] Polling: textLength=${currentText.length}, peakLength=${peakAssistantTextLength}, effectiveLength=${effectiveTextLength}, noProgressForMs=${noProgressForMs}ms, isStillGenerating=${isStillGenerating}, finishedNow=${finishedNow}, forceValidate=${shouldForceValidateBecauseTextStalled}, source=${state?.source || 'unknown'}`,
+      details: {
+        currentTextLength: currentText.length,
+        peakAssistantTextLength,
+        effectiveTextLength,
+        noProgressForMs,
+        isStillGenerating,
+        finishedNow,
+        shouldForceValidateBecauseTextStalled,
+        generating: state?.generating,
+        generation: state?.generation,
+        streamingIndicator: state?.streamingIndicator,
+        stopButton: state?.stopButton,
+        source: state?.source
+      }
+    }).catch(() => null);
+
+    if (effectiveText) {
+      if (isChatGptPolicyRefusalText(effectiveText)) {
+        await notifyChatGptPolicyRefusal(sceneId, 'NV2/motion-prompt', effectiveText);
+      }
+    }
+
+    // PART 5: Combine safe-finish and force-finish paths
+    const shouldValidateNow =
+      (finishedNow === true && effectiveTextLength > MIN_MOTION_PROMPT_TEXT_LENGTH) ||
+      shouldForceValidateBecauseTextStalled;
+
+    if (shouldValidateNow) {
+      if (shouldForceValidateBecauseTextStalled) {
+        console.log('[NV2] Text progress stalled for 15s with valid content. Executing force-validation bypass.');
+        await appendAppLog(null, {
+          source: 'main',
+          kind: 'warning',
+          text: `Scene ${sceneId}: [NV2] Text progress stalled for 15s with valid content. Executing force-validation bypass.`,
+          details: {
+            effectiveTextLength,
+            noProgressForMs,
+            isStillGenerating
+          }
+        }).catch(() => null);
       }
 
-      await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: đang chờ ChatGPT trả NV2, chưa thấy assistant response mới.`, details: state });
-      if (Date.now() - motionAttemptStartedAt > 25000 && await retryMotionPrompt('no-assistant-after-send', state)) continue;
+      const validation = validateMotionPromptResponse(effectiveText, { beforeText: before?.text || '', instruction, taskPrompt: prompt, state });
+      if (validation.ok) {
+        latest = effectiveText;
+        break; // accept immediately and exit the loop!
+      }
+    }
+
+    if (!effectiveText) {
+      if (noProgressForMs >= NV2_STALLED_NO_PROGRESS_TIMEOUT_MS && !isStillGenerating) {
+        if (await retryMotionPrompt('no-assistant-after-send', state)) {
+          lastEffectiveTextLength = 0;
+          lastProgressAt = Date.now();
+          peakAssistantText = '';
+          peakAssistantTextLength = 0;
+          lastBadMotionText = '';
+          badMotionTextTicks = 0;
+          previousIsStillGenerating = false;
+          continue;
+        }
+      }
       continue;
     }
-    latest = state.text.trim();
+
+    latest = effectiveText;
     const freshAssistant = state.count > (before?.count || 0) || latest !== before?.text;
-    const quality = validateMotionPromptResponse(latest, { beforeText: before?.text || '', instruction, taskPrompt: prompt });
-    const composerIdle = !state.stopButton && !state.generating;
-    const composerDone = composerIdle && (state.voiceReady || quality.ok);
+    const quality = validateMotionPromptResponse(latest, { beforeText: before?.text || '', instruction, taskPrompt: prompt, state });
+    const composerIdle = !isStillGenerating;
+    const composerDone = composerIdle && quality.ok;
+
+    if (freshAssistant && composerDone && quality.ok) break;
+
     const retryableBadMotionText = freshAssistant && !quality.ok && isRetryableChatGptToolErrorText(latest, 'motion');
     const normalizedBadMotionText = normalizeChatGptRetryText(latest);
-    if (freshAssistant && !quality.ok && (retryableBadMotionText || quality.error === 'missing-motion-prompt-signals' || quality.error === 'too-short')) {
-      if (normalizedBadMotionText && normalizedBadMotionText === lastBadMotionText) badMotionTextTicks += 1;
-      else {
+    if (freshAssistant && !quality.ok && (retryableBadMotionText || quality.error === 'too-short')) {
+      if (normalizedBadMotionText && normalizedBadMotionText === lastBadMotionText) {
+        badMotionTextTicks += 1;
+      } else {
         lastBadMotionText = normalizedBadMotionText;
         badMotionTextTicks = 1;
       }
@@ -3302,111 +3640,132 @@ async function generateMotionPromptWithChatGPTOnce({ imagePath, prompt, sceneDir
       lastBadMotionText = '';
       badMotionTextTicks = 0;
     }
-    if (freshAssistant && composerDone && quality.ok) break;
-    if (freshAssistant && !quality.ok && (composerIdle || retryableBadMotionText || badMotionTextTicks >= 3) && Date.now() - motionAttemptStartedAt > 25000 && await retryMotionPrompt(retryableBadMotionText ? 'retryable-bad-motion-text' : (quality.error || 'bad-response-idle'), state)) continue;
-    if (!freshAssistant && composerIdle && Date.now() - motionAttemptStartedAt > 25000 && await retryMotionPrompt('stuck-after-user-message', state)) continue;
-    {
-        const policyCheckText =
-          typeof latestText !== 'undefined' ? latestText :
-          typeof text !== 'undefined' ? text :
-          typeof responseText !== 'undefined' ? responseText :
-          typeof latest?.text !== 'undefined' ? latest.text :
-          typeof latestAssistantText !== 'undefined' ? latestAssistantText :
-          '';
 
-        if (isChatGptPolicyRefusalText(policyCheckText)) {
-          await notifyChatGptPolicyRefusal(sceneId, 'NV2/motion-prompt', policyCheckText);
-        }
+    // Stuck check: Zero progress for 45 seconds AND not actively generating
+    if (noProgressForMs >= NV2_STALLED_NO_PROGRESS_TIMEOUT_MS && !isStillGenerating) {
+      if (await retryMotionPrompt('no-progress-during-generation', state)) {
+        lastEffectiveTextLength = 0;
+        lastProgressAt = Date.now();
+        peakAssistantText = '';
+        peakAssistantTextLength = 0;
+        lastBadMotionText = '';
+        badMotionTextTicks = 0;
+        previousIsStillGenerating = false;
+        continue;
       }
+    }
 
+    // Early recovery for ChatGPT tool errors or 3 bad ticks
+    if (freshAssistant && !quality.ok && (composerIdle || retryableBadMotionText || badMotionTextTicks >= 3)) {
+      if (await retryMotionPrompt(retryableBadMotionText ? 'retryable-bad-motion-text' : (quality.error || 'bad-response-idle'), state)) {
+        lastEffectiveTextLength = 0;
+        lastProgressAt = Date.now();
+        peakAssistantText = '';
+        peakAssistantTextLength = 0;
+        lastBadMotionText = '';
+        badMotionTextTicks = 0;
+        previousIsStillGenerating = false;
+        continue;
+      }
+    }
+
+    if (composerIdle && noProgressForMs >= NV2_STALLED_NO_PROGRESS_TIMEOUT_MS) {
+      if (await retryMotionPrompt('stuck-after-user-message', state)) {
+        lastEffectiveTextLength = 0;
+        lastProgressAt = Date.now();
+        peakAssistantText = '';
+        peakAssistantTextLength = 0;
+        lastBadMotionText = '';
+        badMotionTextTicks = 0;
+        previousIsStillGenerating = false;
+        continue;
+      }
+    }
+
+    {
       await vidoraChatGptInputGate((typeof client !== 'undefined' ? client : (typeof page !== 'undefined' ? page : null)), {
         sceneId: ((typeof options !== 'undefined' && options?.sceneId) || (typeof context !== 'undefined' && context?.sceneId) || ''),
         stage: 'before-nv2-wait',
       });
 
-// VIDORA_FORCE_SEND_NV2_BEFORE_WAIT_REAL
-  {
-    const nv2GateTarget = (typeof client !== 'undefined' ? client : (typeof page !== 'undefined' ? page : null));
+      // VIDORA_FORCE_SEND_NV2_BEFORE_WAIT_REAL
+      {
+        const nv2GateTarget = (typeof client !== 'undefined' ? client : (typeof page !== 'undefined' ? page : null));
 
-    let nv2InputState = await vidoraReadChatGptComposerStateReal(nv2GateTarget, {
-      sceneId: ((typeof options !== 'undefined' && options?.sceneId) || (typeof context !== 'undefined' && context?.sceneId) || ''),
-      stage: 'nv2-force-send-before-wait-check',
-    }).catch((error) => ({ ok: false, error: error.message }));
-
-    await appendAppLog(null, {
-      source: 'main',
-      kind: 'running',
-      text: 'NV2 SEND GATE: kiểm tra input trước khi chờ ChatGPT trả motion prompt.',
-      details: { nv2InputState },
-    }).catch(() => null);
-
-    if (nv2InputState?.ok && nv2InputState.composerHasText) {
-      await appendAppLog(null, {
-        source: 'main',
-        kind: 'error',
-        text: 'NV2 SEND GATE: input còn prompt NV2 => chưa gửi thật, ép bấm nút gửi.',
-        details: {
-          textLength: nv2InputState.composerTextLength,
-          textHead: nv2InputState.composerTextHead,
-          sendButton: nv2InputState.sendButton,
-          sendCandidates: nv2InputState.sendCandidates,
-        },
-      }).catch(() => null);
-
-      for (let attempt = 1; attempt <= 5; attempt++) {
-        const click = await vidoraClickChatGptRealSendButton(nv2GateTarget, nv2InputState)
-          .catch((error) => ({ ok: false, error: error.message }));
-
-        await sleep(1200);
-
-        const after = await vidoraReadChatGptComposerStateReal(nv2GateTarget, {
+        let nv2InputState = await vidoraReadChatGptComposerStateReal(nv2GateTarget, {
           sceneId: ((typeof options !== 'undefined' && options?.sceneId) || (typeof context !== 'undefined' && context?.sceneId) || ''),
-          stage: 'nv2-force-send-after-click',
-          attempt,
+          stage: 'nv2-force-send-before-wait-check',
         }).catch((error) => ({ ok: false, error: error.message }));
 
         await appendAppLog(null, {
           source: 'main',
-          kind: (!after?.composerHasText || after?.stopVisible) ? 'ok' : 'running',
-          text: (!after?.composerHasText || after?.stopVisible)
-            ? `NV2 SEND GATE: attempt ${attempt} gửi OK, input đã trống hoặc ChatGPT đang chạy.`
-            : `NV2 SEND GATE: attempt ${attempt} chưa gửi, input vẫn còn nội dung.`,
-          details: { attempt, click, after },
+          kind: 'running',
+          text: 'NV2 SEND GATE: kiểm tra input trước khi chờ ChatGPT trả motion prompt.',
+          details: { nv2InputState },
         }).catch(() => null);
 
-        nv2InputState = after;
+        if (nv2InputState?.ok && nv2InputState.composerHasText) {
+          await appendAppLog(null, {
+            source: 'main',
+            kind: 'error',
+            text: 'NV2 SEND GATE: input còn prompt NV2 => chưa gửi thật, ép bấm nút gửi.',
+            details: {
+              textLength: nv2InputState.composerTextLength,
+              textHead: nv2InputState.composerTextHead,
+              sendButton: nv2InputState.sendButton,
+              sendCandidates: nv2InputState.sendCandidates,
+            },
+          }).catch(() => null);
 
-        if (!after?.composerHasText || after?.stopVisible) break;
-      }
+          for (let attempt = 1; attempt <= 5; attempt++) {
+            const click = await vidoraClickChatGptRealSendButton(nv2GateTarget, nv2InputState)
+              .catch((error) => ({ ok: false, error: error.message }));
 
-      if (nv2InputState?.composerHasText && !nv2InputState?.stopVisible) {
-        throw new Error('nv2-send-gate-failed-input-still-has-prompt');
+            await sleep(1200);
+
+            const after = await vidoraReadChatGptComposerStateReal(nv2GateTarget, {
+              sceneId: ((typeof options !== 'undefined' && options?.sceneId) || (typeof context !== 'undefined' && context?.sceneId) || ''),
+              stage: 'nv2-force-send-after-click',
+              attempt,
+            }).catch((error) => ({ ok: false, error: error.message }));
+
+            await appendAppLog(null, {
+              source: 'main',
+              kind: (!after?.composerHasText || after?.stopVisible) ? 'ok' : 'running',
+              text: (!after?.composerHasText || after?.stopVisible)
+                ? `NV2 SEND GATE: attempt ${attempt} gửi OK, input đã trống hoặc ChatGPT đang chạy.`
+                : `NV2 SEND GATE: attempt ${attempt} chưa gửi, input vẫn còn nội dung.`,
+              details: { attempt, click, after },
+            }).catch(() => null);
+
+            nv2InputState = after;
+
+            if (!after?.composerHasText || after?.stopVisible) break;
+          }
+
+          if (nv2InputState?.composerHasText && !nv2InputState?.stopVisible) {
+            throw new Error('nv2-send-gate-failed-input-still-has-prompt');
+          }
+        }
       }
     }
   }
-
-
-      await appendAppLog(null, {
-      source: 'main',
-      kind: 'running',
-      text: `Scene ${sceneId}: chờ ChatGPT hoàn tất NV2 (${state.generating ? 'thinking' : quality.error || 'response-chưa-đủ'}).`,
-      details: { ...state, quality, textHead: latest.slice(0, 500) },
-    });
-  }
-  const finalQuality = validateMotionPromptResponse(latest, { beforeText: before?.text || '', instruction, taskPrompt: prompt });
+  const finalQuality = validateMotionPromptResponse(latest, { beforeText: before?.text || '', instruction, taskPrompt: prompt, state: lastState });
   if (!latest || latest === before?.text || !finalQuality.ok) {
     await fs.writeFile(path.join(sceneDir, 'motion_prompt_wait_failed.json'), JSON.stringify({ latest, before, lastState, finalQuality }, null, 2), 'utf8').catch(() => null);
     throw new Error(`ChatGPT chưa trả motion prompt NV2 đủ nội dung: ${finalQuality.error || 'empty/old-response'}.`);
   }
+  await fs.writeFile(path.join(sceneDir, 'motion_prompt.txt'), latest, 'utf8').catch(() => null);
   await fs.writeFile(path.join(sceneDir, 'motion_prompt_from_chatgpt.txt'), latest, 'utf8');
   await page.close().catch(() => null);
   return latest;
 }
 
-function validateMotionPromptResponse(text = '', { beforeText = '', instruction = '', taskPrompt = '' } = {}) {
-  const value = String(text || '').replace(/\s+/g, ' ').trim();
+function validateMotionPromptResponse(text = '', { beforeText = '', instruction = '', taskPrompt = '', state = null } = {}) {
+  const value = String(text || '').trim();
   if (!value) return { ok: false, error: 'empty-response' };
-  if (value === String(beforeText || '').replace(/\s+/g, ' ').trim()) return { ok: false, error: 'same-as-before' };
+  if (value.replace(/\s+/g, ' ') === String(beforeText || '').replace(/\s+/g, ' ').trim()) return { ok: false, error: 'same-as-before' };
+  
   const lower = value.toLowerCase();
   const instructionHead = String(instruction || '').replace(/\s+/g, ' ').trim().slice(0, 120).toLowerCase();
   const taskHead = String(taskPrompt || '').replace(/\s+/g, ' ').trim().slice(0, 120).toLowerCase();
@@ -3414,16 +3773,17 @@ function validateMotionPromptResponse(text = '', { beforeText = '', instruction 
   if (taskHead && lower.startsWith(taskHead.slice(0, 80))) return { ok: false, error: 'echoed-task-prompt' };
   if (/^thought\s+for\s+\d+/i.test(value) || /^edit$/i.test(value) || /\bThought\s+for\s+\d+[^\n]*(\n|\s)*Edit\b/i.test(String(text || ''))) return { ok: false, error: 'thinking-summary-not-final' };
   if (/nhiệm\s*vụ\s*2\s*:|show more|đoạn đầu scene|vừa tạo/i.test(value) && value.length < 900) return { ok: false, error: 'looks-like-collapsed-user-prompt' };
-  if (value.length < 180) return { ok: false, error: 'too-short' };
-  const motionSignals = [
-    /camera|shot|lens|dolly|pan|tilt|zoom|tracking|close[-\s]?up|wide shot/i,
-    /motion|movement|move|chuyển động|máy quay|góc quay|khung hình/i,
-    /second|seconds|giây|10s|10 giây/i,
-    /light|lighting|cinematic|atmosphere|render|focus|depth/i,
-  ];
-  const score = motionSignals.reduce((total, pattern) => total + (pattern.test(value) ? 1 : 0), 0);
-  if (score < 2) return { ok: false, error: 'missing-motion-prompt-signals', score };
-  return { ok: true, score, length: value.length };
+
+  // New dynamic NV2 validation rules:
+  const generation = state ? state.generation : false;
+  const streamingIndicator = state ? state.streamingIndicator : false;
+  const isTextMode = true; // NV2 is text response
+
+  if (isTextMode && generation === false && streamingIndicator === false && value.length > 100) {
+    return { ok: true };
+  }
+
+  return { ok: false, error: value.length <= 100 ? 'too-short' : 'still-generating-or-streaming' };
 }
 
 function normalizeVideoProvider(provider) {
@@ -9093,7 +9453,16 @@ function clickPixVerseCreateScript() {
 }
 
 function readLatestAssistantScript() {
-  const bodyTail = String(document.body?.innerText || '').slice(-4000);
+  const bodyText = document.body?.innerText || '';
+  const bodyTail = bodyText.slice(-4000);
+  
+  const visible = (node) => {
+    const rect = node.getBoundingClientRect?.();
+    if (!rect || rect.width < 4 || rect.height < 4) return false;
+    const style = window.getComputedStyle?.(node);
+    return !(style && (style.visibility === 'hidden' || style.display === 'none' || Number(style.opacity || 1) === 0));
+  };
+  
   const buttons = [...document.querySelectorAll('button, [role="button"]')]
     .map((node) => {
       const rect = node.getBoundingClientRect?.();
@@ -9102,33 +9471,82 @@ function readLatestAssistantScript() {
       return { node, rect, text, html };
     })
     .filter((item) => item.rect && item.rect.width > 8 && item.rect.height > 8);
+    
   const composerButtons = buttons.filter((item) => item.rect.top > window.innerHeight * 0.72 && item.rect.left > window.innerWidth * 0.55);
   const stopButton = composerButtons.some((item) => /stop|cancel|dừng/i.test(item.text) || /<rect|data-icon=["']stop|stop-circle|square/i.test(item.html));
   const voiceReady = composerButtons.some((item) => /voice|mic|microphone|record|dictate/i.test(item.text) || /waveform|audio|voice|mic/i.test(item.html));
   const sendReady = composerButtons.some((item) => !/stop|cancel|dung/i.test(item.text) && /send|submit|gui|arrow-up|paper-plane|composer-submit/i.test(`${item.text} ${item.html}`)) && !stopButton;
+  
   const thinkingText = /Thinking about your request|Đang suy nghĩ|Generating|Creating/i.test(bodyTail);
-  const roleNodes = [...document.querySelectorAll('[data-message-author-role="assistant"]')]
-    .filter((node) => (node.innerText || '').trim().length > 20);
-  const fallbackNodes = [...document.querySelectorAll('article, .message, [class*="response"], [class*="markdown"]')]
-    .filter((node) => {
-      if (node.closest?.('[data-message-author-role="user"]')) return false;
-      if (node.querySelector?.('[data-message-author-role="user"]')) return false;
-      const text = (node.innerText || '').trim();
-      if (text.length <= 20) return false;
-      if (/^NHIỆM\s*VỤ\s*2\s*:|^Dựa trên ảnh keyframe|Show more/i.test(text)) return false;
-      return true;
-    });
-  const nodes = roleNodes.length ? roleNodes : fallbackNodes;
-  const last = nodes.at(-1);
+  const streamingIndicator = stopButton || [...document.querySelectorAll('[aria-busy="true"], [role="progressbar"], [data-testid*="loading"], [data-testid*="spinner"], [class*="result-streaming"]')].some(visible);
+  
+  const selectors = [
+    '[data-message-author-role="assistant"] .markdown',
+    '[data-message-author-role="assistant"]',
+    '.markdown',
+    'article .markdown',
+    'main [data-message-author-role="assistant"]',
+    'article',
+    '.message',
+    '[class*="response"]'
+  ];
+  
+  let text = '';
+  let source = 'empty';
+  
+  for (const selector of selectors) {
+    const nodes = [...document.querySelectorAll(selector)]
+      .filter(visible)
+      .filter((node) => {
+        if (node.closest?.('[data-message-author-role="user"]')) return false;
+        if (node.querySelector?.('[data-message-author-role="user"]')) return false;
+        
+        const t = (node.innerText || '').trim();
+        if (t.length <= 20) return false;
+        if (/^NHIỆM\s*VỤ\s*1\s*:|^NHIỆM\s*VỤ\s*2\s*:|^---\s*SCENE|^Dựa trên ảnh keyframe|Show more/i.test(t) && t.length < 300) return false;
+        return true;
+      });
+      
+    if (nodes.length > 0) {
+      const lastNode = nodes.at(-1);
+      const extractedText = (lastNode.innerText || lastNode.textContent || '').trim();
+      if (extractedText.length > 20) {
+        text = extractedText;
+        source = selector;
+        break;
+      }
+    }
+  }
+
+  if (!text) {
+    const fallbackNodes = [...document.querySelectorAll('[data-message-author-role="assistant"], article')]
+      .filter(visible)
+      .filter((node) => {
+        if (node.closest?.('[data-message-author-role="user"]')) return false;
+        const t = (node.innerText || '').trim();
+        return t.length > 20;
+      });
+    if (fallbackNodes.length > 0) {
+      text = fallbackNodes.at(-1).innerText.trim();
+      source = 'fallback-unfiltered';
+    }
+  }
+
+  const generating = sendReady ? false : (stopButton || (thinkingText && !voiceReady));
+
   return {
-    count: nodes.length,
-    text: last ? last.innerText.trim() : '',
-    generating: sendReady ? false : (stopButton || (thinkingText && !voiceReady)),
+    count: document.querySelectorAll('[data-message-author-role="assistant"]').length || 1,
+    text,
+    textLength: text.length,
+    source,
+    generating,
+    generation: false,
+    streamingIndicator,
     stopButton,
     sendReady,
     voiceReady,
     composerButtonCount: buttons.length,
-    mode: roleNodes.length ? 'assistant-role' : 'fallback-non-user',
+    mode: source,
   };
 }
 
@@ -9281,7 +9699,11 @@ async function runVeoUpAutomation(_event, payload = {}) {
     details: { outputFolder: payload?.outputFolder || '', projectName: payload?.projectName || '' },
   }).catch(() => null);
 
-  const result = await executeVeoUpAutomation(payload);
+  const result = await executeVeoUpAutomation({
+    ...payload,
+    userDataDir: app.getPath('userData'),
+    maximizeBeforeAutomation: true,
+  });
 
   await appendAppLog(null, {
     source: 'main',
@@ -9418,8 +9840,53 @@ app.on('browser-window-created', (_event, win) => {
   } catch (_) {}
 });
 
+async function getVeoUpCoordinateConfigHandler() {
+  return getVeoUpCoordinateConfig(app.getPath('userData'));
+}
+
+async function startVeoUpCoordinateSetupHandler(_event, payload = {}) {
+  return startCoordinateSetup({
+    ...payload,
+    userDataDir: app.getPath('userData')
+  });
+}
+
+async function captureVeoUpCoordinateHandler(_event, pointType) {
+  return captureVeoUpCoordinate(pointType, app.getPath('userData'));
+}
+
+async function saveVeoUpCoordinateConfigHandler(_event, config) {
+  return saveVeoUpCoordinateConfig(app.getPath('userData'), config);
+}
+
+async function deleteVeoUpCoordinateConfigHandler(_event, payload = {}) {
+  return deleteVeoUpCoordinateConfig({
+    ...payload,
+    userDataDir: app.getPath('userData')
+  });
+}
+
+async function cancelVeoUpCoordinateSetupHandler() {
+  return cancelCoordinateSetup();
+}
+
+async function scanProjectAndRunVeoUpHandler(_event, payload = {}) {
+  return scanProjectAndRunVeoUp({
+    ...payload,
+    userDataDir: app.getPath('userData')
+  });
+}
+
 
 app.whenReady().then(() => {
+  ipcMain.handle('veoup:get-coordinate-config', safeIpcHandler(getVeoUpCoordinateConfigHandler));
+  ipcMain.handle('veoup:start-coordinate-setup', safeIpcHandler(startVeoUpCoordinateSetupHandler));
+  ipcMain.handle('veoup:capture-coordinate', safeIpcHandler(captureVeoUpCoordinateHandler));
+  ipcMain.handle('veoup:delete-coordinate-config', safeIpcHandler(deleteVeoUpCoordinateConfigHandler));
+  ipcMain.handle('veoup:save-coordinate-config', safeIpcHandler(saveVeoUpCoordinateConfigHandler));
+  ipcMain.handle('veoup:cancel-coordinate-setup', safeIpcHandler(cancelVeoUpCoordinateSetupHandler));
+  ipcMain.handle('veoup:scan-project-and-run', safeIpcHandler(scanProjectAndRunVeoUpHandler));
+
   ipcMain.handle('app:append-log', appendAppLog);
   ipcMain.handle('app:get-log-path', getAppLogPath);
   ipcMain.handle('prompt:open-hard-file', openHardPromptFile);
@@ -9461,11 +9928,11 @@ app.whenReady().then(() => {
   ipcMain.handle('project:ensure-scene-folders', ensureProjectSceneFolders);
   ipcMain.handle('veoup:run-automation', safeIpcHandler(runVeoUpAutomation));
 
-  ensureUserPromptFile(HARD_PROMPT_FILENAME).catch((error) => {
+  ensureAndMigratePrompts().catch((error) => {
     appendAppLog(null, {
       source: 'main',
       kind: 'error',
-      text: `promptFile: startup ensure failed; expected external file=${path.join(getUserPromptDir(), HARD_PROMPT_FILENAME)}`,
+      text: `promptFile: startup migration and validation failed`,
       details: { error: error.message },
     }).catch(() => null);
   });

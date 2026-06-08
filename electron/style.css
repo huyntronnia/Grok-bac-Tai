@@ -211,6 +211,7 @@ input:focus, select:focus, textarea:focus {
 }
 .ghost.primary { border-color: rgba(34, 211, 238, 0.42); background: linear-gradient(135deg, rgba(34, 211, 238, 0.22), rgba(168, 85, 247, 0.18)); }
 .ghost.success { border-color: rgba(52, 211, 153, 0.45); background: rgba(52, 211, 153, 0.14); }
+.ghost.danger { border-color: rgba(248, 113, 113, 0.45); background: rgba(248, 113, 113, 0.14); }
 #create-project-btn:hover, .ghost:hover:not(:disabled), .mini:hover { transform: translateY(-2px); filter: brightness(1.08); }
 
 .inline-control {
