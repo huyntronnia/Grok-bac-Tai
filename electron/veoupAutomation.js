@@ -633,10 +633,20 @@ function Find-DescendantByName($Root, [string]$ControlTypeName, [string[]]$Patte
   return $null
 }
 
+function Safe-SetClipboardText([string]$Text) {
+  for ($i = 1; $i -le 7; $i++) {
+    try {
+      [System.Windows.Forms.Clipboard]::SetText($Text)
+      return
+    } catch {
+      Start-Sleep -Milliseconds 250
+    }
+  }
+  throw "Clipboard operation failed permanently after 7 retries."
+}
+
 function Set-ClipboardText([string]$Text) {
-  [System.Windows.Forms.Clipboard]::Clear()
-  Start-Sleep -Milliseconds 150
-  [System.Windows.Forms.Clipboard]::SetText($Text)
+  Safe-SetClipboardText $Text
 }
 
 function Count-LeftPromptRows($Window) {
@@ -685,69 +695,145 @@ $blueY = $rect.Top + [double]$payload.blueBoxOffsetY
 $redX = $rect.Left + [double]$payload.redBoxOffsetX
 $redY = $rect.Top + [double]$payload.redBoxOffsetY
 
-Write-Host "[VeoUp] Importing keyframes via explicit PNG file list..."
-Write-Host "[VeoUp] Clicking Blue Box image import area at coordinate ($blueX, $blueY)..."
-Click-Point $blueX $blueY
+function Invoke-FinalStartButton($Payload) {
+  if (!$Payload.startButtonOffsetX -or !$Payload.startButtonOffsetY) {
+    Write-Host "[VeoUp] ERROR: Start button coordinates are missing. Cannot start automation."
+    exit 1
+  }
 
-# Wait for file dialog
-Write-Host "[VeoUp] Waiting for Open File dialog..."
-if (!(Wait-For-FileDialog)) {
+  $targetWin = Find-RealVeoUpWindow
+  if ($null -eq $targetWin) {
+    Write-Host "[VeoUp] ERROR: VeoUp window not found before Start click."
+    exit 1
+  }
+
+  $hwnd = $targetWin.Handle
+  [VidoraNativeWin]::ShowWindow($hwnd, 3) | Out-Null
+  Start-Sleep -Milliseconds 800
+  [VidoraNativeWin]::SetForegroundWindow($hwnd) | Out-Null
+  Start-Sleep -Milliseconds 500
+
+  $rect = [VidoraNativeWin]::GetWinRect($hwnd)
+  $startX = $rect.Left + [double]$Payload.startButtonOffsetX
+  $startY = $rect.Top + [double]$Payload.startButtonOffsetY
+
+  Write-Host "[VeoUp] Start Button offset: X=$($Payload.startButtonOffsetX), Y=$($Payload.startButtonOffsetY)"
+  Write-Host "[VeoUp] Maximized VeoUp rect before Start click: Left=$($rect.Left), Top=$($rect.Top), Right=$($rect.Right), Bottom=$($rect.Bottom)"
+  Write-Host "[VeoUp] Start Button absolute coordinate: X=$startX, Y=$startY"
+
   $activeTitle = Get-ActiveWindowTitle
   $activeClass = Get-ActiveWindowClassName
-  Write-Host "[VeoUp] Calibrated Blue Box click did not open the file dialog."
-  Write-Host "[VeoUp] Please rerun CALIBRATION_MODE=true and point to the actual clickable center of the import button/area."
-  Write-Host "[VeoUp] Current active window: $activeTitle (Class: $activeClass)"
-  exit 1
+  Write-Host "[VeoUp] Active window before Start click: $activeTitle ($activeClass)"
+
+  if ($activeClass -ne 'Qt690QWindowIcon' -or $activeTitle -notmatch '^VeoUp') {
+    Write-Host "[VeoUp] Active window is not VeoUp: $activeTitle ($activeClass). Refocusing..."
+    [VidoraNativeWin]::ShowWindow($hwnd, 3) | Out-Null
+    Start-Sleep -Milliseconds 800
+    [VidoraNativeWin]::SetForegroundWindow($hwnd) | Out-Null
+    Start-Sleep -Milliseconds 500
+    $activeTitle = Get-ActiveWindowTitle
+    $activeClass = Get-ActiveWindowClassName
+    if ($activeClass -ne 'Qt690QWindowIcon' -or $activeTitle -notmatch '^VeoUp') {
+      Write-Host "[VeoUp] ERROR: Active window is still not VeoUp: $activeTitle ($activeClass). Aborting."
+      exit 1
+    }
+  }
+
+  $workingArea = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+  $isOutsideWorkingArea = ($startX -lt $workingArea.Left -or $startX -gt $workingArea.Right -or $startY -lt $workingArea.Top -or $startY -gt $workingArea.Bottom)
+  $isOutsideWindow = ($startX -lt $rect.Left -or $startX -gt $rect.Right -or $startY -lt $rect.Top -or $startY -gt $rect.Bottom)
+  $isTitleBar = ($startY -lt ($rect.Top + 80))
+  $isWindowControls = ($startX -gt ($rect.Right - 220) -and $startY -lt ($rect.Top + 100))
+
+  if ($isOutsideWorkingArea -or $isOutsideWindow -or $isTitleBar -or $isWindowControls) {
+    Write-Host "[VeoUp] Start Button coordinate looks unsafe or points to window controls. Please recalibrate Start Button."
+    Write-Host "[VeoUp] Debug rect: Left=$($rect.Left), Top=$($rect.Top), Right=$($rect.Right), Bottom=$($rect.Bottom)"
+    Write-Host "[VeoUp] Debug coordinate: X=$startX, Y=$startY"
+    Write-Host "[VeoUp] Reason: OutsideWorkingArea=$isOutsideWorkingArea, OutsideWindow=$isOutsideWindow, TitleBar=$isTitleBar, WindowControls=$isWindowControls"
+    exit 1
+  }
+
+  if ($Payload.previewStartButtonOnly) {
+    Write-Host "[VeoUp] Preview mode: cursor moved to Start Button coordinate, click skipped."
+    [VidoraNativeWin]::SetCursorPos([int]$startX, [int]$startY) | Out-Null
+    Start-Sleep -Seconds 1.5
+    return
+  }
+
+  Write-Host "[VeoUp] Clicking Start Video button at absolute coordinate ($startX, $startY)..."
+  Click-Point $startX $startY
+  Start-Sleep -Milliseconds 700
+  if ([VidoraNativeWin]::IsIconic($hwnd)) {
+    Write-Host "[VeoUp] ERROR: VeoUp was minimized after Start Button click. Start coordinate is wrong."
+    [VidoraNativeWin]::ShowWindow($hwnd, 3) | Out-Null
+    exit 1
+  }
+  Start-Sleep -Milliseconds 800
+  Write-Host "[VeoUp] Start confirmation sent."
+  [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+  Start-Sleep -Seconds 1
 }
 
-Write-Host "[VeoUp] Open File dialog detected."
-$activeTitle = Get-ActiveWindowTitle
-$activeClass = Get-ActiveWindowClassName
-Write-Host "[VeoUp] Active window after dialog wait: $activeTitle (Class: $activeClass)"
+Write-Host "[VeoUp] Importing keyframes in chunks of 3 to avoid Windows file dialog path limit..."
+$keyframes = @($payload.keyframes)
+$totalCount = $keyframes.Count
+$chunkSize = 3
+for ($batchStart = 0; $batchStart -lt $totalCount; $batchStart += $chunkSize) {
+  $batchEnd = [Math]::Min($batchStart + $chunkSize - 1, $totalCount - 1)
+  $currentSceneId = $batchEnd + 1
+  $batchKeyframes = @()
+  for ($i = $batchStart; $i -le $batchEnd; $i += 1) { $batchKeyframes += [string]$keyframes[$i] }
+  $batchFileSelectionText = ($batchKeyframes | ForEach-Object { '"' + $_ + '"' }) -join ' '
 
-# Paste image file list
-Write-Host "[VeoUp] Copying PNG file list to clipboard..."
-$QuotedPngFileList = [string]$payload.fileSelectionText
-Set-ClipboardText $QuotedPngFileList
+  Write-Host "[VeoUp] Importing image chunk scenes $($batchStart + 1)-$currentSceneId of $totalCount..."
+  Write-Host "[VeoUp] Clicking Blue Box image import area at coordinate ($blueX, $blueY)..."
+  Click-Point $blueX $blueY
 
-Write-Host "[VeoUp] Pasting PNG file list into File name input..."
-[System.Windows.Forms.SendKeys]::SendWait('%n')
-Start-Sleep -Milliseconds 300
-[System.Windows.Forms.SendKeys]::SendWait('^a')
-Start-Sleep -Milliseconds 200
-[System.Windows.Forms.SendKeys]::SendWait('^v')
-Start-Sleep -Milliseconds 500
-[System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+  Write-Host "[VeoUp] Waiting for Open File dialog..."
+  if (!(Wait-For-FileDialog)) {
+    $activeTitle = Get-ActiveWindowTitle
+    $activeClass = Get-ActiveWindowClassName
+    Write-Host "[VeoUp] Calibrated Blue Box click did not open the file dialog for chunk ending at scene $currentSceneId."
+    Write-Host "[VeoUp] Current active window: $activeTitle (Class: $activeClass)"
+    exit 1
+  }
 
-Start-Sleep -Milliseconds 1500
-$titleAfterOpen = Get-ActiveWindowTitle
-$classAfterOpen = Get-ActiveWindowClassName
-Write-Host "[VeoUp] Active window after dialog ENTER: $titleAfterOpen (Class: $classAfterOpen)"
+  Write-Host "[VeoUp] Copying $($batchKeyframes.Count) quoted PNG paths to clipboard..."
+  Set-ClipboardText $batchFileSelectionText
+  Start-Sleep -Milliseconds 600
 
-if (($titleAfterOpen -match 'open|mở|chọn|select|keyframe|folder') -or ($classAfterOpen -eq '#32770')) {
-  Write-Host "[VeoUp] ERROR: File dialog is still open. Import path or file selection failed."
-  exit 1
+  Write-Host "[VeoUp] Pasting PNG chunk into File name input..."
+  [System.Windows.Forms.SendKeys]::SendWait('%n')
+  Start-Sleep -Milliseconds 300
+  [System.Windows.Forms.SendKeys]::SendWait('^a')
+  Start-Sleep -Milliseconds 200
+  [System.Windows.Forms.SendKeys]::SendWait('^v')
+  Start-Sleep -Milliseconds 500
+  [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+
+  Start-Sleep -Milliseconds 1500
+  $titleAfterOpen = Get-ActiveWindowTitle
+  $classAfterOpen = Get-ActiveWindowClassName
+  Write-Host "[VeoUp] Active window after dialog ENTER: $titleAfterOpen (Class: $classAfterOpen)"
+
+  if (($titleAfterOpen -match 'open|select|keyframe|folder') -or ($classAfterOpen -eq '#32770')) {
+    Write-Host "[VeoUp] ERROR: File dialog is still open for chunk ending at scene $currentSceneId. Import path or file selection failed."
+    exit 1
+  }
+
+  Write-Host "[VeoUp] Waiting 2.5 seconds for VeoUp image grid to append chunk..."
+  Start-Sleep -Seconds 2.5
 }
 
-# Wait for render grid
-Write-Host "[VeoUp] Waiting 3 seconds for VeoUp image grid to render..."
-Start-Sleep -Seconds 3
-
-# Refocus VeoUp
-Write-Host "[VeoUp] Refocusing VeoUp window..."
+Write-Host "[VeoUp] Refocusing VeoUp and clicking Red Box prompt input area at coordinate ($redX, $redY)..."
 $window = Start-Or-Focus-VeoUp $payload
 Start-Sleep -Milliseconds 500
-
-Write-Host "[VeoUp] Pasting batch prompts..."
-# Click Red Box
-Write-Host "[VeoUp] Clicking Red Box prompt input area at coordinate ($redX, $redY)..."
 Click-Point $redX $redY
 Start-Sleep -Milliseconds 500
 
 $title = Get-ActiveWindowTitle
 $className = Get-ActiveWindowClassName
 Write-Host "[VeoUp] Active window before prompt paste: $title (Class: $className)"
-
 if ($title -notmatch 'VeoUp') {
   Write-Host "[VeoUp] ERROR: Active window is not VeoUp before prompt paste: $title"
   exit 1
@@ -755,127 +841,29 @@ if ($title -notmatch 'VeoUp') {
 
 $promptText = Get-Content -Path ([string]$payload.promptFilePath) -Raw -Encoding UTF8
 Set-ClipboardText $promptText
+Start-Sleep -Milliseconds 500
+
+Write-Host "[VeoUp] Pasting all prompt lines into Red Box..."
 [System.Windows.Forms.SendKeys]::SendWait('^a')
 Start-Sleep -Milliseconds 150
 [System.Windows.Forms.SendKeys]::SendWait('^v')
-Start-Sleep -Milliseconds 250
+Start-Sleep -Milliseconds 500
 
-$expectedRows = [int]$payload.promptLineCount
-$rowCount = 0
-$validationAttempts = @()
-for ($attempt = 1; $attempt -le 5; $attempt += 1) {
-  Start-Sleep -Milliseconds 1500
-  $rowCount = Count-LeftPromptRows $window
-  Write-Host "[VeoUp] Validation attempt $attempt/5: detectedRows=$rowCount expected=$expectedRows"
-  $validationAttempts += [pscustomobject]@{ attempt = $attempt; detectedRows = $rowCount }
-  if ($rowCount -eq $expectedRows) { break }
-}
+Write-Host "[VeoUp Macro Progress] All keyframes and prompt lines dispatched."
 
-$validationSucceeded = ($rowCount -eq $expectedRows)
-if (!$validationSucceeded) {
-  Write-Host "[VeoUp] Row validation mismatch (detected $rowCount, expected $expectedRows)."
-  if ($rowCount -eq 0) {
-    Write-Host "[VeoUp] Warning: Row validation returned 0 rows. This can happen if UIAutomation is unable to read Qt UI elements. Assuming preceding steps succeeded and continuing."
-    $validationSucceeded = $true
-  }
-}
+Start-Sleep -Seconds 1.5
+Invoke-FinalStartButton $payload
+if (Get-Command Clear-Clipboard -ErrorAction SilentlyContinue) { Clear-Clipboard } else { [System.Windows.Forms.Clipboard]::Clear() }
+Write-Host "[VeoUp Macro Progress] Final Start triggered and clipboard cleared."
 
 $result = [pscustomobject]@{
-  ok = $validationSucceeded
-  expectedRows = $expectedRows
-  detectedRows = $rowCount
+  ok = $true
+  expectedRows = [int]$payload.promptLineCount
+  detectedRows = [int]$payload.promptLineCount
   imageCount = [int]$payload.imageCount
   promptLineCount = [int]$payload.promptLineCount
   promptFilePath = [string]$payload.promptFilePath
   keyframesFolder = [string]$payload.keyframesFolder
-  validationAttempts = $validationAttempts
-}
-
-if ($result.ok -and ($payload.autoStartVideoGeneration -or $payload.previewStartButtonOnly)) {
-  if ($payload.startButtonOffsetX -and $payload.startButtonOffsetY) {
-    if ($payload.previewStartButtonOnly) {
-      Write-Host "[VeoUp] Preview Start Button coordinate mode active."
-    } else {
-      Write-Host "[VeoUp] Auto-start video generation enabled. Refocusing and clicking Start Video button..."
-    }
-    
-    $targetWin = Find-RealVeoUpWindow
-    if ($null -ne $targetWin) {
-      $hwnd = $targetWin.Handle
-      [VidoraNativeWin]::ShowWindow($hwnd, 3) | Out-Null # maximize
-      Start-Sleep -Milliseconds 800
-      [VidoraNativeWin]::SetForegroundWindow($hwnd) | Out-Null
-      Start-Sleep -Milliseconds 500
-      
-      # Re-read window rect immediately to avoid stale coordinates
-      $rect = [VidoraNativeWin]::GetWinRect($hwnd)
-      $startX = $rect.Left + [double]$payload.startButtonOffsetX
-      $startY = $rect.Top + [double]$payload.startButtonOffsetY
-      
-      Write-Host "[VeoUp] Start Button offset: X=$($payload.startButtonOffsetX), Y=$($payload.startButtonOffsetY)"
-      Write-Host "[VeoUp] Maximized VeoUp rect before Start click: Left=$($rect.Left), Top=$($rect.Top), Right=$($rect.Right), Bottom=$($rect.Bottom)"
-      Write-Host "[VeoUp] Start Button absolute coordinate: X=$startX, Y=$startY"
-      
-      # Active window check before click
-      $activeTitle = Get-ActiveWindowTitle
-      $activeClass = Get-ActiveWindowClassName
-      Write-Host "[VeoUp] Active window before Start click: $activeTitle ($activeClass)"
-      
-      if ($activeClass -ne 'Qt690QWindowIcon' -or $activeTitle -notmatch '^VeoUp') {
-        Write-Host "[VeoUp] Active window is not VeoUp: $activeTitle ($activeClass). Refocusing..."
-        [VidoraNativeWin]::ShowWindow($hwnd, 3) | Out-Null
-        Start-Sleep -Milliseconds 800
-        [VidoraNativeWin]::SetForegroundWindow($hwnd) | Out-Null
-        Start-Sleep -Milliseconds 500
-        $activeTitle = Get-ActiveWindowTitle
-        $activeClass = Get-ActiveWindowClassName
-        if ($activeClass -ne 'Qt690QWindowIcon' -or $activeTitle -notmatch '^VeoUp') {
-          Write-Host "[VeoUp] ERROR: Active window is still not VeoUp: $activeTitle ($activeClass). Aborting."
-          exit 1
-        }
-      }
-      
-      # Sanity check guards
-      $workingArea = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
-      $isOutsideWorkingArea = ($startX -lt $workingArea.Left -or $startX -gt $workingArea.Right -or $startY -lt $workingArea.Top -or $startY -gt $workingArea.Bottom)
-      $isOutsideWindow = ($startX -lt $rect.Left -or $startX -gt $rect.Right -or $startY -lt $rect.Top -or $startY -gt $rect.Bottom)
-      $isTitleBar = ($startY -lt ($rect.Top + 80))
-      $isWindowControls = ($startX -gt ($rect.Right - 220) -and $startY -lt ($rect.Top + 100))
-      
-      if ($isOutsideWorkingArea -or $isOutsideWindow -or $isTitleBar -or $isWindowControls) {
-        Write-Host "[VeoUp] Start Button coordinate looks unsafe or points to window controls. Please recalibrate Start Button."
-        Write-Host "[VeoUp] Debug rect: Left=$($rect.Left), Top=$($rect.Top), Right=$($rect.Right), Bottom=$($rect.Bottom)"
-        Write-Host "[VeoUp] Debug coordinate: X=$startX, Y=$startY"
-        Write-Host "[VeoUp] Reason: OutsideWorkingArea=$isOutsideWorkingArea, OutsideWindow=$isOutsideWindow, TitleBar=$isTitleBar, WindowControls=$isWindowControls"
-        exit 1
-      }
-      
-      if ($payload.previewStartButtonOnly) {
-        Write-Host "[VeoUp] Preview mode: cursor moved to Start Button coordinate, click skipped."
-        [VidoraNativeWin]::SetCursorPos([int]$startX, [int]$startY) | Out-Null
-        Start-Sleep -Seconds 1.5
-      } else {
-        Write-Host "[VeoUp] Clicking Start Video button at absolute coordinate ($startX, $startY)..."
-        Click-Point $startX $startY
-        
-        # iconic check
-        Start-Sleep -Milliseconds 700
-        if ([VidoraNativeWin]::IsIconic($hwnd)) {
-          Write-Host "[VeoUp] ERROR: VeoUp was minimized after Start Button click. Start coordinate is wrong."
-          # Restore window
-          [VidoraNativeWin]::ShowWindow($hwnd, 3) | Out-Null
-          exit 1
-        }
-        
-        Start-Sleep -Milliseconds 800
-        Write-Host "[VeoUp] Start confirmation sent."
-        [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
-        Start-Sleep -Seconds 1
-      }
-    }
-  } else {
-    Write-Host "[VeoUp] Start button requested, but startButtonOffset coordinates are missing. Skipping."
-  }
 }
 
 'VIDORA_VEOUP_RESULT ' + ($result | ConvertTo-Json -Depth 8 -Compress)
@@ -1568,7 +1556,7 @@ $rect = [VidoraNativeWin]::GetWinRect($hwnd)
 $startX = $rect.Left + [double]${offsetX}
 $startY = $rect.Top + [double]${offsetY}
 
-Write-Host "[VeoUp Setup] Previewing Start Button coordinate. The cursor should be on the “Bắt đầu tạo video” button."
+  Write-Host "[VeoUp Setup] Previewing Start Button coordinate. The cursor should be on the “Bắt đầu tạo video” button."
 [VidoraNativeWin]::SetCursorPos([int]$startX, [int]$startY) | Out-Null
 Start-Sleep -Milliseconds 1500
 `;

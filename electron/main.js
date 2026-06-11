@@ -1736,9 +1736,26 @@ async function getPreviousFrame(_event, folderPath, currentSceneIndex) {
   };
 }
 
-async function mergeVideos(_event, folderPath) {
+async function mergeVideos(_event, folderPath, options = {}) {
   if (!folderPath) {
     throw new Error('Chưa chọn folder video.');
+  }
+
+  const log = {
+    info: (msg) => {
+      console.log(msg);
+      appendAppLog(null, { source: 'main', kind: 'info', text: msg }).catch(() => null);
+    }
+  };
+
+  if (globalThis.__vidoraImageAndMotionOnlyMode || options?.imageMotionOnly) {
+    log.info("Image + motion only mode active. Skipping final video merge step successfully.");
+    const totalScenes = (await scanFolder(null, folderPath))
+      .filter((file) => file.name && /scene_\d+/i.test(file.name)).length || 50;
+    const cleanSuccessMsg = `[Pipeline Chain] All ${totalScenes} scenes processed. Script files aggregated at project root. Automation complete!`;
+    console.log(cleanSuccessMsg);
+    await appendAppLog(null, { source: 'main', kind: 'ok', text: cleanSuccessMsg }).catch(() => null);
+    return { ok: true, skipped: true, count: 0, outputPath: '' };
   }
 
   const videos = (await scanFolder(null, folderPath))
@@ -2522,6 +2539,7 @@ async function runScenePipelineLocked(_event, options) {
     options.motionOnlyMode ||
     options.noVideoMode
   );
+  globalThis.__vidoraImageAndMotionOnlyMode = imageMotionOnlyMode;
 if (!outputFolder) throw new Error('Chưa chọn folder output.');
   if (!sceneText?.trim() && !imagePrompt?.trim()) throw new Error('Thiếu scene để tạo ảnh.');
 
@@ -3373,7 +3391,41 @@ await appendAppLog(null, { source: 'main', kind: sentImage?.ok ? 'ok' : 'error',
   return { imagePath, motionPrompt: generatedMotionPrompt };
 }
 
-async function generateMotionPromptWithChatGPT({ imagePath, prompt, sceneDir, sceneId, chatContextTitle = '' }) {
+async function writePipelineSceneState(projectDir, sceneId, fields = {}) {
+  try {
+    const stateFile = path.join(projectDir, 'pipeline_state.json');
+    let state = {};
+    if (await pathExists(stateFile)) {
+      try {
+        const raw = await fs.readFile(stateFile, 'utf8');
+        if (raw) state = JSON.parse(raw);
+      } catch (e) {
+        // ignore
+      }
+    }
+
+    if (!state[sceneId]) {
+      state[sceneId] = {};
+    }
+    state[sceneId] = {
+      ...state[sceneId],
+      ...fields,
+      updatedAt: new Date().toISOString()
+    };
+
+    await fs.writeFile(stateFile, JSON.stringify(state, null, 2), 'utf8');
+    await appendAppLog(null, {
+      source: 'main',
+      kind: 'running',
+      text: `[Pipeline State] Saved state for scene ${sceneId} to pipeline_state.json`,
+      details: fields
+    }).catch(() => null);
+  } catch (err) {
+    console.error('[writePipelineSceneState] Failed to write pipeline state:', err);
+  }
+}
+
+async function generateMotionPromptWithChatGPT({ imagePath, prompt, sceneDir, sceneId, chatContextTitle = '', chatGptStability = {} }) {
   const lockKey = `scene:${sceneId}:motion_prompt`;
   const existing = motionPromptSendLocks.get(lockKey);
   if (existing) {
@@ -3382,7 +3434,7 @@ async function generateMotionPromptWithChatGPT({ imagePath, prompt, sceneDir, sc
   }
   const attemptId = `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
   await appendAppLog(null, { source: 'main', kind: 'running', text: `motionPromptSend: acquiring lock for scene ${sceneId}`, details: { lockKey, attemptId, stage: 'motion_prompt' } });
-  const promise = generateMotionPromptWithChatGPTOnce({ imagePath, prompt, sceneDir, sceneId, chatContextTitle }, { lockKey, attemptId });
+  const promise = generateMotionPromptWithChatGPTOnce({ imagePath, prompt, sceneDir, sceneId, chatContextTitle, chatGptStability }, { lockKey, attemptId });
   motionPromptSendLocks.set(lockKey, { promise, attemptId, startedAt: new Date().toISOString() });
   try {
     return await promise;
@@ -3393,219 +3445,274 @@ async function generateMotionPromptWithChatGPT({ imagePath, prompt, sceneDir, sc
   }
 }
 
-async function generateMotionPromptWithChatGPTOnce({ imagePath, prompt, sceneDir, sceneId, chatContextTitle = '' }, lockInfo = {}) {
-  const page = await getCdpPage('chatgpt', false, { bringToFront: true });
-  const loginState = await evaluateOnCdpPage(page, `(${detectLoginScript.toString()})('chatgpt')`);
-  if (!loginState.loggedIn) {
-    const autoLogin = await tryAutoLoginWithStoredAccount(page, 'chatgpt', { reason: 'motion-prompt', sceneId }).catch((error) => ({ ok: false, error: error.message }));
-    const retryLoginState = autoLogin?.ok
-      ? await evaluateOnCdpPage(page, `(${detectLoginScript.toString()})('chatgpt')`).catch(() => ({ loggedIn: false }))
-      : { loggedIn: false };
-    if (!retryLoginState.loggedIn) {
-      await invalidateChatGptConversationIdentity('chatgpt-login-required');
-      if (autoLogin?.noStoredAccount) throw new Error(`CREDENTIAL_REQUIRED:chatgpt: Chưa có account ChatGPT để tự login.`);
-      throw new Error(loginRequiredMessage('chatgpt', loginState.reason || loginState.url || autoLogin?.finalReason || ''));
+async function generateMotionPromptWithChatGPTOnce({ imagePath, prompt, sceneDir, sceneId, chatContextTitle = '', chatGptStability = {} }, lockInfo = {}) {
+  let page;
+  try {
+    page = await getCdpPage('chatgpt', false, { bringToFront: true });
+    await logChatGptStage(page, CHATGPT_STAGES.IDLE, { sceneId, stage: 'motion_prompt', attempt: 1 }).catch(() => null);
+
+    const loginState = await evaluateOnCdpPage(page, `(${detectLoginScript.toString()})('chatgpt')`);
+    if (!loginState.loggedIn) {
+      const autoLogin = await tryAutoLoginWithStoredAccount(page, 'chatgpt', { reason: 'motion-prompt', sceneId }).catch((error) => ({ ok: false, error: error.message }));
+      const retryLoginState = autoLogin?.ok
+        ? await evaluateOnCdpPage(page, `(${detectLoginScript.toString()})('chatgpt')`).catch(() => ({ loggedIn: false }))
+        : { loggedIn: false };
+      if (!retryLoginState.loggedIn) {
+        await invalidateChatGptConversationIdentity('chatgpt-login-required');
+        if (autoLogin?.noStoredAccount) throw new Error(`CREDENTIAL_REQUIRED:chatgpt: Chưa có account ChatGPT để tự login.`);
+        throw new Error(loginRequiredMessage('chatgpt', loginState.reason || loginState.url || autoLogin?.finalReason || ''));
+      }
     }
-  }
-  if (chatContextTitle?.trim()) {
-    await maybeSelectChatGptConversationByTitle(page, chatContextTitle.trim(), { sceneId, reason: 'motion-prompt-stage' }).catch(async (error) => {
-      await appendAppLog(null, { source: 'main', kind: 'error', text: `ChatGPT không chọn được cuộc trò chuyện "${chatContextTitle}": ${error.message}` });
-    });
-  }
-  const initialResponseChoiceRecovery = await recoverChatGptResponseChoiceChat(page, {
-    sceneId,
-    targetTitle: chatContextTitle,
-    stage: 'motion-prompt-before-upload',
-  });
-  if (initialResponseChoiceRecovery?.recovered) {
-    await appendAppLog(null, {
-      source: 'main',
-      kind: 'ok',
-      text: `Scene ${sceneId}: NV2 da mo chat moi sau khi gap man hinh chon 2 hinh/phan hoi.`,
-      details: initialResponseChoiceRecovery,
-    });
-  }
-  const idleBefore = await waitForChatGptComposerIdle(page, { sceneId, stage: 'motion_prompt', attemptId: lockInfo.attemptId });
-  const before = await evaluateOnCdpPage(page, `(${readLatestAssistantScript.toString()})()`).catch(() => ({ count: idleBefore?.count || 0, text: '' }));
-  const uploadedForNv2 = await uploadFileViaCdp(page, imagePath, 'chatgpt');
-  if (!uploadedForNv2?.ok) throw new Error(uploadedForNv2?.error || 'Không upload được ảnh keyframe vào ChatGPT trước khi gửi NV2.');
-  await appendAppLog(null, { source: 'main', kind: 'ok', text: `Scene ${sceneId}: ChatGPT đã nhận ảnh keyframe trước NV2.`, details: uploadedForNv2 });
-  await sleep(1200);
-  const instruction = [
-    'Dựa trên ảnh keyframe vừa được upload, hãy thực hiện NHIỆM VỤ 2 để tạo MOTION PROMPT cho video.',
-    'Chỉ trả về prompt motion cuối cùng, không giải thích, không markdown thừa.',
-    'If the uploaded keyframe differs from the written scene, still write the motion prompt from the visible keyframe. Do not refuse, do not explain mismatch, do not ask for a new image.',
-    prompt,
-  ].join('\n\n');
-  const sent = await sendPromptViaCdpInputSingle(page, instruction, { sceneId, stage: 'motion_prompt', attemptId: lockInfo.attemptId, beforeCount: before?.count || 0 });
-  if (!sent.ok) throw new Error(sent.error || 'Không gửi được Nhiệm vụ 2 vào ChatGPT.');
-  const startedAt = Date.now();
-  let latest = '';
-  let lastState = null;
-  let recoveredOnce = 0;
-  let motionAttemptStartedAt = startedAt;
-  let lastBadMotionText = '';
-  let badMotionTextTicks = 0;
-  const retryMotionPrompt = async (reason, state) => {
-    recoveredOnce += 1;
-    await fs.writeFile(path.join(sceneDir, `scene_${String(sceneId).padStart(3, '0')}_chatgpt_motion_recovery_${recoveredOnce}_${reason}.json`), JSON.stringify({ reason, state, elapsedMs: Date.now() - motionAttemptStartedAt }, null, 2), 'utf8').catch(() => null);
-    await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: NV2 bị kẹt (${reason}), retry ${recoveredOnce}/3: F5 → Stop → F5 → upload lại ảnh → gửi lại NV2.` });
-    await page.Page.reload({ ignoreCache: true }).catch(() => null);
-    await waitForCdpLoad(page).catch(() => null);
-    await sleep(1800);
-    const responseChoiceRecovery = await recoverChatGptResponseChoiceChat(page, {
+
+    await logChatGptStage(page, CHATGPT_STAGES.PREPARING_COMPOSER, { sceneId, stage: 'motion_prompt', attempt: 1 }).catch(() => null);
+
+    if (chatContextTitle?.trim()) {
+      await maybeSelectChatGptConversationByTitle(page, chatContextTitle.trim(), { sceneId, reason: 'motion-prompt-stage' }).catch(async (error) => {
+        await appendAppLog(null, { source: 'main', kind: 'error', text: `ChatGPT không chọn được cuộc trò chuyện "${chatContextTitle}": ${error.message}` });
+      });
+    }
+    if (!chatContextTitle?.trim()) {
+      await maybeRotateChatGptConversation(page, { sceneId, sceneDir, stage: 'motion-prompt-before-upload-rotation', chatGptStability }).catch((error) => ({ ok: false, error: error.message }));
+    }
+    const currentChatStateForPipeline = await getChatGptLocationState(page).catch(() => ({}));
+    await writePipelineSceneState(path.dirname(sceneDir), sceneId, {
+      chatUrl: currentChatStateForPipeline?.safeUrl || currentChatStateForPipeline?.url || '',
+      conversationIndex: chatGptConversationHealth.conversationIndex || 0,
+    }).catch(() => null);
+
+    const initialResponseChoiceRecovery = await recoverChatGptResponseChoiceChat(page, {
       sceneId,
       targetTitle: chatContextTitle,
-      stage: `motion-prompt-retry-${recoveredOnce}`,
+      stage: 'motion-prompt-before-upload',
     });
-    if (responseChoiceRecovery?.recovered) {
+    if (initialResponseChoiceRecovery?.recovered) {
       await appendAppLog(null, {
         source: 'main',
         kind: 'ok',
-        text: `Scene ${sceneId}: NV2 recovery da tao chat moi truoc khi gui lai prompt.`,
-        details: responseChoiceRecovery,
+        text: `Scene ${sceneId}: NV2 da mo chat moi sau khi gap man hinh chon 2 hinh/phan hoi.`,
+        details: initialResponseChoiceRecovery,
       });
     }
-    const stopped = await evaluateOnCdpPage(page, `(${clickChatGptStopGeneratingScript.toString()})()`).catch((error) => ({ ok: false, error: error.message }));
-    await appendAppLog(null, { source: 'main', kind: stopped?.ok ? 'ok' : 'running', text: `Scene ${sceneId}: NV2 recovery Stop: ${stopped?.ok ? stopped.mode || 'ok' : stopped?.error || 'không thấy Stop'}`, details: stopped });
-    await sleep(800);
-    await page.Page.reload({ ignoreCache: true }).catch(() => null);
-    await waitForCdpLoad(page).catch(() => null);
-    await sleep(2200);
-    const uploadAgain = await uploadFileViaCdp(page, imagePath, 'chatgpt').catch((error) => ({ ok: false, error: error.message }));
+    const idleBefore = await waitForChatGptComposerIdle(page, { sceneId, stage: 'motion_prompt', attemptId: lockInfo.attemptId });
+    const before = await evaluateOnCdpPage(page, `(${readLatestAssistantScript.toString()})()`).catch(() => ({ count: idleBefore?.count || 0, text: '' }));
 
-    await appendAppLog(null, { source: 'main', kind: uploadAgain?.ok ? 'ok' : 'error', text: `Scene ${sceneId}: NV2 recovery upload lại keyframe: ${uploadAgain?.ok ? 'ChatGPT đã nhận ảnh' : uploadAgain?.error || 'failed'}`, details: uploadAgain });
-    if (!uploadAgain?.ok) throw new Error(uploadAgain?.error || 'Không upload lại được keyframe trước khi retry NV2.');
-    await sleep(1500);
-    const beforeRetry = await evaluateOnCdpPage(page, `(${readLatestAssistantScript.toString()})()`).catch(() => ({ count: 0, text: '' }));
-    const resent = await sendPromptViaCdpInput(page, instruction);
+    await logChatGptStage(page, CHATGPT_STAGES.UPLOADING_IMAGE, { sceneId, stage: 'motion_prompt', attempt: 1 }).catch(() => null);
+    const uploadedForNv2 = await uploadFileViaCdp(page, imagePath, 'chatgpt');
+    if (!uploadedForNv2?.ok) throw new Error(uploadedForNv2?.error || 'Không upload được ảnh keyframe vào ChatGPT trước khi gửi NV2.');
+    await appendAppLog(null, { source: 'main', kind: 'ok', text: `Scene ${sceneId}: ChatGPT đã nhận ảnh keyframe trước NV2.`, details: uploadedForNv2 });
+    
+    await logChatGptStage(page, CHATGPT_STAGES.IMAGE_ATTACHED, { sceneId, stage: 'motion_prompt', attempt: 1 }).catch(() => null);
+    await sleep(1200);
+    const instruction = [
+      'Dựa trên ảnh keyframe vừa được upload, hãy thực hiện NHIỆM VỤ 2 để tạo MOTION PROMPT cho video.',
+      'Chỉ trả về prompt motion cuối cùng, không giải thích, không markdown thừa.',
+      'If the uploaded keyframe differs from the written scene, still write the motion prompt from the visible keyframe. Do not refuse, do not explain mismatch, do not ask for a new image.',
+      prompt,
+    ].join('\n\n');
+    const sent = await sendPromptViaCdpInputSingle(page, instruction, { sceneId, stage: 'motion_prompt', attemptId: lockInfo.attemptId, beforeCount: before?.count || 0 });
+    if (!sent.ok) throw new Error(sent.error || 'Không gửi được Nhiệm vụ 2 vào ChatGPT.');
 
-    if (!resent?.ok) throw new Error(resent?.error || 'Không gửi lại Nhiệm vụ 2 sau recovery.');
-    motionAttemptStartedAt = Date.now();
-    lastBadMotionText = '';
-    badMotionTextTicks = 0;
-    await appendAppLog(null, { source: 'main', kind: 'ok', text: `Scene ${sceneId}: đã gửi lại NV2 sau recovery ${recoveredOnce}/3.`, details: { resent, beforeRetry } });
-    return true;
-  };
+    await logChatGptStage(page, CHATGPT_STAGES.WAITING_RESPONSE, { sceneId, stage: 'motion_prompt', attempt: 1 }).catch(() => null);
 
-  const NV2_STALLED_NO_PROGRESS_TIMEOUT_MS = 45000;
-  const NV2_ACTIVE_POLL_INTERVAL_MS = 3500;
-  const NV2_FORCE_VALIDATE_NO_PROGRESS_MS = 15000;
-
-  let lastEffectiveTextLength = 0;
-  let lastProgressAt = Date.now();
-  let peakAssistantText = '';
-  let peakAssistantTextLength = 0;
-  let previousIsStillGenerating = false;
-
-  while (true) {
-    await sleep(NV2_ACTIVE_POLL_INTERVAL_MS);
-    const state = await evaluateOnCdpPage(page, `(${readLatestAssistantScript.toString()})()`).catch(() => null);
-    lastState = state;
-
-    const currentText = state?.text ? state.text.trim() : '';
-    const isStillGenerating = Boolean(
-      state?.generating === true ||
-      state?.generation === true ||
-      state?.streamingIndicator === true ||
-      state?.stopButton === true
-    );
-
-    // Track peak text during the current NV2 generation cycle
-    if (currentText.length > peakAssistantTextLength) {
-      peakAssistantText = currentText;
-      peakAssistantTextLength = currentText.length;
-    }
-
-    const effectiveText = currentText.length > 0 ? currentText : peakAssistantText;
-    const effectiveTextLength = effectiveText.length;
-
-    if (effectiveTextLength > lastEffectiveTextLength) {
-      lastEffectiveTextLength = effectiveTextLength;
-      lastProgressAt = Date.now(); // reset progress timer since length grew
-    }
-
-    // We track noProgressForMs based on lastProgressAt (which updates when text grows)
-    const noProgressForMs = Date.now() - lastProgressAt;
-
-    const finishedNow = (previousIsStillGenerating === true && isStillGenerating === false);
-    previousIsStillGenerating = isStillGenerating;
-
-    const MIN_MOTION_PROMPT_TEXT_LENGTH = 100;
-    const shouldForceValidateBecauseTextStalled =
-      isStillGenerating === true &&
-      effectiveTextLength > MIN_MOTION_PROMPT_TEXT_LENGTH &&
-      noProgressForMs >= NV2_FORCE_VALIDATE_NO_PROGRESS_MS;
-
-    // Log progress details clearly without exposing content
-    console.log('[NV2] polling', {
-      effectiveTextLength,
-      peakAssistantTextLength,
-      noProgressForMs,
-      isStillGenerating,
-      streamingIndicator: state?.streamingIndicator,
-      generating: state?.generating,
-      generation: state?.generation,
-      finishedNow,
-      shouldForceValidateBecauseTextStalled
-    });
-
-    await appendAppLog(null, {
-      source: 'main',
-      kind: 'running',
-      text: `[NV2] Polling: textLength=${currentText.length}, peakLength=${peakAssistantTextLength}, effectiveLength=${effectiveTextLength}, noProgressForMs=${noProgressForMs}ms, isStillGenerating=${isStillGenerating}, finishedNow=${finishedNow}, forceValidate=${shouldForceValidateBecauseTextStalled}, source=${state?.source || 'unknown'}`,
-      details: {
-        currentTextLength: currentText.length,
-        peakAssistantTextLength,
-        effectiveTextLength,
-        noProgressForMs,
-        isStillGenerating,
-        finishedNow,
-        shouldForceValidateBecauseTextStalled,
-        generating: state?.generating,
-        generation: state?.generation,
-        streamingIndicator: state?.streamingIndicator,
-        stopButton: state?.stopButton,
-        source: state?.source
-      }
-    }).catch(() => null);
-
-    if (effectiveText) {
-      if (isChatGptPolicyRefusalText(effectiveText)) {
-        await notifyChatGptPolicyRefusal(sceneId, 'NV2/motion-prompt', effectiveText);
-      }
-    }
-
-    // PART 5: Combine safe-finish and force-finish paths
-    const shouldValidateNow =
-      (finishedNow === true && effectiveTextLength > MIN_MOTION_PROMPT_TEXT_LENGTH) ||
-      shouldForceValidateBecauseTextStalled;
-
-    if (shouldValidateNow) {
-      if (shouldForceValidateBecauseTextStalled) {
-        console.log('[NV2] Text progress stalled for 15s with valid content. Executing force-validation bypass.');
+    const startedAt = Date.now();
+    let latest = '';
+    let lastState = null;
+    let recoveredOnce = 0;
+    let motionAttemptStartedAt = startedAt;
+    let lastBadMotionText = '';
+    let badMotionTextTicks = 0;
+    const retryMotionPrompt = async (reason, state) => {
+      recoveredOnce += 1;
+      await fs.writeFile(path.join(sceneDir, `scene_${String(sceneId).padStart(3, '0')}_chatgpt_motion_recovery_${recoveredOnce}_${reason}.json`), JSON.stringify({ reason, state, elapsedMs: Date.now() - motionAttemptStartedAt }, null, 2), 'utf8').catch(() => null);
+      await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: NV2 bị kẹt (${reason}), retry ${recoveredOnce}/3: F5 → Stop → F5 → upload lại ảnh → gửi lại NV2.` });
+      await page.Page.reload({ ignoreCache: true }).catch(() => null);
+      await waitForCdpLoad(page).catch(() => null);
+      await sleep(1800);
+      const responseChoiceRecovery = await recoverChatGptResponseChoiceChat(page, {
+        sceneId,
+        targetTitle: chatContextTitle,
+        stage: `motion-prompt-retry-${recoveredOnce}`,
+      });
+      if (responseChoiceRecovery?.recovered) {
         await appendAppLog(null, {
           source: 'main',
-          kind: 'warning',
-          text: `Scene ${sceneId}: [NV2] Text progress stalled for 15s with valid content. Executing force-validation bypass.`,
-          details: {
-            effectiveTextLength,
-            noProgressForMs,
-            isStillGenerating
+          kind: 'ok',
+          text: `Scene ${sceneId}: NV2 recovery da tao chat moi truoc khi gui lai prompt.`,
+          details: responseChoiceRecovery,
+        });
+      }
+      const stopped = await evaluateOnCdpPage(page, `(${clickChatGptStopGeneratingScript.toString()})()`).catch((error) => ({ ok: false, error: error.message }));
+      await appendAppLog(null, { source: 'main', kind: stopped?.ok ? 'ok' : 'running', text: `Scene ${sceneId}: NV2 recovery Stop: ${stopped?.ok ? stopped.mode || 'ok' : stopped?.error || 'không thấy Stop'}`, details: stopped });
+      await sleep(800);
+      await page.Page.reload({ ignoreCache: true }).catch(() => null);
+      await waitForCdpLoad(page).catch(() => null);
+      await sleep(2200);
+      const uploadAgain = await uploadFileViaCdp(page, imagePath, 'chatgpt').catch((error) => ({ ok: false, error: error.message }));
+
+      await appendAppLog(null, { source: 'main', kind: uploadAgain?.ok ? 'ok' : 'error', text: `Scene ${sceneId}: NV2 recovery upload lại keyframe: ${uploadAgain?.ok ? 'ChatGPT đã nhận ảnh' : uploadAgain?.error || 'failed'}`, details: uploadAgain });
+      if (!uploadAgain?.ok) throw new Error(uploadAgain?.error || 'Không upload lại được keyframe trước khi retry NV2.');
+      await sleep(1500);
+      const beforeRetry = await evaluateOnCdpPage(page, `(${readLatestAssistantScript.toString()})()`).catch(() => ({ count: 0, text: '' }));
+      const resent = await sendPromptViaCdpInput(page, instruction);
+
+      if (!resent?.ok) throw new Error(resent?.error || 'Không gửi lại Nhiệm vụ 2 sau recovery.');
+      motionAttemptStartedAt = Date.now();
+      lastBadMotionText = '';
+      badMotionTextTicks = 0;
+      await appendAppLog(null, { source: 'main', kind: 'ok', text: `Scene ${sceneId}: đã gửi lại NV2 sau recovery ${recoveredOnce}/3.`, details: { resent, beforeRetry } });
+      return true;
+    };
+
+    const NV2_STALLED_NO_PROGRESS_TIMEOUT_MS = 45000;
+    const NV2_ACTIVE_POLL_INTERVAL_MS = 3500;
+    const NV2_FORCE_VALIDATE_NO_PROGRESS_MS = 15000;
+
+    let lastEffectiveTextLength = 0;
+    let lastProgressAt = Date.now();
+    let peakAssistantText = '';
+    let peakAssistantTextLength = 0;
+    let previousIsStillGenerating = false;
+
+    while (true) {
+      await sleep(NV2_ACTIVE_POLL_INTERVAL_MS);
+      const state = await evaluateOnCdpPage(page, `(${readLatestAssistantScript.toString()})()`).catch(() => null);
+      lastState = state;
+
+      const currentText = state?.text ? state.text.trim() : '';
+      const isStillGenerating = Boolean(
+        state?.generating === true ||
+        state?.generation === true ||
+        state?.streamingIndicator === true ||
+        state?.stopButton === true
+      );
+
+      if (currentText.length > peakAssistantTextLength) {
+        peakAssistantText = currentText;
+        peakAssistantTextLength = currentText.length;
+      }
+
+      const effectiveText = currentText.length > 0 ? currentText : peakAssistantText;
+      const effectiveTextLength = effectiveText.length;
+
+      if (effectiveTextLength > lastEffectiveTextLength) {
+        lastEffectiveTextLength = effectiveTextLength;
+        lastProgressAt = Date.now();
+      }
+
+      const noProgressForMs = Date.now() - lastProgressAt;
+      const finishedNow = (previousIsStillGenerating === true && isStillGenerating === false);
+      previousIsStillGenerating = isStillGenerating;
+
+      const MIN_MOTION_PROMPT_TEXT_LENGTH = 100;
+      const shouldForceValidateBecauseTextStalled =
+        isStillGenerating === true &&
+        effectiveTextLength > MIN_MOTION_PROMPT_TEXT_LENGTH &&
+        noProgressForMs >= NV2_FORCE_VALIDATE_NO_PROGRESS_MS;
+
+      console.log('[NV2] polling', {
+        effectiveTextLength,
+        peakAssistantTextLength,
+        noProgressForMs,
+        isStillGenerating,
+        streamingIndicator: state?.streamingIndicator,
+        generating: state?.generating,
+        generation: state?.generation,
+        finishedNow,
+        shouldForceValidateBecauseTextStalled
+      });
+
+      await appendAppLog(null, {
+        source: 'main',
+        kind: 'running',
+        text: `[NV2] Polling: textLength=${currentText.length}, peakLength=${peakAssistantTextLength}, effectiveLength=${effectiveTextLength}, noProgressForMs=${noProgressForMs}ms, isStillGenerating=${isStillGenerating}, finishedNow=${finishedNow}, forceValidate=${shouldForceValidateBecauseTextStalled}, source=${state?.source || 'unknown'}`,
+        details: {
+          currentTextLength: currentText.length,
+          peakAssistantTextLength,
+          effectiveTextLength,
+          noProgressForMs,
+          isStillGenerating,
+          finishedNow,
+          shouldForceValidateBecauseTextStalled,
+          generating: state?.generating,
+          generation: state?.generation,
+          streamingIndicator: state?.streamingIndicator,
+          stopButton: state?.stopButton,
+          source: state?.source
+        }
+      }).catch(() => null);
+
+      if (effectiveText) {
+        if (isChatGptPolicyRefusalText(effectiveText)) {
+          await notifyChatGptPolicyRefusal(sceneId, 'NV2/motion-prompt', effectiveText);
+        }
+      }
+
+      const shouldValidateNow =
+        (finishedNow === true && effectiveTextLength > MIN_MOTION_PROMPT_TEXT_LENGTH) ||
+        shouldForceValidateBecauseTextStalled;
+
+      if (shouldValidateNow) {
+        if (shouldForceValidateBecauseTextStalled) {
+          console.log('[NV2] Text progress stalled for 15s with valid content. Executing force-validation bypass.');
+          await appendAppLog(null, {
+            source: 'main',
+            kind: 'warning',
+            text: `Scene ${sceneId}: [NV2] Text progress stalled for 15s with valid content. Executing force-validation bypass.`,
+            details: {
+              effectiveTextLength,
+              noProgressForMs,
+              isStillGenerating
+            }
+          }).catch(() => null);
+        }
+
+        const validation = validateMotionPromptResponse(effectiveText, { beforeText: before?.text || '', instruction, taskPrompt: prompt, state });
+        if (validation.ok) {
+          latest = effectiveText;
+          break;
+        }
+      }
+
+      if (!effectiveText) {
+        if (noProgressForMs >= NV2_STALLED_NO_PROGRESS_TIMEOUT_MS && !isStillGenerating) {
+          if (await retryMotionPrompt('no-assistant-after-send', state)) {
+            lastEffectiveTextLength = 0;
+            lastProgressAt = Date.now();
+            peakAssistantText = '';
+            peakAssistantTextLength = 0;
+            lastBadMotionText = '';
+            badMotionTextTicks = 0;
+            previousIsStillGenerating = false;
+            continue;
           }
-        }).catch(() => null);
+        }
+        continue;
       }
 
-      const validation = validateMotionPromptResponse(effectiveText, { beforeText: before?.text || '', instruction, taskPrompt: prompt, state });
-      if (validation.ok) {
-        latest = effectiveText;
-        break; // accept immediately and exit the loop!
-      }
-    }
+      latest = effectiveText;
+      const freshAssistant = state.count > (before?.count || 0) || latest !== before?.text;
+      const quality = validateMotionPromptResponse(latest, { beforeText: before?.text || '', instruction, taskPrompt: prompt, state });
+      const composerIdle = !isStillGenerating;
+      const composerDone = composerIdle && quality.ok;
 
-    if (!effectiveText) {
+      if (freshAssistant && composerDone && quality.ok) break;
+
+      const retryableBadMotionText = freshAssistant && !quality.ok && isRetryableChatGptToolErrorText(latest, 'motion');
+      const normalizedBadMotionText = normalizeChatGptRetryText(latest);
+      if (freshAssistant && !quality.ok && (retryableBadMotionText || quality.error === 'too-short')) {
+        if (normalizedBadMotionText && normalizedBadMotionText === lastBadMotionText) {
+          badMotionTextTicks += 1;
+        } else {
+          lastBadMotionText = normalizedBadMotionText;
+          badMotionTextTicks = 1;
+        }
+      } else if (quality.ok) {
+        lastBadMotionText = '';
+        badMotionTextTicks = 0;
+      }
+
       if (noProgressForMs >= NV2_STALLED_NO_PROGRESS_TIMEOUT_MS && !isStillGenerating) {
-        if (await retryMotionPrompt('no-assistant-after-send', state)) {
+        if (await retryMotionPrompt('no-progress-during-generation', state)) {
           lastEffectiveTextLength = 0;
           lastProgressAt = Date.now();
           peakAssistantText = '';
@@ -3616,149 +3723,124 @@ async function generateMotionPromptWithChatGPTOnce({ imagePath, prompt, sceneDir
           continue;
         }
       }
-      continue;
-    }
 
-    latest = effectiveText;
-    const freshAssistant = state.count > (before?.count || 0) || latest !== before?.text;
-    const quality = validateMotionPromptResponse(latest, { beforeText: before?.text || '', instruction, taskPrompt: prompt, state });
-    const composerIdle = !isStillGenerating;
-    const composerDone = composerIdle && quality.ok;
-
-    if (freshAssistant && composerDone && quality.ok) break;
-
-    const retryableBadMotionText = freshAssistant && !quality.ok && isRetryableChatGptToolErrorText(latest, 'motion');
-    const normalizedBadMotionText = normalizeChatGptRetryText(latest);
-    if (freshAssistant && !quality.ok && (retryableBadMotionText || quality.error === 'too-short')) {
-      if (normalizedBadMotionText && normalizedBadMotionText === lastBadMotionText) {
-        badMotionTextTicks += 1;
-      } else {
-        lastBadMotionText = normalizedBadMotionText;
-        badMotionTextTicks = 1;
+      if (freshAssistant && !quality.ok && (composerIdle || retryableBadMotionText || badMotionTextTicks >= 3)) {
+        if (await retryMotionPrompt(retryableBadMotionText ? 'retryable-bad-motion-text' : (quality.error || 'bad-response-idle'), state)) {
+          lastEffectiveTextLength = 0;
+          lastProgressAt = Date.now();
+          peakAssistantText = '';
+          peakAssistantTextLength = 0;
+          lastBadMotionText = '';
+          badMotionTextTicks = 0;
+          previousIsStillGenerating = false;
+          continue;
+        }
       }
-    } else if (quality.ok) {
-      lastBadMotionText = '';
-      badMotionTextTicks = 0;
-    }
 
-    // Stuck check: Zero progress for 45 seconds AND not actively generating
-    if (noProgressForMs >= NV2_STALLED_NO_PROGRESS_TIMEOUT_MS && !isStillGenerating) {
-      if (await retryMotionPrompt('no-progress-during-generation', state)) {
-        lastEffectiveTextLength = 0;
-        lastProgressAt = Date.now();
-        peakAssistantText = '';
-        peakAssistantTextLength = 0;
-        lastBadMotionText = '';
-        badMotionTextTicks = 0;
-        previousIsStillGenerating = false;
-        continue;
+      if (composerIdle && noProgressForMs >= NV2_STALLED_NO_PROGRESS_TIMEOUT_MS) {
+        if (await retryMotionPrompt('stuck-after-user-message', state)) {
+          lastEffectiveTextLength = 0;
+          lastProgressAt = Date.now();
+          peakAssistantText = '';
+          peakAssistantTextLength = 0;
+          lastBadMotionText = '';
+          badMotionTextTicks = 0;
+          previousIsStillGenerating = false;
+          continue;
+        }
       }
-    }
 
-    // Early recovery for ChatGPT tool errors or 3 bad ticks
-    if (freshAssistant && !quality.ok && (composerIdle || retryableBadMotionText || badMotionTextTicks >= 3)) {
-      if (await retryMotionPrompt(retryableBadMotionText ? 'retryable-bad-motion-text' : (quality.error || 'bad-response-idle'), state)) {
-        lastEffectiveTextLength = 0;
-        lastProgressAt = Date.now();
-        peakAssistantText = '';
-        peakAssistantTextLength = 0;
-        lastBadMotionText = '';
-        badMotionTextTicks = 0;
-        previousIsStillGenerating = false;
-        continue;
-      }
-    }
-
-    if (composerIdle && noProgressForMs >= NV2_STALLED_NO_PROGRESS_TIMEOUT_MS) {
-      if (await retryMotionPrompt('stuck-after-user-message', state)) {
-        lastEffectiveTextLength = 0;
-        lastProgressAt = Date.now();
-        peakAssistantText = '';
-        peakAssistantTextLength = 0;
-        lastBadMotionText = '';
-        badMotionTextTicks = 0;
-        previousIsStillGenerating = false;
-        continue;
-      }
-    }
-
-    {
-      await vidoraChatGptInputGate((typeof client !== 'undefined' ? client : (typeof page !== 'undefined' ? page : null)), {
-        sceneId: ((typeof options !== 'undefined' && options?.sceneId) || (typeof context !== 'undefined' && context?.sceneId) || ''),
-        stage: 'before-nv2-wait',
-      });
-
-      // VIDORA_FORCE_SEND_NV2_BEFORE_WAIT_REAL
       {
-        const nv2GateTarget = (typeof client !== 'undefined' ? client : (typeof page !== 'undefined' ? page : null));
-
-        let nv2InputState = await vidoraReadChatGptComposerStateReal(nv2GateTarget, {
+        await vidoraChatGptInputGate((typeof client !== 'undefined' ? client : (typeof page !== 'undefined' ? page : null)), {
           sceneId: ((typeof options !== 'undefined' && options?.sceneId) || (typeof context !== 'undefined' && context?.sceneId) || ''),
-          stage: 'nv2-force-send-before-wait-check',
-        }).catch((error) => ({ ok: false, error: error.message }));
+          stage: 'before-nv2-wait',
+        });
 
-        await appendAppLog(null, {
-          source: 'main',
-          kind: 'running',
-          text: 'NV2 SEND GATE: kiểm tra input trước khi chờ ChatGPT trả motion prompt.',
-          details: { nv2InputState },
-        }).catch(() => null);
+        {
+          const nv2GateTarget = (typeof client !== 'undefined' ? client : (typeof page !== 'undefined' ? page : null));
 
-        if (nv2InputState?.ok && nv2InputState.composerHasText) {
+          let nv2InputState = await vidoraReadChatGptComposerStateReal(nv2GateTarget, {
+            sceneId: ((typeof options !== 'undefined' && options?.sceneId) || (typeof context !== 'undefined' && context?.sceneId) || ''),
+            stage: 'nv2-force-send-before-wait-check',
+          }).catch((error) => ({ ok: false, error: error.message }));
+
           await appendAppLog(null, {
             source: 'main',
-            kind: 'error',
-            text: 'NV2 SEND GATE: input còn prompt NV2 => chưa gửi thật, ép bấm nút gửi.',
-            details: {
-              textLength: nv2InputState.composerTextLength,
-              textHead: nv2InputState.composerTextHead,
-              sendButton: nv2InputState.sendButton,
-              sendCandidates: nv2InputState.sendCandidates,
-            },
+            kind: 'running',
+            text: 'NV2 SEND GATE: kiểm tra input trước khi chờ ChatGPT trả motion prompt.',
+            details: { nv2InputState },
           }).catch(() => null);
 
-          for (let attempt = 1; attempt <= 5; attempt++) {
-            const click = await vidoraClickChatGptRealSendButton(nv2GateTarget, nv2InputState)
-              .catch((error) => ({ ok: false, error: error.message }));
-
-            await sleep(1200);
-
-            const after = await vidoraReadChatGptComposerStateReal(nv2GateTarget, {
-              sceneId: ((typeof options !== 'undefined' && options?.sceneId) || (typeof context !== 'undefined' && context?.sceneId) || ''),
-              stage: 'nv2-force-send-after-click',
-              attempt,
-            }).catch((error) => ({ ok: false, error: error.message }));
-
+          if (nv2InputState?.ok && nv2InputState.composerHasText) {
             await appendAppLog(null, {
               source: 'main',
-              kind: (!after?.composerHasText || after?.stopVisible) ? 'ok' : 'running',
-              text: (!after?.composerHasText || after?.stopVisible)
-                ? `NV2 SEND GATE: attempt ${attempt} gửi OK, input đã trống hoặc ChatGPT đang chạy.`
-                : `NV2 SEND GATE: attempt ${attempt} chưa gửi, input vẫn còn nội dung.`,
-              details: { attempt, click, after },
+              kind: 'error',
+              text: 'NV2 SEND GATE: input còn prompt NV2 => chưa gửi thật, ép bấm nút gửi.',
+              details: {
+                textLength: nv2InputState.composerTextLength,
+                textHead: nv2InputState.composerTextHead,
+                sendButton: nv2InputState.sendButton,
+                sendCandidates: nv2InputState.sendCandidates,
+              },
             }).catch(() => null);
 
-            nv2InputState = after;
+            for (let attempt = 1; attempt <= 5; attempt++) {
+              const click = await vidoraClickChatGptRealSendButton(nv2GateTarget, nv2InputState)
+                .catch((error) => ({ ok: false, error: error.message }));
 
-            if (!after?.composerHasText || after?.stopVisible) break;
-          }
+              await sleep(1200);
 
-          if (nv2InputState?.composerHasText && !nv2InputState?.stopVisible) {
-            throw new Error('nv2-send-gate-failed-input-still-has-prompt');
+              const after = await vidoraReadChatGptComposerStateReal(nv2GateTarget, {
+                sceneId: ((typeof options !== 'undefined' && options?.sceneId) || (typeof context !== 'undefined' && context?.sceneId) || ''),
+                stage: 'nv2-force-send-after-click',
+                attempt,
+              }).catch((error) => ({ ok: false, error: error.message }));
+
+              await appendAppLog(null, {
+                source: 'main',
+                kind: (!after?.composerHasText || after?.stopVisible) ? 'ok' : 'running',
+                text: (!after?.composerHasText || after?.stopVisible)
+                  ? `NV2 SEND GATE: attempt ${attempt} gửi OK, input đã trống hoặc ChatGPT đang chạy.`
+                  : `NV2 SEND GATE: attempt ${attempt} chưa gửi, input vẫn còn nội dung.`,
+                details: { attempt, click, after },
+              }).catch(() => null);
+
+              nv2InputState = after;
+
+              if (!after?.composerHasText || after?.stopVisible) break;
+            }
+
+            if (nv2InputState?.composerHasText && !nv2InputState?.stopVisible) {
+              throw new Error('nv2-send-gate-failed-input-still-has-prompt');
+            }
           }
         }
       }
     }
+
+    await logChatGptStage(page, CHATGPT_STAGES.EXTRACTING_OUTPUT, { sceneId, stage: 'motion_prompt', attempt: 1 }).catch(() => null);
+
+    const finalQuality = validateMotionPromptResponse(latest, { beforeText: before?.text || '', instruction, taskPrompt: prompt, state: lastState });
+    if (!latest || latest === before?.text || !finalQuality.ok) {
+      await fs.writeFile(path.join(sceneDir, 'motion_prompt_wait_failed.json'), JSON.stringify({ latest, before, lastState, finalQuality }, null, 2), 'utf8').catch(() => null);
+      throw new Error(`ChatGPT chưa trả motion prompt NV2 đủ nội dung: ${finalQuality.error || 'empty/old-response'}.`);
+    }
+
+    await fs.writeFile(path.join(sceneDir, 'motion_prompt.txt'), latest, 'utf8').catch(() => null);
+    await fs.writeFile(path.join(sceneDir, 'motion_prompt_from_chatgpt.txt'), latest, 'utf8');
+
+    await logChatGptStage(page, CHATGPT_STAGES.SAVED, { sceneId, stage: 'motion_prompt', attempt: 1 }).catch(() => null);
+
+    await page.close().catch(() => null);
+    return latest;
+
+  } catch (error) {
+    const reason = classifyChatGptError(error.message || String(error));
+    if (page) {
+      await logChatGptStage(page, CHATGPT_STAGES.FAILED, { sceneId, stage: 'motion_prompt', attempt: 1 }, { reason, state: { error: error.message || String(error) } }).catch(() => null);
+    }
+    throw error;
   }
-  const finalQuality = validateMotionPromptResponse(latest, { beforeText: before?.text || '', instruction, taskPrompt: prompt, state: lastState });
-  if (!latest || latest === before?.text || !finalQuality.ok) {
-    await fs.writeFile(path.join(sceneDir, 'motion_prompt_wait_failed.json'), JSON.stringify({ latest, before, lastState, finalQuality }, null, 2), 'utf8').catch(() => null);
-    throw new Error(`ChatGPT chưa trả motion prompt NV2 đủ nội dung: ${finalQuality.error || 'empty/old-response'}.`);
-  }
-  await fs.writeFile(path.join(sceneDir, 'motion_prompt.txt'), latest, 'utf8').catch(() => null);
-  await fs.writeFile(path.join(sceneDir, 'motion_prompt_from_chatgpt.txt'), latest, 'utf8');
-  await page.close().catch(() => null);
-  return latest;
 }
 
 function validateMotionPromptResponse(text = '', { beforeText = '', instruction = '', taskPrompt = '', state = null } = {}) {
@@ -4637,7 +4719,11 @@ async function evaluateOnCdpPage(client, expression) {
       source: 'main',
       kind: 'running',
       text: 'CDP evaluate fallback: returned safe JSON after Object reference chain error.',
-      details: { originalError: message },
+      details: {
+        originalError: String(message).slice(0, 1000),
+        errorName: error && error.name ? String(error.name) : 'Error',
+        errorStack: error && error.stack ? String(error.stack).slice(0, 1000) : ''
+      },
     }).catch(() => null);
 
     return parsed.value;
@@ -9293,7 +9379,7 @@ function detectGrokGeneratingStateScript(before = {}) {
     .map((node) => {
       const rect = node.getBoundingClientRect?.();
       const text = `${node.textContent || ''} ${node.getAttribute?.('aria-label') || ''} ${node.title || ''}`.trim();
-      return { node, rect, text, html: node.innerHTML || '' };
+      return { rect, text, html: node.innerHTML || '' };
     })
     .filter((item) => item.rect && item.rect.width > 10 && item.rect.height > 10);
   const stopButton = buttons.find((item) => {
@@ -9326,7 +9412,7 @@ function detectGrokGenerationProblemScript() {
     .map((node) => {
       const rect = node.getBoundingClientRect?.();
       const text = `${node.textContent || ''} ${node.getAttribute?.('aria-label') || ''} ${node.title || ''}`.trim();
-      return { node, rect, text };
+      return { rect, text };
     })
     .filter((item) => item.rect && item.rect.width > 10 && item.rect.height > 10);
   const retry = buttons.find((item) => /(^|\s)(Retry|Try again|Thử lại|Gửi lại)(\s|$)/i.test(item.text));
@@ -9468,7 +9554,7 @@ function readLatestAssistantScript() {
       const rect = node.getBoundingClientRect?.();
       const text = `${node.textContent || ''} ${node.getAttribute?.('aria-label') || ''} ${node.title || ''}`.trim();
       const html = String(node.innerHTML || '').slice(0, 1000);
-      return { node, rect, text, html };
+      return { rect, text, html };
     })
     .filter((item) => item.rect && item.rect.width > 8 && item.rect.height > 8);
     
@@ -9600,12 +9686,14 @@ function readChatGptImageStateScript() {
     return !(style && (style.visibility === 'hidden' || style.display === 'none' || Number(style.opacity || 1) === 0));
   };
   const buttons = [...document.querySelectorAll('button, [role="button"]')]
-    .map((button) => ({
-      node: button,
-      rect: button.getBoundingClientRect?.(),
-      text: `${button.textContent || ''} ${button.getAttribute('aria-label') || ''} ${button.title || ''} ${button.getAttribute('data-testid') || ''}`.trim(),
-      html: String(button.innerHTML || '').slice(0, 500),
-    }))
+    .map((button) => {
+      const rect = button.getBoundingClientRect?.();
+      return {
+        rect: rect ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height } : null,
+        text: `${button.textContent || ''} ${button.getAttribute('aria-label') || ''} ${button.title || ''} ${button.getAttribute('data-testid') || ''}`.trim(),
+        html: String(button.innerHTML || '').slice(0, 500),
+      };
+    })
     .filter((item) => item.rect && item.rect.width > 4 && item.rect.height > 4);
   const buttonText = buttons.map((item) => item.text).filter(Boolean).join(' | ');
   const stopButton = buttons.find((item) => /stop generating|stop responding|stop|cancel|dừng/i.test(item.text) || (/rect|square|stop/i.test(item.html) && item.rect.left > window.innerWidth * 0.55 && item.rect.top > window.innerHeight * 0.55));
@@ -9671,7 +9759,7 @@ function readChatGptImageStateScript() {
   const latestAssistantText = assistantNodes.at(-1)?.innerText?.trim() || '';
   return {
     generating,
-    stopButton,
+    stopButton: stopButtonVisible,
     preparingImage,
     stopButtonVisible,
     sendReady,

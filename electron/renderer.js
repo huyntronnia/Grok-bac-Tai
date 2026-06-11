@@ -56,6 +56,14 @@ const saveSessionBtn = document.querySelector('#save-session-btn');
 const newProjectBtn = document.querySelector('#new-project-btn');
 const openProjectBtn = document.querySelector('#open-project-btn');
 const saveProjectBtn = document.querySelector('#save-project-btn');
+const workflowResumeBtn = document.querySelector('#workflow-resume-btn');
+const chatGptOpenBtn = document.querySelector('#chatgpt-open-btn');
+const chatGptNewChatBtn = document.querySelector('#chatgpt-new-chat-btn');
+const chatGptClearCacheBtn = document.querySelector('#chatgpt-clear-cache-btn');
+const chatGptRotateScenesInput = document.querySelector('#chatgpt-rotate-scenes-input');
+const chatGptAutoReloadToggle = document.querySelector('#chatgpt-auto-reload-toggle');
+const chatGptAutoResumeToggle = document.querySelector('#chatgpt-auto-resume-toggle');
+const chatGptRetryLimitInput = document.querySelector('#chatgpt-retry-limit-input');
 const routerPanel = document.querySelector('.router-panel');
 const quickActionsSlot = document.querySelector('#quick-actions-slot');
 const projectSaveStatus = document.querySelector('#project-save-status');
@@ -89,6 +97,8 @@ const imageApiSizeInput = document.querySelector('#image-api-size-input');
 const imageApiKeyInput = document.querySelector('#image-api-key-input');
 const veoupPreviewStartOnlyToggle = document.querySelector('#veoup-preview-start-only-toggle');
 const autoRunBtn = document.querySelector('#auto-run-btn');
+const customTargetScenesInput = document.querySelector('#custom-target-scenes-input');
+let targetSceneCount = 50;
 const startPipelineInlineBtn = document.querySelector('#start-pipeline-inline-btn');
 const webSessionStatus = document.querySelector('#web-session-status');
 const pixverseConfig = document.querySelector('#pixverse-config');
@@ -156,6 +166,8 @@ const saveEditBtn = document.querySelector('#save-edit-btn');
 
 const STORAGE_KEY = 'ai-scene-batch-director:v1';
 const RESTORE_SESSION_KEY = 'ai-scene-batch-director:restore-next-launch';
+const MAX_AUTO_RESUME_PER_PROJECT = 3;
+const DEFAULT_CHATGPT_RETRY_LIMIT = 2;
 const IMAGE_PROMPT_RULES = `NHIỆM VỤ 1 — TẠO ẢNH KEYFRAME ĐẦU SCENE:\n- Nhập vai đạo diễn live action IQ/EQ cao, dựng hiện trường ảnh chuyên nghiệp.\n- Đọc story tổng, character bible, scene trước, scene hiện tại và scene sau nếu cần.\n- Xác định hành động đầu tiên của scene, tạo ảnh giai đoạn chuẩn bị diễn ra hành động đó.\n- Continuity 1-1: tạo hình, trang phục, cơ thể, mặt, đạo cụ, bối cảnh giữ chính xác qua các scene trừ khi kịch bản yêu cầu đổi.\n- Ảnh phải là 1 frame 16:9, 8K ultra-realistic live action, wide/master shot ưu tiên, sạch rõ, không text/logo/watermark.\n- Spatial Lock: khóa vị trí nhân vật/đạo cụ để đủ đất diễn cho motion 10s.\n- Nếu là POV: chỉ hiện tay/chân/vai ngoại vi, không render mặt/thân chủ thể POV.`;
 
 const MOTION_PROMPT_RULES = `KHI ĐÃ TẠO XONG ẢNH THÌ DỰA VÀO ẢNH ĐÃ TẠO HÃY TIẾP TỤC VỚI NHIỆM VỤ 2 :
@@ -300,6 +312,27 @@ function getGrokRecoverySettings() {
 
 function applyGrokRecoverySettings(settings = {}) {
   if (grokResultRetryLimitInput) grokResultRetryLimitInput.value = String(clamp(Number(settings.resultRetryLimit ?? settings.retryLimit ?? 2) || 0, 0, 10));
+}
+
+function getChatGptStabilitySettings() {
+  return {
+    rotateEveryScenes: clamp(Number(chatGptRotateScenesInput?.value ?? 3) || 3, 1, 20),
+    autoReload: chatGptAutoReloadToggle?.checked !== false,
+    autoResume: chatGptAutoResumeToggle?.checked !== false,
+    retryLimit: clamp(Number(chatGptRetryLimitInput?.value ?? DEFAULT_CHATGPT_RETRY_LIMIT) || DEFAULT_CHATGPT_RETRY_LIMIT, 1, 5),
+    targetSceneCount: clamp(Number(customTargetScenesInput?.value ?? 50) || 50, 1, 100),
+  };
+}
+
+function applyChatGptStabilitySettings(settings = {}) {
+  if (chatGptRotateScenesInput) chatGptRotateScenesInput.value = String(clamp(Number(settings.rotateEveryScenes ?? 3) || 3, 1, 20));
+  if (chatGptAutoReloadToggle) chatGptAutoReloadToggle.checked = settings.autoReload !== false;
+  if (chatGptAutoResumeToggle) chatGptAutoResumeToggle.checked = settings.autoResume !== false;
+  if (chatGptRetryLimitInput) chatGptRetryLimitInput.value = String(clamp(Number(settings.retryLimit ?? DEFAULT_CHATGPT_RETRY_LIMIT) || DEFAULT_CHATGPT_RETRY_LIMIT, 1, 5));
+  if (customTargetScenesInput) {
+    customTargetScenesInput.value = String(clamp(Number(settings.targetSceneCount ?? 50) || 50, 1, 100));
+    targetSceneCount = clamp(Number(settings.targetSceneCount ?? 50) || 50, 1, 100);
+  }
 }
 
 function getImageGenerationSettings() {
@@ -595,6 +628,83 @@ function resumeRun() {
     return;
   }
   runNextBatch();
+}
+
+function findFirstIncompleteSceneForWorkflow() {
+  return (project?.scenes || []).find((scene) => {
+    if (!scene || scene.status === 'skipped') return false;
+    if (isImageMotionOnlyModeEnabled()) return !scene.imagePath || !(scene.motionPrompt || scene.motionPromptPath);
+    return !['done', 'video_done'].includes(scene.status) && !(scene.videoPath || scene.videoUrl || scene.finalVideoPath || scene.outputVideoPath);
+  });
+}
+
+async function recoverWorkflowRun() {
+  if (!project) {
+    setStatus('No project loaded to recover.', 'error');
+    return;
+  }
+  if (!outputFolder) {
+    await chooseOutputFolder();
+    if (!outputFolder) return;
+  }
+  const settings = getChatGptStabilitySettings();
+  const autoResumeCount = Number(projectRuntime.autoResumeCount || 0);
+  if (settings.autoResume && autoResumeCount >= MAX_AUTO_RESUME_PER_PROJECT) {
+    setStatus('Workflow recovery limit reached for this project. Press Start pipeline manually after checking outputs.', 'error');
+    return;
+  }
+  if (!activeBatchIds.length) {
+    const nextScene = findFirstIncompleteSceneForWorkflow();
+    if (nextScene) activeBatchIds = [nextScene.id];
+  }
+  if (!activeBatchIds.length) {
+    setStatus('Không có scene chưa hoàn thành. Đang quét project và khởi chạy VeoUp...', 'running');
+    const res = await window.videoPlannerAPI?.scanProjectAndRunVeoUp?.({
+      projectDir: outputFolder,
+      expectedSceneCount: project.scenes.length,
+      projectName: project.name || '',
+      previewStartButtonOnly: Boolean(veoupPreviewStartOnlyToggle?.checked)
+    });
+    if (res && res.ok) {
+      setStatus(`Quét project thành công! Chạy VeoUp hoàn tất: ${res.imageCount} ảnh.`, 'ok');
+    } else {
+      setStatus(`Không thể chạy VeoUp: ${res?.error || 'Unknown error'}`, 'error');
+    }
+    render();
+    return;
+  }
+  paused = false;
+  projectRuntime = {
+    ...projectRuntime,
+    autoResumeCount: autoResumeCount + 1,
+    resumeMode: 'manual-recovery',
+    waitingForUserStart: false,
+    lastAction: 'workflow_recovery',
+  };
+  persist();
+  render();
+  setStatus('Recovering workflow from scene ' + activeBatchIds[0] + '.', 'running');
+  await autoRunRoute();
+}
+
+async function openChatGptWindow() {
+  const result = await window.videoPlannerAPI?.openWebLogin?.('chatgpt').catch((error) => ({ ok: false, error: error.message }));
+  setStatus(result?.ok ? 'ChatGPT window opened.' : 'Cannot open ChatGPT: ' + (result?.error || 'unknown error'), result?.ok ? 'ok' : 'error');
+}
+
+async function openFreshChatGptWindow() {
+  const result = await window.videoPlannerAPI?.openFreshChatGpt?.().catch((error) => ({ ok: false, error: error.message }));
+  setStatus(result?.ok ? 'Fresh ChatGPT conversation opened.' : 'Cannot create fresh ChatGPT conversation: ' + (result?.error || 'unknown error'), result?.ok ? 'ok' : 'error');
+}
+
+async function clearChatGptCache() {
+  setStatus('Đang xóa cache tạm ChatGPT...', 'running');
+  const res = await window.videoPlannerAPI?.clearChatGptCache?.().catch((error) => ({ ok: false, error: error.message }));
+  if (res && res.ok) {
+    setStatus('Đã xóa cache tạm ChatGPT thành công!', 'ok');
+  } else {
+    setStatus(`Lỗi khi xóa cache: ${res?.error || 'unknown'}`, 'error');
+  }
 }
 
 async function openWebLogin(provider) {
@@ -956,6 +1066,52 @@ function ensureImageMotionOnlyModeControl() {
 
 
 
+function getCompletedScenesCount() {
+  if (!project?.scenes) return 0;
+  const imageMotionOnly = isImageMotionOnlyModeEnabled();
+  return project.scenes.filter((scene) => {
+    if (scene.status === 'skipped') return false;
+    if (imageMotionOnly) {
+      return Boolean(scene.imagePath && (scene.motionPrompt || scene.motionPromptPath));
+    } else {
+      return Boolean(scene.videoPath || scene.status === 'video_done');
+    }
+  }).length;
+}
+
+function getNextBatchForSegment(doneSceneId = 0) {
+  if (!project?.scenes?.length) return [];
+
+  const sorted = [...project.scenes].sort((a, b) => Number(a.id || 0) - Number(b.id || 0));
+  const imageMotionOnly = isImageMotionOnlyModeEnabled();
+
+  const next = sorted.find((scene) => {
+    const id = Number(scene.id || 0);
+    if (!id || id <= Number(doneSceneId || 0)) return false;
+
+    if (scene.status === 'skipped') return false;
+
+    if (imageMotionOnly) {
+      const hasMotion = Boolean(
+        scene.motionPrompt ||
+        scene.motionPromptPath ||
+        scene.videoStatus === 'skipped-image-motion-only'
+      );
+      return !hasMotion;
+    } else {
+      return !Boolean(scene.videoPath || scene.status === 'video_done');
+    }
+  });
+
+  if (!next?.id) return [];
+
+  const batchSize = clamp(Number(project.batchSize || 10), 1, 10);
+  return sorted
+    .map((scene) => Number(scene.id || 0))
+    .filter((id) => id >= Number(next.id || 0))
+    .slice(0, batchSize);
+}
+
 function getNextImageMotionOnlyBatchAfter(doneSceneId = 0) {
   if (!project?.scenes?.length) return [];
 
@@ -1140,7 +1296,7 @@ async function runFullPipeline() {
       }
 
       const result = await window.videoPlannerAPI.runScenePipeline({
-        
+        targetSceneCount,
         imageMotionOnlyMode: isImageMotionOnlyModeEnabled(),
         skipVideoGeneration: isImageMotionOnlyModeEnabled(),
 projectName: project.name,
@@ -1200,19 +1356,35 @@ projectName: project.name,
           .filter((id) => id > Number(scene.id || 0));
 
         if (!remainingInCurrentBatch.length) {
-          const nextBatch = getNextImageMotionOnlyBatchAfter(scene.id);
+          const totalCompletedScenesCount = getCompletedScenesCount();
+          if (totalCompletedScenesCount < targetSceneCount) {
+            const nextBatch = getNextBatchForSegment(Number(scene.id));
 
-          if (nextBatch.length) {
-            activeBatchIds = nextBatch;
-            safeAddPipelineLog?.(
-              'renderer',
-              'running',
-              `Image + motion only: tự chuyển sang batch kế tiếp bắt đầu từ scene ${nextBatch[0]}.`,
-              { activeBatchIds }
-            );
-            persist();
-            render();
-            return runFullPipeline();
+            if (nextBatch.length) {
+              activeBatchIds = nextBatch;
+              for (const sceneId of nextBatch) {
+                const s = project.scenes.find((x) => x.id === sceneId);
+                if (s && ['queued', 'error', 'pending'].includes(s.status)) {
+                  s.imagePrompt = s.original || buildImagePrompt(s);
+                  s.motionPrompt = '';
+                  s.status = 'approved';
+                  s.reviewType = '';
+                  s.provider = providerSelect.value;
+                  s.account = accountSelect.value;
+                  s.updatedAt = new Date().toISOString();
+                }
+              }
+              await syncProjectSceneFolders();
+              safeAddPipelineLog?.(
+                'renderer',
+                'running',
+                `Image + motion only: tự chuyển sang batch kế tiếp bắt đầu từ scene ${nextBatch[0]}. Completed: ${totalCompletedScenesCount}/${targetSceneCount}`,
+                { activeBatchIds }
+              );
+              persist();
+              render();
+              return runFullPipeline();
+            }
           }
         }
 
@@ -1344,11 +1516,12 @@ projectName: project.name,
       scene.updatedAt = new Date().toISOString();
       persist();
       render();
-      if (isRetryableChatGptWorkflowError(message) && scene.pipelineRetryCount <= 5) {
+      const chatGptRetryLimit = getChatGptStabilitySettings().retryLimit;
+      if (isRetryableChatGptWorkflowError(message) && scene.pipelineRetryCount <= chatGptRetryLimit) {
         scene.status = scene.imagePath ? 'motion_prompt_pending' : 'image_pending';
         scene.progressStep = scene.imagePath ? 'motion' : 'image';
-        scene.error = `ChatGPT retryable pipeline error; retry ${scene.pipelineRetryCount}/5: ${message}`;
-        safeAddPipelineLog?.('renderer', 'running', `ChatGPT retryable pipeline error on scene ${scene.id}; retry ${scene.pipelineRetryCount}/5.`, { message });
+        scene.error = `ChatGPT retryable pipeline error; retry ${scene.pipelineRetryCount}/${chatGptRetryLimit}: ${message}`;
+        safeAddPipelineLog?.('renderer', 'running', `ChatGPT retryable pipeline error on scene ${scene.id}; retry ${scene.pipelineRetryCount}/${chatGptRetryLimit}.`, { message });
         persist();
         render();
         i--;
@@ -1369,17 +1542,53 @@ projectName: project.name,
       paused = true;
       persist();
       render();
-      setStatus(`Full pipeline lỗi ở scene ${scene.id} sau 2 lần gửi lại: ${message}`, 'error');
+      setStatus(`Full pipeline error at scene ${scene.id} after ${getChatGptStabilitySettings().retryLimit} retry attempt(s): ${message}`, 'error');
+      return;
+    }
+  }
+
+  const totalCompletedScenesCount = getCompletedScenesCount();
+  if (totalCompletedScenesCount < targetSceneCount) {
+    const lastSceneId = activeBatchIds.length ? Math.max(...activeBatchIds) : 0;
+    const nextBatch = getNextBatchForSegment(lastSceneId);
+    if (nextBatch.length > 0) {
+      activeBatchIds = nextBatch;
+      for (const sceneId of nextBatch) {
+        const s = project.scenes.find((x) => x.id === sceneId);
+        if (s && ['queued', 'error', 'pending'].includes(s.status)) {
+          s.imagePrompt = s.original || buildImagePrompt(s);
+          s.motionPrompt = '';
+          s.status = 'approved';
+          s.reviewType = '';
+          s.provider = providerSelect.value;
+          s.account = accountSelect.value;
+          s.updatedAt = new Date().toISOString();
+        }
+      }
+      await syncProjectSceneFolders();
+      persist();
+      render();
+
+      safeAddPipelineLog?.(
+        'renderer',
+        'running',
+        `Auto-advancing batch segment to scenes: ${nextBatch.join(', ')}. Completed count: ${totalCompletedScenesCount}/${targetSceneCount}.`
+      );
+      setStatus(`Tự động chuyển sang batch kế tiếp: Cảnh ${nextBatch[0]}-${nextBatch.at(-1)}`, 'running');
+
+      setTimeout(async () => {
+        await runFullPipeline();
+      }, 1000);
       return;
     }
   }
 
   if (shouldSkipReview()) {
-    const unfinished = project.scenes.some((scene) => activeBatchIds.includes(scene.id) && !['skipped', 'video_done'].includes(scene.status));
+    const unfinished = project.scenes.some((scene) => activeBatchIds.includes(scene.id) && !isSceneCompleteForVeoUp(scene));
     if (unfinished) return queueAutoContinue();
     await mergeAndShowFinalPreview();
   }
-  setStatus('Kh?ng c?n scene c?n ch?y trong batch hi?n t?i.', 'ok');
+  setStatus('Không còn scene cần chạy hoặc đã đạt mục tiêu.', 'ok');
 
   render();
 
@@ -1593,7 +1802,7 @@ async function waitForProviderReady(providerValue, label) {
 }
 
 function isRetryableChatGptWorkflowError(message = '') {
-  return /pre-extract-wait|chatgpt-image-tool-error|text-only-answer|no-usable-image|real_stall|still loading|Timed out waiting for a complete ChatGPT generated image asset|Timed out waiting|missing-motion-prompt-signals|retryable-bad-motion-text|bad-response-idle|no-assistant-after-send/i.test(String(message || ''));
+  return /CHATGPT_ERROR:|composer-busy|prompt-pasted-but-send-not-ready|send-button-share-image|send-button-wrong-target|image-upload-timeout|image-preview-not-detected|chatgpt-response-timeout|chatgpt-output-choice-required|chatgpt-too-long-conversation|chatgpt-memory-cache-heavy|chatgpt-tab-crashed|network-stall|unsafe-sidebar-modal|unknown-ui-state|pre-extract-wait|chatgpt-image-tool-error|text-only-answer|no-usable-image|real_stall|still loading|Timed out waiting for a complete ChatGPT generated image asset|Timed out waiting|missing-motion-prompt-signals|retryable-bad-motion-text|bad-response-idle|no-assistant-after-send/i.test(String(message || ''));
 }
 function parseLoginRequiredError(message = '', scene = null) {
   const text = String(message || '');
@@ -1634,6 +1843,9 @@ async function startPipelineFromClick(event) {
   if (isRunning) {
     setStatus('Start pipeline đã nhận click nhưng workflow đang chạy, bỏ qua click lặp.', 'running');
     return;
+  }
+  if (customTargetScenesInput) {
+    targetSceneCount = clamp(Number(customTargetScenesInput.value) || 50, 1, 100);
   }
   setStatus('Đã bấm Start pipeline. Đang khởi động workflow...', 'running');
   forceChatGptImageMotionOnlyWorkflow();
@@ -2350,7 +2562,11 @@ function fileUrl(filePath) {
 async function mergeAndShowFinalPreview(options = {}) {
   if (!outputFolder || !window.videoPlannerAPI?.mergeVideos) return null;
   setStatus('Đang merge video final và dựng timeline preview...', 'running');
-  const result = await window.videoPlannerAPI.mergeVideos(outputFolder);
+  const result = await window.videoPlannerAPI.mergeVideos(outputFolder, { imageMotionOnly: isImageMotionOnlyModeEnabled() });
+  if (result && result.skipped) {
+    setStatus('Image + motion only mode active. Skipping final video merge step successfully.', 'ok');
+    return result;
+  }
   renderFinalPreview(result);
   if (options.scrollIntoView) {
     finalPreviewCard?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
@@ -2699,6 +2915,7 @@ function getProjectSessionPayload() {
       },
       continuityReferences: getContinuityReferenceSettings(),
       grokRecovery: getGrokRecoverySettings(),
+      chatGptStability: getChatGptStabilitySettings(),
       grokRouter: getGrokRouterSettings(),
       activePreviewTimeline: previewTimeline,
       autoRun: false,
@@ -2826,6 +3043,7 @@ function applyProjectSessionPayload(payload = {}, filePath = '') {
   applyReviewSettings(payload.runtime?.reviewSettings || { skipReview: payload.runtime?.skipReview });
   applyContinuityReferenceSettings(payload.runtime?.continuityReferences || payload.config?.continuityReferences || project?.continuityReferences || {});
   applyGrokRecoverySettings(payload.runtime?.grokRecovery || payload.config?.grokRecovery || payload.config?.videoConfig?.grok || {});
+  applyChatGptStabilitySettings(payload.runtime?.chatGptStability || payload.config?.chatGptStability || {});
   setControlValue(pixverseResolutionSelect, payload.runtime?.pixverse?.resolution);
   setControlValue(pixverseRatioSelect, payload.runtime?.pixverse?.ratio);
   setControlValue(pixverseDurationSelect, payload.runtime?.pixverse?.duration);
@@ -3068,7 +3286,90 @@ async function openProjectSessionFlow() {
 }
 
 function persist() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify({ project, activeBatchIds, paused, outputFolder, currentProjectFilePath, projectDirty, projectRuntime, grokRouter: getGrokRouterSettings(), reviewSettings: getReviewSettings(), imageGeneration: getImageGenerationSettings(), continuityReferences: getContinuityReferenceSettings(), grokRecovery: getGrokRecoverySettings(), veoupPreviewStartOnly: Boolean(veoupPreviewStartOnlyToggle?.checked) }));
+  try {
+    let sanitizedProject = null;
+    if (project) {
+      sanitizedProject = {
+        ...project,
+        scenes: Array.isArray(project.scenes)
+          ? project.scenes.map(s => {
+              if (s) {
+                const copy = { ...s };
+                delete copy.imageDataUrl;
+                return copy;
+              }
+              return s;
+            })
+          : []
+      };
+    }
+
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({
+      project: sanitizedProject,
+      activeBatchIds,
+      paused,
+      outputFolder,
+      currentProjectFilePath,
+      projectDirty,
+      projectRuntime,
+      grokRouter: getGrokRouterSettings(),
+      reviewSettings: getReviewSettings(),
+      imageGeneration: getImageGenerationSettings(),
+      continuityReferences: getContinuityReferenceSettings(),
+      grokRecovery: getGrokRecoverySettings(),
+      chatGptStability: getChatGptStabilitySettings(),
+      veoupPreviewStartOnly: Boolean(veoupPreviewStartOnlyToggle?.checked)
+    }));
+  } catch (e) {
+    console.warn('[LocalStorage Persist Quota Error] Failed to execute setItem, applying safe fallback:', e);
+    try {
+      let fallbackProject = null;
+      if (project) {
+        const activeSceneId = projectRuntime?.currentSceneId;
+        fallbackProject = {
+          ...project,
+          scenes: Array.isArray(project.scenes)
+            ? project.scenes.map((s, idx) => {
+                if (!s) return s;
+                const copy = { ...s };
+                delete copy.imageDataUrl;
+                
+                const isCompleted = ['video_done', 'video_ready', 'scene_completed'].includes(copy.status);
+                const isActive = String(copy.id) === String(activeSceneId) || String(idx + 1) === String(activeSceneId);
+                
+                if (isCompleted && !isActive) {
+                  // Keep only essential metadata to free up space
+                  copy.original = '';
+                  copy.imagePrompt = '';
+                  copy.motionPrompt = '';
+                  copy.continuityReferencePaths = [];
+                }
+                return copy;
+              })
+            : []
+        };
+      }
+
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({
+        project: fallbackProject,
+        activeBatchIds,
+        paused,
+        outputFolder,
+        currentProjectFilePath,
+        projectDirty,
+        projectRuntime,
+        grokRouter: getGrokRouterSettings(),
+        reviewSettings: getReviewSettings(),
+        imageGeneration: getImageGenerationSettings(),
+        continuityReferences: getContinuityReferenceSettings(),
+        grokRecovery: getGrokRecoverySettings(),
+        chatGptStability: getChatGptStabilitySettings(),
+        veoupPreviewStartOnly: Boolean(veoupPreviewStartOnlyToggle?.checked)
+      }));
+    } catch (innerErr) {
+      console.error('[LocalStorage Persist Critical] Fallback also failed:', innerErr);
+    }
+  }
 }
 
 async function reconcileSavedAssets() {
@@ -3132,6 +3433,7 @@ function restore() {
     applyReviewSettings(saved.reviewSettings || { skipReview: saved.skipReview });
     applyContinuityReferenceSettings(saved.continuityReferences || saved.project?.continuityReferences || {});
     applyGrokRecoverySettings(saved.grokRecovery || {});
+    applyChatGptStabilitySettings(saved.chatGptStability || {});
     if (veoupPreviewStartOnlyToggle) veoupPreviewStartOnlyToggle.checked = Boolean(saved.veoupPreviewStartOnly);
     currentProjectFilePath = saved.currentProjectFilePath || '';
     projectDirty = Boolean(saved.projectDirty);
@@ -3176,6 +3478,10 @@ projectForm.addEventListener('submit', createProject);
 runBatchBtn?.addEventListener('click', () => runNextBatch());
 pauseBtn.addEventListener('click', pauseRun);
 resumeBtn.addEventListener('click', resumeRun);
+workflowResumeBtn?.addEventListener('click', recoverWorkflowRun);
+chatGptOpenBtn?.addEventListener('click', openChatGptWindow);
+chatGptNewChatBtn?.addEventListener('click', openFreshChatGptWindow);
+chatGptClearCacheBtn?.addEventListener('click', clearChatGptCache);
 exportBtn.addEventListener('click', exportProject);
 chooseOutputFolderBtn.addEventListener('click', chooseOutputFolder);
 saveSessionBtn?.addEventListener('click', saveSessionForNextLaunch);
@@ -3308,6 +3614,14 @@ modelInput?.addEventListener('input', () => {
   markProjectDirty();
   persist();
 });
+[chatGptRotateScenesInput, chatGptAutoReloadToggle, chatGptAutoResumeToggle, chatGptRetryLimitInput, customTargetScenesInput]
+  .filter(Boolean)
+  .forEach((control) => control.addEventListener('change', () => {
+    if (control === customTargetScenesInput) {
+      targetSceneCount = clamp(Number(customTargetScenesInput.value) || 50, 1, 100);
+    }
+    persist();
+  }));
 [skipReviewToggle, skipPromptReviewToggle, skipImageReviewToggle, skipVideoReviewToggle]
   .filter(Boolean)
   .forEach((control) => control.addEventListener('change', () => {

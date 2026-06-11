@@ -202,9 +202,29 @@
             <button id="save-project-btn" class="ghost success" type="button">Save Project</button>
             <button id="choose-output-folder-btn" class="ghost" type="button">Chọn/đổi folder lưu</button>
             <button id="save-session-btn" class="ghost" type="button">Lưu session</button>
-            <button id="veoup-scan-run-btn" class="ghost success" type="button" style="display: none;">Quét project & chạy VeoUp</button>
+            <button id="veoup-scan-run-btn" class="ghost success" type="button">Quét project & chạy VeoUp</button>
             <button id="auto-run-btn" class="ghost primary" type="button"
               onclick="window.startPipelineFromClick?.(event)">Start pipeline</button>
+          </div>
+        </div>
+
+        <div id="chatgpt-stability-card" class="workflow-card chatgpt-stability-card">
+          <h3>ChatGPT Stability / Độ ổn định ChatGPT</h3>
+          <div class="stability-actions">
+            <button id="workflow-resume-btn" class="ghost" type="button">Khôi phục workflow</button>
+            <button id="chatgpt-open-btn" class="ghost" type="button">Mở lại ChatGPT</button>
+            <button id="chatgpt-new-chat-btn" class="ghost" type="button">Tạo đoạn chat mới</button>
+            <button id="chatgpt-clear-cache-btn" class="ghost danger" type="button">Xóa cache tạm</button>
+          </div>
+          <div class="config-grid chatgpt-stability-grid">
+            <label>Tự mở đoạn chat mới sau N scene
+              <input id="chatgpt-rotate-scenes-input" type="number" min="1" max="20" value="3" />
+            </label>
+            <label class="toggle-row"><input id="chatgpt-auto-reload-toggle" type="checkbox" checked /> Tự reload khi composer kẹt</label>
+            <label class="toggle-row"><input id="chatgpt-auto-resume-toggle" type="checkbox" checked /> Tự khôi phục workflow khi lỗi</label>
+            <label>Giới hạn retry mỗi scene
+              <input id="chatgpt-retry-limit-input" type="number" min="1" max="5" value="2" />
+            </label>
           </div>
         </div>
 
@@ -494,6 +514,10 @@
         <div style="display: flex; gap: 8px; flex-wrap: wrap;">
           <button id="open-nv1-prompt-btn" class="ghost" type="button">Mở NV1_TAO_ANH.txt</button>
           <button id="open-nv2-prompt-btn" class="ghost" type="button">Mở NV2_MOTION_PROMPT.txt</button>
+        </div>
+        <div class="setting-row" style="margin-top: 15px; display: flex; align-items: center;">
+          <label for="custom-target-scenes-input" style="font-weight: bold; color: #fff; margin-right: 10px;">Số scene muốn chạy (1-100):</label>
+          <input type="number" id="custom-target-scenes-input" value="50" min="1" max="100" class="form-control" style="width: 90px; background-color: #1e1e2f; color: #fff; border: 1px solid #444; padding: 5px; border-radius: 4px;">
         </div>
       </section>
 
