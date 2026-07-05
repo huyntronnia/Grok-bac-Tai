@@ -151,6 +151,7 @@ function buildTestPowerShellScript() {
   const escapedQuotedPngList = quotedPngList.replace(/'/g, "''");
   const escapedPromptText = promptText.replace(/'/g, "''");
   const escapedConfigPath = CALIBRATION_CONFIG_PATH.replace(/\\/g, '\\\\').replace(/'/g, "''");
+  const escapedKeyframesFolder = keyframesFolder.replace(/'/g, "''");
 
   return `
 $ErrorActionPreference = 'Stop'
@@ -515,66 +516,62 @@ $redY = $rect.Top + $RedBoxOffsetY
 $startX = $rect.Left + $StartButtonOffsetX
 $startY = $rect.Top + $StartButtonOffsetY
 
-# Import keyframes in chunks to avoid Windows File Dialog path-length truncation
-Write-Host "[TEST-VEOUP] Importing keyframes in chunks of 3 to avoid Windows file dialog path limit..."
-$PngFileArray = ${psPngArrayLiteral}
-$totalCount = $PngFileArray.Count
-$chunkSize = 3
-for ($batchStart = 0; $batchStart -lt $totalCount; $batchStart += $chunkSize) {
-  $batchEnd = [Math]::Min($batchStart + $chunkSize - 1, $totalCount - 1)
-  $currentSceneId = $batchEnd + 1
-  $batchKeyframes = @()
-  for ($i = $batchStart; $i -le $batchEnd; $i += 1) { $batchKeyframes += [string]$PngFileArray[$i] }
-  $batchFileSelectionText = ($batchKeyframes | ForEach-Object { '"' + $_ + '"' }) -join ' '
+# One-Shot Folder Import Logic
+Write-Host "[TEST-VEOUP] Importing all keyframes from folder: $keyframesFolder..."
+Write-Host "[TEST-VEOUP] Clicking Blue Box image import area at absolute coordinate ($blueX, $blueY)..."
+if ($DebugCoordinates) {
+  Move-Cursor $blueX $blueY
+  Start-Sleep -Seconds 1
+}
+Click-Point $blueX $blueY
 
-  Take-Screenshot "test-veoup-before-bluebox.png"
-  Write-Host "[TEST-VEOUP] Importing image chunk scenes $($batchStart + 1)-$currentSceneId of $totalCount..."
-  Write-Host "[TEST-VEOUP] Clicking Blue Box image import area at absolute coordinate ($blueX, $blueY)..."
-  if ($DebugCoordinates) {
-    Move-Cursor $blueX $blueY
-    Start-Sleep -Seconds 1
-  }
-  Click-Point $blueX $blueY
-
-  Write-Host "[TEST-VEOUP] Waiting for Open File dialog..."
-  if (!(Wait-For-FileDialog)) {
-    $activeTitle = Get-ActiveWindowTitle
-    $activeClass = Get-ActiveWindowClassName
-    Write-Host "[TEST-VEOUP] Calibrated Blue Box click did not open the file dialog for chunk ending at scene $currentSceneId."
-    Write-Host "[TEST-VEOUP] Please rerun CALIBRATION_MODE=true and point to the actual clickable center of the import button/area."
-    Write-Host "[TEST-VEOUP] Current active window: $activeTitle (Class: $activeClass)"
-    exit 1
-  }
-
+Write-Host "[TEST-VEOUP] Waiting for Open File dialog..."
+if (!(Wait-For-FileDialog)) {
   $activeTitle = Get-ActiveWindowTitle
   $activeClass = Get-ActiveWindowClassName
-  Write-Host "[TEST-VEOUP] Active window after dialog wait: $activeTitle (Class: $activeClass)"
+  Write-Host "[TEST-VEOUP] Calibrated Blue Box click did not open the file dialog."
+  Write-Host "[TEST-VEOUP] Current active window: $activeTitle (Class: $activeClass)"
+  exit 1
+}
+Start-Sleep -Milliseconds 2000
 
-  Write-Host "[TEST-VEOUP] Copying $($batchKeyframes.Count) quoted PNG paths to clipboard..."
-  Set-ClipboardText $batchFileSelectionText
-  Start-Sleep -Milliseconds 600
+Write-Host "[TEST-VEOUP] Navigating to keyframes directory..."
+[System.Windows.Forms.SendKeys]::SendWait('%d')
+Start-Sleep -Milliseconds 500
+Set-ClipboardText $keyframesFolder
+Start-Sleep -Milliseconds 200
+[System.Windows.Forms.SendKeys]::SendWait('^v')
+Start-Sleep -Milliseconds 100
+[System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
 
-  Write-Host "[TEST-VEOUP] Pasting PNG chunk into File name input..."
-  [System.Windows.Forms.SendKeys]::SendWait('%n')
-  Start-Sleep -Milliseconds 300
-  [System.Windows.Forms.SendKeys]::SendWait('^a')
-  Start-Sleep -Milliseconds 200
-  [System.Windows.Forms.SendKeys]::SendWait('^v')
-  Start-Sleep -Milliseconds 500
-  [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+Write-Host "[TEST-VEOUP] Waiting for Windows Explorer to render folder view..."
+Start-Sleep -Milliseconds 1500
 
-  Start-Sleep -Milliseconds 1500
-  $titleAfterOpen = Get-ActiveWindowTitle
-  $classAfterOpen = Get-ActiveWindowClassName
-  Write-Host "[TEST-VEOUP] Active window after dialog ENTER: $titleAfterOpen (Class: $classAfterOpen)"
+Write-Host "[TEST-VEOUP] Anchor focus in File Name box first..."
+[System.Windows.Forms.SendKeys]::SendWait('%n')
+Start-Sleep -Milliseconds 300
+[System.Windows.Forms.SendKeys]::SendWait('scene_001_keyframe')
+Start-Sleep -Milliseconds 500
 
-  if (($titleAfterOpen -match 'open|select|keyframe|folder') -or ($classAfterOpen -eq '#32770')) {
-    Write-Host "[TEST-VEOUP] ERROR: File dialog is still open for chunk ending at scene $currentSceneId. Import path or file selection failed."
-    exit 1
-  }
+Write-Host "[TEST-VEOUP] Send Shift+TAB (+{TAB}) to shift focus directly UP into the image grid view container..."
+[System.Windows.Forms.SendKeys]::SendWait('+{TAB}')
+Start-Sleep -Milliseconds 500
 
-  Write-Host "[TEST-VEOUP] Waiting 2.5 seconds for VeoUp image grid to append chunk..."
-  Start-Sleep -Seconds 2.5
+Write-Host "[TEST-VEOUP] Selecting all keyframe files..."
+[System.Windows.Forms.SendKeys]::SendWait('^a')
+Start-Sleep -Milliseconds 500
+[System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+
+Write-Host "[TEST-VEOUP] Waiting 5 seconds for VeoUp image grid to append assets..."
+Start-Sleep -Milliseconds 5000
+
+$titleAfterOpen = Get-ActiveWindowTitle
+$classAfterOpen = Get-ActiveWindowClassName
+Write-Host "[TEST-VEOUP] Active window after dialog ENTER: $titleAfterOpen (Class: $classAfterOpen)"
+
+if (($titleAfterOpen -match 'open|select|keyframe|folder') -or ($classAfterOpen -eq '#32770')) {
+  Write-Host "[TEST-VEOUP] ERROR: File dialog is still open. Import path or file selection failed."
+  exit 1
 }
 
 Write-Host "[TEST-VEOUP] Refocusing VeoUp window..."

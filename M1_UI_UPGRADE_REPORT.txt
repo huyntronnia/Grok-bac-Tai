@@ -1,0 +1,126 @@
+MILESTONE 1 - FRONTEND UI & BASE ASSET IMPORT PIPELINE REPORT
+================================================================================
+
+1. electron/index.html (Inject Quản lý nhân vật (Presets) button)
+--------------------------------------------------------------------------------
+Lines 202-207:
+```html
+            <button id="save-project-btn" class="ghost success" type="button">Save Project</button>
+            <button id="choose-output-folder-btn" class="ghost" type="button">Chọn/đổi folder lưu</button>
+            <button id="save-session-btn" class="ghost" type="button">Lưu session</button>
+            <button id="character-presets-btn" class="ghost" type="button">Quản lý nhân vật (Presets)</button>
+            <button id="veoup-scan-run-btn" class="ghost success" type="button">Quét project & chạy VeoUp</button>
+```
+
+2. electron/preload.js (Context Bridging safe IPC invocation link)
+--------------------------------------------------------------------------------
+Lines 37-42:
+```javascript
+  sendPromptViaWeb: (options) => ipcRenderer.invoke('browser:send-prompt', options),
+  runScenePipeline: (options) => ipcRenderer.invoke('pipeline:run-scene', options),
+  clearChatGptCache: () => ipcRenderer.invoke('chatgpt:clear-cache'),
+  openFreshChatGpt: () => ipcRenderer.invoke('chatgpt:open-fresh-chat'),
+  importCharacterPresets: (projectPath) => ipcRenderer.invoke('project:import-character-presets', projectPath),
+  runVeoUpAutomation: (options) => ipcRenderer.invoke('veoup:run-automation', options),
+```
+
+3. electron/renderer.js (Query selector, handler and click event listener binding)
+--------------------------------------------------------------------------------
+Lines 53-58 (Query selector declaration):
+```javascript
+const exportBtn = document.querySelector('#export-btn');
+const chooseOutputFolderBtn = document.querySelector('#choose-output-folder-btn');
+const saveSessionBtn = document.querySelector('#save-session-btn');
+const characterPresetsBtn = document.querySelector('#character-presets-btn');
+const newProjectBtn = document.querySelector('#new-project-btn');
+```
+
+Lines 742-762 (Handler implementation):
+```javascript
+async function importCharacterPresets() {
+  if (!outputFolder) {
+    alert("Vui lòng chọn hoặc mở project trước");
+    setStatus("Hủy import nhân vật: Chưa chọn project folder", "error");
+    return;
+  }
+  try {
+    setStatus("Đang chọn và import presets nhân vật...", "running");
+    const result = await window.videoPlannerAPI.importCharacterPresets(outputFolder);
+    if (result && result.ok) {
+      setStatus(`Đã import thành công ${result.copiedFiles.length} file nhân vật.`, "ok");
+    } else {
+      setStatus("Import nhân vật đã bị hủy bởi người dùng.", "idle");
+    }
+  } catch (error) {
+    setStatus(`Lỗi import nhân vật: ${error.message}`, "error");
+    alert(`Lỗi import nhân vật: ${error.message}`);
+  }
+}
+```
+
+Lines 3478-3483 (Event listener binding):
+```javascript
+chooseOutputFolderBtn.addEventListener('click', chooseOutputFolder);
+saveSessionBtn?.addEventListener('click', saveSessionForNextLaunch);
+characterPresetsBtn?.addEventListener('click', importCharacterPresets);
+newProjectBtn?.addEventListener('click', newProjectSessionFlow);
+```
+
+4. electron/main.js (IPC handler and Sync Directory Engine)
+--------------------------------------------------------------------------------
+Lines 425-470 (Handler implementation):
+```javascript
+async function importCharacterPresetsHandler(_event, projectPath) {
+  if (!projectPath) {
+    throw new Error('Thiếu projectPath để import nhân vật.');
+  }
+
+  const result = await dialog.showOpenDialog({
+    title: 'Chọn các file nhân vật (Presets)',
+    properties: ['openFile', 'multiSelections'],
+    filters: [
+      { name: 'Presets (*.png, *.jpg, *.jpeg, *.txt)', extensions: ['png', 'jpg', 'jpeg', 'txt'] },
+      { name: 'Images (*.png, *.jpg, *.jpeg)', extensions: ['png', 'jpg', 'jpeg'] },
+      { name: 'Descriptions (*.txt)', extensions: ['txt'] },
+      { name: 'All files', extensions: ['*'] }
+    ]
+  });
+
+  if (result.canceled || !result.filePaths || result.filePaths.length === 0) {
+    return { ok: false, canceled: true };
+  }
+
+  const targetDir = path.join(projectPath, 'characters');
+  const fsSync = require('fs');
+  fsSync.mkdirSync(targetDir, { recursive: true });
+
+  const copiedFiles = [];
+  for (const srcPath of result.filePaths) {
+    const fileName = path.basename(srcPath);
+    const destPath = path.join(targetDir, fileName);
+    fsSync.copyFileSync(srcPath, destPath);
+    copiedFiles.push(fileName);
+  }
+
+  // Open the characters directory in OS file explorer
+  await shell.openPath(targetDir);
+
+  await appendAppLog(null, {
+    source: 'main',
+    kind: 'ok',
+    text: `Đã import ${copiedFiles.length} file nhân vật vào folder: ${targetDir}`,
+    details: { copiedFiles }
+  }).catch(() => null);
+
+  return { ok: true, copiedFiles };
+}
+```
+
+Lines 10430-10435 (Handler registration):
+```javascript
+  ipcMain.handle('project:create-session-file', createProjectSessionFile);
+  ipcMain.handle('project:open-session-file', openProjectSessionFile);
+  ipcMain.handle('project:ensure-scene-folders', ensureProjectSceneFolders);
+  ipcMain.handle('project:import-character-presets', safeIpcHandler(importCharacterPresetsHandler));
+  ipcMain.handle('veoup:run-automation', safeIpcHandler(runVeoUpAutomation));
+```

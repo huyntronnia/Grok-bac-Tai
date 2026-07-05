@@ -1,6 +1,0 @@
-Error: CREDENTIAL_REQUIRED:grok: Chưa có account Grok để tự login.
-    at generateVideoWithGenericProvider (D:\Grok\electron\main.js:3212:55)
-    at async runScenePipelineLocked (D:\Grok\electron\main.js:2149:19)
-    at async runScenePipeline (D:\Grok\electron\main.js:1961:12)
-    at async D:\Grok\electron\main.js:181:31
-    at async WebContents.<anonymous> (node:electron/js2c/browser_init:2:82941)

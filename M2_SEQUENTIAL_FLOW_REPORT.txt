@@ -1,0 +1,105 @@
+MILESTONE 2 - SEQUENTIAL SCENE FLOW & PRECEDING VIDEO LAST-FRAME EXTRACTION REPORT
+================================================================================
+
+1. electron/preload.js (Expose extractLastFrameToPath bridge method)
+--------------------------------------------------------------------------------
+Lines 71-74:
+```javascript
+  extractLastFrame: (videoPath) => ipcRenderer.invoke('video:extract-last-frame', videoPath),
+  extractLastFrameToPath: (videoPath, outputPath) => ipcRenderer.invoke('video:extract-last-frame-to-path', { videoPath, outputPath }),
+  mergeVideos: (folderPath, options = {}) => ipcRenderer.invoke('video:merge', folderPath, options),
+```
+
+2. electron/main.js (Implementation and registration of extractLastFrameToPathHandler)
+--------------------------------------------------------------------------------
+Lines 1652-1665 (Handler implementation):
+```javascript
+async function extractLastFrameToPathHandler(_event, { videoPath, outputPath }) {
+  if (!videoPath || !outputPath) {
+    throw new Error('Thiếu videoPath hoặc outputPath để trích xuất frame.');
+  }
+  const result = await extractLastFrameToPath(videoPath, outputPath);
+  if (!result || !result.ok) {
+    throw new Error(result?.error || 'Trích xuất khung hình cuối thất bại.');
+  }
+  return result;
+}
+```
+
+Lines 10390-10395 (Handler registration):
+```javascript
+  ipcMain.handle('video:extract-last-frame', extractLastFrame);
+  ipcMain.handle('video:extract-last-frame-to-path', safeIpcHandler(extractLastFrameToPathHandler));
+  ipcMain.handle('video:merge', mergeVideos);
+```
+
+3. electron/renderer.js (Preceding Video validation, extraction, rollback loop, and progression adjustments)
+--------------------------------------------------------------------------------
+Lines 1250-1306 (Video check and rollback):
+```javascript
+    // Preceding Video Validation Guard & Hard Rollback Loop (Scene N > 1)
+    if (!isImageMotionOnlyModeEnabled() && scene.id > 1) {
+      const separator = outputFolder.includes('\\') ? '\\' : '/';
+      const prevSceneFolderToken = `scene_${String(scene.id - 1).padStart(3, '0')}`;
+      const prevVideoPath = `${outputFolder}${separator}${prevSceneFolderToken}${separator}${prevSceneFolderToken}_video.mp4`;
+      const prevLastFramePath = `${outputFolder}${separator}${prevSceneFolderToken}${separator}${prevSceneFolderToken}_last_frame.png`;
+
+      let hasValidVideo = false;
+      try {
+        const videoExists = await window.videoPlannerAPI.assetExists(prevVideoPath);
+        if (videoExists) {
+          hasValidVideo = true;
+        }
+      } catch (err) {
+        hasValidVideo = false;
+      }
+
+      if (hasValidVideo) {
+        try {
+          setStatus(`Đang trích xuất frame cuối của scene trước làm tham chiếu...`, 'running');
+          await window.videoPlannerAPI.extractLastFrameToPath(prevVideoPath, prevLastFramePath);
+          safeAddPipelineLog('renderer', 'ok', `Đã trích xuất và lưu frame cuối continuity: ${prevLastFramePath}`);
+        } catch (err) {
+          safeAddPipelineLog('renderer', 'error', `Trích xuất frame cuối thất bại (video có thể lỗi): ${err.message}`);
+          hasValidVideo = false;
+        }
+      }
+
+      if (!hasValidVideo) {
+        safeAddPipelineLog('renderer', 'error', `Chặn chạy scene ${scene.id} do video scene trước (${scene.id - 1}) bị thiếu hoặc lỗi. Đang thực hiện rollback...`);
+        
+        const prevScene = project.scenes.find((s) => s.id === scene.id - 1);
+        if (prevScene) {
+          prevScene.videoPath = '';
+          prevScene.videoUrl = '';
+          prevScene.status = 'approved';
+          prevScene.reviewType = '';
+        }
+        
+        const nextBatchIds = activeBatchIds.filter((id) => id >= scene.id - 1);
+        if (!nextBatchIds.includes(scene.id - 1)) {
+          nextBatchIds.unshift(scene.id - 1);
+        }
+        activeBatchIds = nextBatchIds.sort((a, b) => a - b);
+        
+        paused = false;
+        isRunning = true;
+        window.isVidoraPipelineBusy = false;
+        persist();
+        render();
+        
+        return runFullPipeline();
+      }
+    }
+```
+
+Lines 1600-1608 (Progression control - loop index retention after keyframe phase):
+```javascript
+        if (scene.status === 'video_done') {
+          await mergeAndShowFinalPreview({ scrollIntoView: true });
+        }
+        if (scene.status === 'image_done') {
+          i--;
+        }
+        continue;
+```

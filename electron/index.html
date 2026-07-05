@@ -1,657 +1,1159 @@
 <!doctype html>
 <html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="Dashboard Electron tạo batch image prompt và motion prompt cho workflow sản xuất video AI theo từng scene, có review, pause, resume, lưu session và export."
+    />
+    <title>Vidora</title>
+    <link rel="icon" type="image/svg+xml" href="vidora-icon.svg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="style.css" />
+  </head>
 
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="description"
-    content="Dashboard Electron tạo batch image prompt và motion prompt cho workflow sản xuất video AI theo từng scene, có review, pause, resume, lưu session và export." />
-  <title>Vidora</title>
-  <link rel="icon" type="image/svg+xml" href="vidora-icon.svg" />
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap"
-    rel="stylesheet" />
-  <link rel="stylesheet" href="style.css" />
-</head>
+  <body>
+    <div class="orb orb-a"></div>
+    <div class="orb orb-b"></div>
+    <div class="orb orb-c"></div>
 
-<body>
-  <div class="orb orb-a"></div>
-  <div class="orb orb-b"></div>
-  <div class="orb orb-c"></div>
-
-  <main class="app-shell">
-    <section class="hero" aria-labelledby="page-title">
-      <div>
-        <span class="eyebrow">MVP Workflow • Batch 10 Scene • Human Review</span>
-        <h1 id="page-title">AI Scene Batch Director</h1>
-        <p>
-          Nhập cốt truyện và kịch bản nhiều scene. Tool tách scene, chạy từng batch tối đa 10 scene,
-          tạo prompt ảnh keyframe + prompt chuyển động chuẩn theo 2 file prompt mẫu, rồi dừng ở màn review.
-        </p>
-      </div>
-      <div class="hero-metrics" aria-label="Tổng quan workflow">
-        <article><strong id="metric-scenes">0</strong><span>Scenes</span></article>
-        <article><strong id="metric-approved">0</strong><span>Approved</span></article>
-        <article><strong id="metric-batch">—</strong><span>Batch hiện tại</span></article>
-      </div>
-    </section>
-
-    <section class="grid top-grid">
-      <form id="project-form" class="panel project-panel">
-        <div class="panel-head">
-          <span class="pulse-dot"></span>
-          <div>
-            <h2>1. Tạo project</h2>
-            <p>Input chính theo file quy trình: cốt truyện tổng + kịch bản/scene.</p>
-          </div>
+    <main class="app-shell">
+      <section class="hero" aria-labelledby="page-title">
+        <div>
+          <span class="eyebrow"
+            >MVP Workflow • Batch 10 Scene • Human Review</span
+          >
+          <h1 id="page-title">AI Scene Batch Director</h1>
+          <p>
+            Nhập cốt truyện và kịch bản nhiều scene. Tool tách scene, chạy từng
+            batch tối đa 10 scene, tạo prompt ảnh keyframe + prompt chuyển động
+            chuẩn theo 2 file prompt mẫu, rồi dừng ở màn review.
+          </p>
         </div>
-
-        <label for="project-name">Tên project</label>
-        <input id="project-name" value="Video live action viral" />
-
-        <input id="story-file-input" type="file" accept=".txt,text/plain" hidden />
-        <span id="story-file-name" hidden></span>
-        <textarea id="story-input" hidden></textarea>
-
-        <label for="script-input">Scene</label>
-        <div class="file-import-row">
-          <label class="file-import-btn" for="script-file-input">Add scene .txt</label>
-          <input id="script-file-input" type="file" accept=".txt,text/plain" />
-          <span id="script-file-name">Chưa chọn file scene.</span>
+        <div class="hero-metrics" aria-label="Tổng quan workflow">
+          <article>
+            <strong id="metric-scenes">0</strong><span>Scenes</span>
+          </article>
+          <article>
+            <strong id="metric-approved">0</strong><span>Approved</span>
+          </article>
+          <article>
+            <strong id="metric-batch">—</strong><span>Batch hiện tại</span>
+          </article>
         </div>
-        <textarea id="script-input" rows="18"
-          placeholder="Dán hoặc sửa từng scene ở đây. Có thể dùng format SCENE 1..., Scene 2..., hoặc mỗi đoạn là một scene..."></textarea>
-
-        <input id="batch-size" type="hidden" value="10" />
-        <div class="form-row">
-          <div>
-            <label for="duration-sec">Thời lượng/scene</label>
-            <select id="duration-sec">
-              <option value="6">6</option>
-              <option value="10" selected>10</option>
-            </select>
-          </div>
-        </div>
-
-        <button id="create-project-btn" class="manual-only" type="submit" hidden>Parse scene & tạo project</button>
-      </form>
-
-      <section id="quick-actions-panel" class="panel quick-actions-panel" aria-labelledby="quick-actions-title">
-        <div class="panel-head">
-          <span class="pulse-dot"></span>
-          <div>
-            <h2 id="quick-actions-title">2. Project actions</h2>
-            <p>Tạo/mở/lưu project, chọn folder và bắt đầu pipeline nhanh.</p>
-          </div>
-        </div>
-        <div id="quick-actions-slot"></div>
       </section>
 
-      <section class="panel router-panel" aria-labelledby="router-title" hidden>
-        <div class="panel-head split">
-          <div>
-            <h2 id="router-title">Provider Router</h2>
-            <p>Provider controls removed. The simplified flow uses the default local/web automation settings.</p>
+      <section class="grid top-grid">
+        <form id="project-form" class="panel project-panel">
+          <div class="panel-head">
+            <span class="pulse-dot"></span>
+            <div>
+              <h2>1. Tạo project</h2>
+              <p>
+                Input chính theo file quy trình: cốt truyện tổng + kịch
+                bản/scene.
+              </p>
+            </div>
           </div>
-          <span id="run-state" class="state-pill idle">Idle</span>
-        </div>
 
-        <select id="provider-select" hidden>
-          <option value="ninerouter">9Router local proxy</option>
-        </select>
-        <select id="account-select" hidden>
-          <option>Account 1</option>
-        </select>
-        <input id="model-input" value="cx/gpt-5.5" hidden />
-        <input id="api-key-input" type="password" hidden />
+          <label for="project-name">Tên project</label>
+          <input id="project-name" value="Video live action viral" />
 
-        <div class="router-actions">
-          <button id="run-batch-btn" class="ghost primary manual-only" type="button" hidden>Run batch kế tiếp</button>
-          <button id="pause-btn" class="ghost" type="button" disabled>Pause</button>
-          <button id="resume-btn" class="ghost" type="button" disabled>Resume</button>
-          <button id="export-btn" class="ghost success" type="button" disabled>Export JSON/CSV</button>
-        </div>
+          <input
+            id="story-file-input"
+            type="file"
+            accept=".txt,text/plain"
+            hidden
+          />
+          <span id="story-file-name" hidden></span>
+          <textarea id="story-input" hidden></textarea>
 
-        <div class="browser-login-card">
-          <div>
-            <span class="preview-label">Web automation mode</span>
-            <strong>Đăng nhập ChatGPT + nền tảng video, gửi prompt và lưu kết quả</strong>
-            <div class="inline-control">
-              <label for="video-platform-select">Video platform</label>
-              <select id="video-platform-select">
-                <option value="grok">Grok</option>
-                <option value="pixverse">PixVerse</option>
+          <label for="script-input">Scene</label>
+          <div class="file-import-row">
+            <label class="file-import-btn" for="script-file-input"
+              >Add scene .txt</label
+            >
+            <input
+              id="script-file-input"
+              type="file"
+              accept=".txt,text/plain"
+            />
+            <span id="script-file-name">Chưa chọn file scene.</span>
+          </div>
+          <textarea
+            id="script-input"
+            rows="18"
+            placeholder="Dán hoặc sửa từng scene ở đây. Có thể dùng format SCENE 1..., Scene 2..., hoặc mỗi đoạn là một scene..."
+          ></textarea>
+
+          <input id="batch-size" type="hidden" value="10" />
+          <div class="form-row">
+            <div>
+              <label for="duration-sec">Thời lượng/scene</label>
+              <select id="duration-sec">
+                <option value="6">6</option>
+                <option value="10" selected>10</option>
               </select>
             </div>
-            <div id="pixverse-config" class="pixverse-config" hidden>
-              <div class="config-head">
-                <span class="preview-label">PixVerse config</span>
-                <span id="pixverse-energy-status" class="energy-pill">Energy: chưa check</span>
-              </div>
-              <div class="config-grid wide-config-grid">
-                <label>Resolution
-                  <select id="pixverse-resolution-select">
-                    <option value="360P">360P</option>
-                    <option value="540P">540P</option>
-                    <option value="720P" data-pro="true">720P · Pro</option>
-                    <option value="1080P" data-pro="true">1080P · Pro</option>
-                  </select>
-                </label>
-                <label>Ratio
-                  <select id="pixverse-ratio-select">
-                    <option value="16:9">16:9</option>
-                    <option value="4:3">4:3</option>
-                    <option value="1:1">1:1</option>
-                    <option value="3:4">3:4</option>
-                    <option value="9:16">9:16</option>
-                    <option value="21:9">21:9</option>
-                    <option value="3:2">3:2</option>
-                    <option value="2:3">2:3</option>
-                  </select>
-                </label>
-                <label>Duration
-                  <select id="pixverse-duration-select">
-                    <option value="1">1s</option>
-                    <option value="2">2s</option>
-                    <option value="3">3s</option>
-                    <option value="4">4s</option>
-                    <option value="5" selected>5s</option>
-                    <option value="6">6s</option>
-                    <option value="7">7s</option>
-                    <option value="8">8s</option>
-                    <option value="9">9s</option>
-                    <option value="10">10s</option>
-                    <option value="11">11s</option>
-                    <option value="12">12s</option>
-                    <option value="13">13s</option>
-                    <option value="14">14s</option>
-                    <option value="15">15s</option>
-                  </select>
-                </label>
-                <label>Model
-                  <select id="pixverse-model-select">
-                    <option value="PixVerse V6">PixVerse V6</option>
-                    <option value="PixVerse C1">PixVerse C1</option>
-                    <option value="Seedance 2.0" data-pro="true">Seedance 2.0 · Pro</option>
-                    <option value="Happy Horse 1.0" data-pro="true">Happy Horse 1.0 · Pro</option>
-                    <option value="Kling O3" data-pro="true">Kling O3 · Pro</option>
-                    <option value="Kling 3.0" data-pro="true">Kling 3.0 · Pro</option>
-                    <option value="Grok Imagine" data-pro="true">Grok Imagine · Pro</option>
-                    <option value="Veo 3.1" data-pro="true">Veo 3.1 · Pro</option>
-                    <option value="Sora 2" data-pro="true">Sora 2 · Pro</option>
-                    <option value="PixVerse V5.6">PixVerse V5.6</option>
-                    <option value="PixVerse V5.5">PixVerse V5.5</option>
-                    <option value="PixVerse V5">PixVerse V5</option>
-                    <option value="PixVerse V5 Fast">PixVerse V5 Fast</option>
-                  </select>
-                </label>
-                <label class="toggle-row"><input id="pixverse-preview-toggle" type="checkbox" /> Preview mode</label>
-                <label class="toggle-row"><input id="pixverse-audio-toggle" type="checkbox" checked /> Audio</label>
-              </div>
-              <p id="pixverse-config-advice" class="config-advice">Chọn PixVerse rồi bấm chạy, tool sẽ đọc energy/tính
-                năng Pro và đề xuất config nếu thiếu.</p>
+          </div>
+
+          <button
+            id="create-project-btn"
+            class="manual-only"
+            type="submit"
+            hidden
+          >
+            Parse scene & tạo project
+          </button>
+        </form>
+
+        <section
+          id="quick-actions-panel"
+          class="panel quick-actions-panel"
+          aria-labelledby="quick-actions-title"
+        >
+          <div class="panel-head">
+            <span class="pulse-dot"></span>
+            <div>
+              <h2 id="quick-actions-title">2. Project actions</h2>
+              <p>Tạo/mở/lưu project, chọn folder và bắt đầu pipeline nhanh.</p>
             </div>
-            <p id="web-session-status">Chưa check session. Chọn folder output, check login rồi chạy web automation.</p>
-            <p id="project-save-status" class="project-save-status saved">Unsaved project</p>
-            <p id="missing-asset-warning" class="missing-asset-warning" hidden></p>
           </div>
-          <div class="browser-login-actions stacked-actions">
-            <button id="new-project-btn" class="ghost" type="button">New Project</button>
-            <button id="open-project-btn" class="ghost" type="button">Open Project</button>
-            <button id="save-project-btn" class="ghost success" type="button">Save Project</button>
-            <button id="choose-output-folder-btn" class="ghost" type="button">Chọn/đổi folder lưu</button>
-            <button id="save-session-btn" class="ghost" type="button">Lưu session</button>
-            <button id="veoup-scan-run-btn" class="ghost success" type="button">Quét project & chạy VeoUp</button>
-            <button id="auto-run-btn" class="ghost primary" type="button"
-              onclick="window.startPipelineFromClick?.(event)">Start pipeline</button>
-          </div>
-        </div>
+          <div id="quick-actions-slot"></div>
+        </section>
 
-        <div id="chatgpt-stability-card" class="workflow-card chatgpt-stability-card">
-          <h3>ChatGPT Stability / Độ ổn định ChatGPT</h3>
-          <div class="stability-actions">
-            <button id="workflow-resume-btn" class="ghost" type="button">Khôi phục workflow</button>
-            <button id="chatgpt-open-btn" class="ghost" type="button">Mở lại ChatGPT</button>
-            <button id="chatgpt-new-chat-btn" class="ghost" type="button">Tạo đoạn chat mới</button>
-            <button id="chatgpt-clear-cache-btn" class="ghost danger" type="button">Xóa cache tạm</button>
+        <section
+          class="panel router-panel"
+          aria-labelledby="router-title"
+          hidden
+        >
+          <div class="panel-head split">
+            <div>
+              <h2 id="router-title">Provider Router</h2>
+              <p>
+                Provider controls removed. The simplified flow uses the default
+                local/web automation settings.
+              </p>
+            </div>
+            <span id="run-state" class="state-pill idle">Idle</span>
           </div>
-          <div class="config-grid chatgpt-stability-grid">
-            <label>Tự mở đoạn chat mới sau N scene
-              <input id="chatgpt-rotate-scenes-input" type="number" min="1" max="20" value="3" />
-            </label>
-            <label class="toggle-row"><input id="chatgpt-auto-reload-toggle" type="checkbox" checked /> Tự reload khi composer kẹt</label>
-            <label class="toggle-row"><input id="chatgpt-auto-resume-toggle" type="checkbox" checked /> Tự khôi phục workflow khi lỗi</label>
-            <label>Giới hạn retry mỗi scene
-              <input id="chatgpt-retry-limit-input" type="number" min="1" max="5" value="2" />
-            </label>
-          </div>
-        </div>
 
-        <div class="workflow-card">
-          <h3>Luồng batch đúng quy trình</h3>
-          <ol>
-            <li>Lấy story context + scene hiện tại + scene trước/sau.</li>
-            <li>Tạo image prompt keyframe đầu scene qua ChatGPT Create image.</li>
-            <li>Tạo motion prompt 7 dòng dựa theo prompt mẫu.</li>
-            <li>Dừng ở review sau tối đa 10 scene.</li>
-            <li>User sửa / regenerate / approve rồi mới chạy batch tiếp.</li>
-          </ol>
-        </div>
+          <select id="provider-select" hidden>
+            <option value="ninerouter">9Router local proxy</option>
+          </select>
+          <select id="account-select" hidden>
+            <option>Account 1</option>
+          </select>
+          <input id="model-input" value="cx/gpt-5.5" hidden />
+          <input id="api-key-input" type="password" hidden />
+
+          <div class="router-actions">
+            <button
+              id="run-batch-btn"
+              class="ghost primary manual-only"
+              type="button"
+              hidden
+            >
+              Run batch kế tiếp
+            </button>
+            <button id="pause-btn" class="ghost" type="button" disabled>
+              Pause
+            </button>
+            <button id="resume-btn" class="ghost" type="button" disabled>
+              Resume
+            </button>
+            <button
+              id="export-btn"
+              class="ghost success"
+              type="button"
+              disabled
+            >
+              Export JSON/CSV
+            </button>
+          </div>
+
+          <div class="browser-login-card">
+            <div>
+              <span class="preview-label">Web automation mode</span>
+              <strong
+                >Đăng nhập ChatGPT + nền tảng video, gửi prompt và lưu kết
+                quả</strong
+              >
+              <div class="inline-control">
+                <label for="video-platform-select">Video platform</label>
+                <select id="video-platform-select">
+                  <option value="grok">Grok</option>
+                  <option value="pixverse">PixVerse</option>
+                </select>
+              </div>
+              <div id="pixverse-config" class="pixverse-config" hidden>
+                <div class="config-head">
+                  <span class="preview-label">PixVerse config</span>
+                  <span id="pixverse-energy-status" class="energy-pill"
+                    >Energy: chưa check</span
+                  >
+                </div>
+                <div class="config-grid wide-config-grid">
+                  <label
+                    >Resolution
+                    <select id="pixverse-resolution-select">
+                      <option value="360P">360P</option>
+                      <option value="540P">540P</option>
+                      <option value="720P" data-pro="true">720P · Pro</option>
+                      <option value="1080P" data-pro="true">1080P · Pro</option>
+                    </select>
+                  </label>
+                  <label
+                    >Ratio
+                    <select id="pixverse-ratio-select">
+                      <option value="16:9">16:9</option>
+                      <option value="4:3">4:3</option>
+                      <option value="1:1">1:1</option>
+                      <option value="3:4">3:4</option>
+                      <option value="9:16">9:16</option>
+                      <option value="21:9">21:9</option>
+                      <option value="3:2">3:2</option>
+                      <option value="2:3">2:3</option>
+                    </select>
+                  </label>
+                  <label
+                    >Duration
+                    <select id="pixverse-duration-select">
+                      <option value="1">1s</option>
+                      <option value="2">2s</option>
+                      <option value="3">3s</option>
+                      <option value="4">4s</option>
+                      <option value="5" selected>5s</option>
+                      <option value="6">6s</option>
+                      <option value="7">7s</option>
+                      <option value="8">8s</option>
+                      <option value="9">9s</option>
+                      <option value="10">10s</option>
+                      <option value="11">11s</option>
+                      <option value="12">12s</option>
+                      <option value="13">13s</option>
+                      <option value="14">14s</option>
+                      <option value="15">15s</option>
+                    </select>
+                  </label>
+                  <label
+                    >Model
+                    <select id="pixverse-model-select">
+                      <option value="PixVerse V6">PixVerse V6</option>
+                      <option value="PixVerse C1">PixVerse C1</option>
+                      <option value="Seedance 2.0" data-pro="true">
+                        Seedance 2.0 · Pro
+                      </option>
+                      <option value="Happy Horse 1.0" data-pro="true">
+                        Happy Horse 1.0 · Pro
+                      </option>
+                      <option value="Kling O3" data-pro="true">
+                        Kling O3 · Pro
+                      </option>
+                      <option value="Kling 3.0" data-pro="true">
+                        Kling 3.0 · Pro
+                      </option>
+                      <option value="Grok Imagine" data-pro="true">
+                        Grok Imagine · Pro
+                      </option>
+                      <option value="Veo 3.1" data-pro="true">
+                        Veo 3.1 · Pro
+                      </option>
+                      <option value="Sora 2" data-pro="true">
+                        Sora 2 · Pro
+                      </option>
+                      <option value="PixVerse V5.6">PixVerse V5.6</option>
+                      <option value="PixVerse V5.5">PixVerse V5.5</option>
+                      <option value="PixVerse V5">PixVerse V5</option>
+                      <option value="PixVerse V5 Fast">PixVerse V5 Fast</option>
+                    </select>
+                  </label>
+                  <label class="toggle-row"
+                    ><input id="pixverse-preview-toggle" type="checkbox" />
+                    Preview mode</label
+                  >
+                  <label class="toggle-row"
+                    ><input
+                      id="pixverse-audio-toggle"
+                      type="checkbox"
+                      checked
+                    />
+                    Audio</label
+                  >
+                </div>
+                <p id="pixverse-config-advice" class="config-advice">
+                  Chọn PixVerse rồi bấm chạy, tool sẽ đọc energy/tính năng Pro
+                  và đề xuất config nếu thiếu.
+                </p>
+              </div>
+              <p id="web-session-status">
+                Chưa check session. Chọn folder output, check login rồi chạy web
+                automation.
+              </p>
+              <p id="project-save-status" class="project-save-status saved">
+                Unsaved project
+              </p>
+              <p
+                id="missing-asset-warning"
+                class="missing-asset-warning"
+                hidden
+              ></p>
+            </div>
+            <div class="browser-login-actions stacked-actions">
+              <button id="new-project-btn" class="ghost" type="button">
+                New Project
+              </button>
+              <button id="open-project-btn" class="ghost" type="button">
+                Open Project
+              </button>
+              <button id="save-project-btn" class="ghost success" type="button">
+                Save Project
+              </button>
+              <button id="choose-output-folder-btn" class="ghost" type="button">
+                Chọn/đổi folder lưu
+              </button>
+              <button id="save-session-btn" class="ghost" type="button">
+                Lưu session
+              </button>
+              <button id="character-presets-btn" class="ghost" type="button">
+                Quản lý nhân vật
+              </button>
+              <label class="auto-review-toggle pipeline-mode-toggle">
+                <input id="keyframe-motion-only-toggle" type="checkbox" />
+                <span>Generate Keyframe + Motion Prompt only</span>
+              </label>
+              <button
+                id="veoup-scan-run-btn"
+                class="ghost success"
+                type="button"
+              >
+                Quét project & chạy VeoUp
+              </button>
+              <button
+                id="auto-run-btn"
+                class="ghost primary"
+                type="button"
+                onclick="window.startPipelineFromClick?.(event)"
+              >
+                Start pipeline
+              </button>
+              <button
+                id="stop-pipeline-btn"
+                class="ghost danger stop-action"
+                type="button"
+                disabled
+              >
+                Dừng tool
+              </button>
+            </div>
+          </div>
+
+          <div
+            id="chatgpt-stability-card"
+            class="workflow-card chatgpt-stability-card"
+          >
+            <h3>ChatGPT Stability / Độ ổn định ChatGPT</h3>
+            <div class="stability-actions">
+              <button id="workflow-resume-btn" class="ghost" type="button">
+                Khôi phục workflow
+              </button>
+              <button id="chatgpt-open-btn" class="ghost" type="button">
+                Mở lại ChatGPT
+              </button>
+              <button id="chatgpt-new-chat-btn" class="ghost" type="button">
+                Tạo đoạn chat mới
+              </button>
+              <button
+                id="chatgpt-clear-cache-btn"
+                class="ghost danger"
+                type="button"
+              >
+                Xóa cache tạm
+              </button>
+            </div>
+            <div class="config-grid chatgpt-stability-grid">
+              <label
+                >Tự mở đoạn chat mới sau N scene
+                <input
+                  id="chatgpt-rotate-scenes-input"
+                  type="number"
+                  min="1"
+                  max="20"
+                  value="20"
+                />
+              </label>
+              <label class="toggle-row"
+                ><input
+                  id="chatgpt-auto-reload-toggle"
+                  type="checkbox"
+                  checked
+                />
+                Tự reload khi composer kẹt</label
+              >
+              <label class="toggle-row"
+                ><input
+                  id="chatgpt-auto-resume-toggle"
+                  type="checkbox"
+                  checked
+                />
+                Tự khôi phục workflow khi lỗi</label
+              >
+              <label
+                >Giới hạn retry mỗi scene
+                <input
+                  id="chatgpt-retry-limit-input"
+                  type="number"
+                  min="1"
+                  max="5"
+                  value="2"
+                />
+              </label>
+            </div>
+          </div>
+
+          <div class="workflow-card">
+            <h3>Luồng batch đúng quy trình</h3>
+            <ol>
+              <li>Lấy story context + scene hiện tại + scene trước/sau.</li>
+              <li>
+                Tạo image prompt keyframe đầu scene qua ChatGPT Create image.
+              </li>
+              <li>Tạo motion prompt 7 dòng dựa theo prompt mẫu.</li>
+              <li>Dừng ở review sau tối đa 10 scene.</li>
+              <li>User sửa / regenerate / approve rồi mới chạy batch tiếp.</li>
+            </ol>
+          </div>
+        </section>
       </section>
-    </section>
 
-    <section class="review-launch-row" aria-label="Asset review launcher">
-      <button id="open-review-btn" class="ghost success" type="button" disabled>Mở popup review ảnh/video</button>
-      <button id="start-pipeline-inline-btn" class="ghost primary" type="button"
-        onclick="window.startPipelineFromClick?.(event)">Start pipeline ngay</button>
-      <p id="review-inline-status">Chưa có asset cần review.</p>
-    </section>
+      <section class="review-launch-row" aria-label="Asset review launcher">
+        <button
+          id="open-review-btn"
+          class="ghost success"
+          type="button"
+          disabled
+        >
+          Mở popup review ảnh/video
+        </button>
+        <button
+          id="start-pipeline-inline-btn"
+          class="ghost primary"
+          type="button"
+          onclick="window.startPipelineFromClick?.(event)"
+        >
+          Start pipeline ngay
+        </button>
+        <button
+          id="stop-pipeline-inline-btn"
+          class="ghost danger stop-action"
+          type="button"
+          disabled
+        >
+          Dừng tool
+        </button>
+        <p id="review-inline-status">Chưa có asset cần review.</p>
+      </section>
 
-    <section id="final-preview-card" class="final-preview-card" aria-labelledby="final-preview-title" hidden>
-      <div class="final-preview-head">
-        <div>
-          <span class="preview-label">Final merged video</span>
-          <h2 id="final-preview-title">Bản final đã merge</h2>
-          <p id="final-preview-meta">Chưa có video tổng.</p>
-        </div>
-        <button id="refresh-final-preview-btn" class="ghost mini" type="button">Refresh preview</button>
-      </div>
-      <video id="final-preview-video" class="final-preview-video" controls playsinline></video>
-      <div class="scene-timeline-head">
-        <strong>Timeline scene</strong>
-        <span>Scene 1 → Scene 2 → ...</span>
-      </div>
-      <div id="final-scene-timeline" class="final-scene-timeline" aria-label="Timeline scene của video final"></div>
-    </section>
-
-    <section class="pipeline-log-card" aria-labelledby="pipeline-log-title">
-      <div class="pipeline-log-head">
-        <div>
-          <span class="preview-label">Live pipeline log</span>
-          <h3 id="pipeline-log-title">Nhật ký chạy workflow</h3>
-        </div>
-        <div class="pipeline-log-actions">
-          <button id="copy-log-btn" class="ghost mini" type="button">Copy log</button>
-          <button id="clear-log-btn" class="ghost mini" type="button">Xóa log</button>
-        </div>
-      </div>
-      <ol id="pipeline-log-list" class="pipeline-log-list" aria-live="polite"></ol>
-    </section>
-  </main>
-
-  <dialog id="login-wait-dialog" class="dialog-card login-wait-dialog">
-    <form method="dialog" class="dialog-card" style="min-width: 400px;">
-      <div class="panel-head split">
-        <div>
-          <h2 id="login-wait-title">Đang chờ đăng nhập...</h2>
-          <p id="login-wait-desc">Vui lòng đăng nhập hoặc vượt qua Cloudflare trong cửa sổ web.</p>
-        </div>
-      </div>
-      <div class="dialog-actions" style="margin-top: 1rem;">
-        <button class="ghost" value="cancel" type="submit">Hủy Auto Pipeline</button>
-      </div>
-    </form>
-  </dialog>
-
-  <dialog id="chat-recovery-dialog">
-    <form method="dialog" class="dialog-card">
-      <div class="panel-head split">
-        <div>
-          <h2>Không tìm thấy chat ChatGPT</h2>
-          <p>Chọn cách để tool tiếp tục đúng đoạn chat/bối cảnh cho project này.</p>
-        </div>
-        <button class="icon-btn" value="cancel" type="submit">×</button>
-      </div>
-      <p id="chat-recovery-message" class="settings-help">Tool không tìm thấy đoạn chat trùng tên project.</p>
-      <div class="settings-section">
-        <h3>Cách 1</h3>
-        <p class="settings-help">Tool mở chat mới và làm việc trên chat mới cho project hiện tại.</p>
-        <button id="chat-recovery-new-btn" class="ghost primary" type="button">Tạo chat mới theo tên project</button>
-      </div>
-      <div class="settings-section">
-        <h3>Cách 2</h3>
-        <p class="settings-help">Nhập tên đoạn chat cũ bạn đã dùng để tạo scene, tool sẽ vào chat đó và dùng cho project này.</p>
-        <label for="chat-recovery-title-input">Tên đoạn chat đã dùng</label>
-        <input id="chat-recovery-title-input" placeholder="Dán/chọn đúng tên chat trong sidebar ChatGPT" />
-        <button id="chat-recovery-existing-btn" class="ghost success" type="button">Dùng chat này</button>
-      </div>
-    </form>
-  </dialog>
-
-  <dialog id="new-project-dialog">
-    <form method="dialog" class="dialog-card">
-      <div class="panel-head split">
-        <div>
-          <h2>Tạo project mới</h2>
-          <p>Nhập thông tin cơ bản trước khi Vidora tạo file .vdra và folder project.</p>
-        </div>
-        <button class="icon-btn" value="cancel" type="submit">×</button>
-      </div>
-      <label for="new-project-name-input">Tên project</label>
-      <input id="new-project-name-input" placeholder="Ví dụ: Video live action viral" />
-      <label for="new-project-scene-file-input">File scene .txt</label>
-      <div class="file-import-row">
-        <label class="file-import-btn" for="new-project-scene-file-input">Chọn scene .txt</label>
-        <input id="new-project-scene-file-input" type="file" accept=".txt,text/plain" />
-        <span id="new-project-scene-file-name">Chưa chọn file scene.</span>
-      </div>
-      <label for="new-project-save-location-input">Vị trí lưu</label>
-      <div class="file-import-row">
-        <input id="new-project-save-location-input" readonly placeholder="Chưa chọn folder lưu" />
-        <button id="new-project-choose-location-btn" class="ghost" type="button">Chọn vị trí lưu</button>
-      </div>
-      <div class="dialog-actions">
-        <button id="new-project-create-btn" class="ghost primary" value="default" type="button">Tạo project</button>
-        <button class="ghost" value="cancel" type="submit">Hủy</button>
-      </div>
-    </form>
-  </dialog>
-
-  <dialog id="chat-resolve-dialog">
-    <form method="dialog" class="dialog-card">
-      <div class="panel-head split">
-        <div>
-          <h2>Không tìm thấy đoạn chat ChatGPT</h2>
-          <p id="chat-resolve-message">Tool không tìm thấy đoạn chat trùng tên project.</p>
-        </div>
-        <button class="icon-btn" value="cancel" type="submit">×</button>
-      </div>
-      <div class="settings-section">
-        <h3>Cách xử lý</h3>
-        <button id="chat-resolve-new-btn" class="ghost primary" type="button">Tool tự tạo đoạn chat mới và đặt tên theo project</button>
-        <label for="chat-resolve-title-input">Hoặc nhập tên đoạn chat đã dùng</label>
-        <input id="chat-resolve-title-input" placeholder="Tên đoạn chat cũ trong ChatGPT" />
-        <button id="chat-resolve-rename-btn" class="ghost" type="button">Vào đoạn chat này và đặt tên lại theo project</button>
-      </div>
-    </form>
-  </dialog>
-
-  <dialog id="asset-review-dialog" class="asset-review-dialog">
-    <form method="dialog" class="asset-review-card">
-      <div class="asset-review-header">
-        <div>
-          <span id="review-scene-kicker" class="preview-label">Scene review</span>
-          <h2 id="review-scene-title">Chưa có scene</h2>
-          <p id="review-scene-status">Chạy pipeline để tạo ảnh/video rồi review tại đây.</p>
-        </div>
-        <button class="icon-btn" value="cancel" type="submit">×</button>
-      </div>
-
-      <div class="asset-review-grid prompt-review-grid">
-        <aside class="asset-review-info">
-          <h3>Scene gốc</h3>
-          <div id="review-original" class="review-text-box">—</div>
-          <h3>Trạng thái</h3>
-          <div id="review-status-badge"></div>
-        </aside>
-
-        <section id="review-media-panel" class="asset-review-stage" hidden>
-          <div class="zoom-toolbar">
-            <button id="zoom-out-btn" class="mini" type="button">−</button>
-            <input id="zoom-range" type="range" min="60" max="200" value="100" />
-            <button id="zoom-in-btn" class="mini" type="button">+</button>
+      <section
+        id="final-preview-card"
+        class="final-preview-card"
+        aria-labelledby="final-preview-title"
+        style="display: none"
+        hidden
+      >
+        <div class="final-preview-head">
+          <div>
+            <span class="preview-label" style="display: none"
+              >Final merged video</span
+            >
+            <h2 id="final-preview-title" style="display: none"></h2>
+            <p id="final-preview-meta" style="display: none"></p>
           </div>
-          <div id="review-media-stage" class="review-media-stage">
-            <div class="empty-review-media">Chưa có ảnh/video để review.</div>
+          <button
+            id="refresh-final-preview-btn"
+            class="ghost mini"
+            type="button"
+            style="display: none"
+          ></button>
+        </div>
+        <video
+          id="final-preview-video"
+          class="final-preview-video"
+          style="display: none"
+        ></video>
+        <div class="scene-timeline-head" style="display: none">
+          <strong></strong>
+          <span></span>
+        </div>
+        <div
+          id="final-scene-timeline"
+          class="final-scene-timeline"
+          aria-label="Timeline scene của video final"
+          style="display: none"
+        ></div>
+      </section>
+
+      <section class="pipeline-log-card" aria-labelledby="pipeline-log-title">
+        <div class="pipeline-log-head">
+          <div>
+            <span class="preview-label">Live pipeline log</span>
+            <h3 id="pipeline-log-title">Nhật ký chạy workflow</h3>
+          </div>
+          <div class="pipeline-log-actions">
+            <button id="copy-log-btn" class="ghost mini" type="button">
+              Copy log
+            </button>
+            <button id="clear-log-btn" class="ghost mini" type="button">
+              Xóa log
+            </button>
+          </div>
+        </div>
+        <ol
+          id="pipeline-log-list"
+          class="pipeline-log-list"
+          aria-live="polite"
+        ></ol>
+      </section>
+    </main>
+
+    <dialog id="login-wait-dialog" class="dialog-card login-wait-dialog">
+      <form method="dialog" class="dialog-card" style="min-width: 400px">
+        <div class="panel-head split">
+          <div>
+            <h2 id="login-wait-title">Đang chờ đăng nhập...</h2>
+            <p id="login-wait-desc">
+              Vui lòng đăng nhập hoặc vượt qua Cloudflare trong cửa sổ web.
+            </p>
+          </div>
+        </div>
+        <div class="dialog-actions" style="margin-top: 1rem">
+          <button class="ghost" value="cancel" type="submit">
+            Hủy Auto Pipeline
+          </button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="new-project-dialog">
+      <form method="dialog" class="dialog-card">
+        <div class="panel-head split">
+          <div>
+            <h2>Tạo project mới</h2>
+            <p>
+              Nhập thông tin cơ bản trước khi Vidora tạo file .vdra và folder
+              project.
+            </p>
+          </div>
+          <button class="icon-btn" value="cancel" type="submit">×</button>
+        </div>
+        <label for="new-project-name-input">Tên project</label>
+        <input
+          id="new-project-name-input"
+          placeholder="Ví dụ: Video live action viral"
+        />
+        <label for="new-project-scene-file-input">File scene .txt</label>
+        <div class="file-import-row">
+          <label class="file-import-btn" for="new-project-scene-file-input"
+            >Chọn scene .txt</label
+          >
+          <input
+            id="new-project-scene-file-input"
+            type="file"
+            accept=".txt,text/plain"
+          />
+          <span id="new-project-scene-file-name">Chưa chọn file scene.</span>
+        </div>
+        <label for="new-project-save-location-input">Vị trí lưu</label>
+        <div class="file-import-row">
+          <input
+            id="new-project-save-location-input"
+            readonly
+            placeholder="Chưa chọn folder lưu"
+          />
+          <button
+            id="new-project-choose-location-btn"
+            class="ghost"
+            type="button"
+          >
+            Chọn vị trí lưu
+          </button>
+        </div>
+        <div class="dialog-actions">
+          <button
+            id="new-project-create-btn"
+            class="ghost primary"
+            value="default"
+            type="button"
+          >
+            Tạo project
+          </button>
+          <button class="ghost" value="cancel" type="submit">Hủy</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="asset-review-dialog" class="asset-review-dialog">
+      <form method="dialog" class="asset-review-card">
+        <div class="asset-review-header">
+          <div>
+            <span id="review-scene-kicker" class="preview-label"
+              >Scene review</span
+            >
+            <h2 id="review-scene-title">Chưa có scene</h2>
+            <p id="review-scene-status">
+              Chạy pipeline để tạo ảnh/video rồi review tại đây.
+            </p>
+          </div>
+          <button class="icon-btn" value="cancel" type="submit">×</button>
+        </div>
+
+        <div class="asset-review-grid prompt-review-grid">
+          <aside class="asset-review-info">
+            <h3>Scene gốc</h3>
+            <div id="review-original" class="review-text-box">—</div>
+            <h3>Trạng thái</h3>
+            <div id="review-status-badge"></div>
+          </aside>
+
+          <section id="review-media-panel" class="asset-review-stage" hidden>
+            <div class="zoom-toolbar">
+              <button id="zoom-out-btn" class="mini" type="button">−</button>
+              <input
+                id="zoom-range"
+                type="range"
+                min="60"
+                max="200"
+                value="100"
+              />
+              <button id="zoom-in-btn" class="mini" type="button">+</button>
+            </div>
+            <div id="review-media-stage" class="review-media-stage">
+              <div class="empty-review-media">Chưa có ảnh/video để review.</div>
+            </div>
+          </section>
+
+          <section
+            class="asset-review-prompts prompt-review-panel prompt-review-main"
+          >
+            <h3>Image prompt</h3>
+            <div
+              id="review-image-prompt"
+              class="review-text-box prompt-box-large"
+            >
+              —
+            </div>
+            <div id="review-motion-block">
+              <h3>Motion prompt</h3>
+              <div
+                id="review-motion-prompt"
+                class="review-text-box prompt-box-large"
+              >
+                —
+              </div>
+            </div>
+          </section>
+
+          <aside class="asset-review-actions">
+            <h3>Thao tác</h3>
+            <p class="review-hint">
+              Review prompt tại đây. Ảnh/video chỉ hiện sau khi tạo asset xong.
+            </p>
+            <div class="dialog-actions stacked-actions">
+              <button id="review-edit-image-btn" class="ghost" type="button">
+                Sửa image prompt
+              </button>
+              <button id="review-edit-motion-btn" class="ghost" type="button">
+                Sửa motion prompt
+              </button>
+              <button id="review-regenerate-btn" class="ghost" type="button">
+                Tạo lại scene này
+              </button>
+              <button
+                id="review-approve-btn"
+                class="ghost success"
+                type="button"
+              >
+                Ổn / Next scene
+              </button>
+            </div>
+          </aside>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="editor-dialog">
+      <form method="dialog" class="dialog-card">
+        <div class="panel-head split">
+          <div>
+            <h2 id="dialog-title">Edit prompt</h2>
+            <p>Sửa trực tiếp output trước khi approve.</p>
+          </div>
+          <button class="icon-btn" value="cancel" type="submit">×</button>
+        </div>
+        <label for="editor-textarea">Nội dung</label>
+        <textarea id="editor-textarea" rows="18"></textarea>
+        <div class="dialog-actions">
+          <button
+            id="save-edit-btn"
+            class="ghost primary"
+            value="default"
+            type="button"
+          >
+            Lưu sửa
+          </button>
+          <button class="ghost" value="cancel" type="submit">Đóng</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="settings-dialog" class="settings-dialog">
+      <form method="dialog" class="dialog-card settings-card">
+        <div class="panel-head split">
+          <div>
+            <span class="preview-label">Settings</span>
+            <h2>Workflow config</h2>
+            <p>Chỉnh cách pipeline dừng review và thao tác review ảnh/video.</p>
+          </div>
+          <button class="icon-btn" value="cancel" type="submit">×</button>
+        </div>
+
+        <section class="settings-section">
+          <h3>Review automation</h3>
+          <label class="auto-review-toggle settings-toggle">
+            <input id="skip-review-toggle" type="checkbox" />
+            <span>Tự động hoàn toàn, không dừng bất kỳ review nào</span>
+          </label>
+          <div class="settings-grid">
+            <label class="auto-review-toggle settings-toggle">
+              <input id="skip-prompt-review-toggle" type="checkbox" />
+              <span>Bỏ review prompt</span>
+            </label>
+            <label class="auto-review-toggle settings-toggle">
+              <input id="skip-image-review-toggle" type="checkbox" />
+              <span>Bỏ review ảnh</span>
+            </label>
+            <label class="auto-review-toggle settings-toggle">
+              <input id="skip-video-review-toggle" type="checkbox" />
+              <span>Bỏ review video</span>
+            </label>
+          </div>
+          <p class="settings-help">
+            Nếu bật tự động hoàn toàn, 3 tuỳ chọn review riêng sẽ được bỏ qua vì
+            pipeline tự chạy hết.
+          </p>
+        </section>
+
+        <section class="settings-section">
+          <h3>Continuity references</h3>
+          <label class="auto-review-toggle settings-toggle">
+            <input id="continuity-refs-toggle" type="checkbox" checked />
+            <span>Use previous video references for continuity</span>
+          </label>
+          <div class="settings-grid">
+            <label>
+              Max key frames
+              <select id="continuity-max-keyframes-select">
+                <option value="2">2</option>
+                <option value="3" selected>3</option>
+              </select>
+            </label>
+            <label class="auto-review-toggle settings-toggle">
+              <input id="continuity-chatgpt-toggle" type="checkbox" checked />
+              <span>Send references to ChatGPT</span>
+            </label>
+            <label class="auto-review-toggle settings-toggle">
+              <input id="continuity-grok-toggle" type="checkbox" />
+              <span>Send extra references to Grok</span>
+            </label>
           </div>
         </section>
 
-        <section class="asset-review-prompts prompt-review-panel prompt-review-main">
-          <h3>Image prompt</h3>
-          <div id="review-image-prompt" class="review-text-box prompt-box-large">—</div>
-          <div id="review-motion-block">
-            <h3>Motion prompt</h3>
-            <div id="review-motion-prompt" class="review-text-box prompt-box-large">—</div>
+        <section class="settings-section">
+          <h3>Grok recovery</h3>
+          <div class="settings-grid">
+            <label>
+              Max retry
+              <input
+                id="grok-result-retry-limit"
+                type="number"
+                min="0"
+                max="10"
+                step="1"
+                value="2"
+              />
+            </label>
+          </div>
+          <p class="settings-help">
+            Khi Grok lỗi trang/image hoặc không trả video hợp lệ, tool sẽ upload
+            lại ảnh tham chiếu và gửi lại đúng motion prompt scene hiện tại.
+          </p>
+        </section>
+
+        <section class="settings-section">
+          <h3>Prompt cứng</h3>
+          <p class="settings-help">
+            Mở các file prompt cứng trong thư mục dữ liệu app để xem/chỉnh
+            prompt nền.
+          </p>
+          <div style="display: flex; gap: 8px; flex-wrap: wrap">
+            <button id="open-nv1-prompt-btn" class="ghost" type="button">
+              Mở NV1_TAO_ANH.txt
+            </button>
+            <button id="open-nv2-prompt-btn" class="ghost" type="button">
+              Mở NV2_MOTION_PROMPT.txt
+            </button>
+          </div>
+          <div
+            class="setting-row"
+            style="margin-top: 15px; display: flex; align-items: center"
+          >
+            <label
+              for="custom-target-scenes-input"
+              style="font-weight: bold; color: #fff; margin-right: 10px"
+              >Số scene muốn chạy (1-100):</label
+            >
+            <input
+              type="number"
+              id="custom-target-scenes-input"
+              min="1"
+              max="100"
+              class="form-control"
+              style="
+                width: 90px;
+                background-color: #1e1e2f;
+                color: #fff;
+                border: 1px solid #444;
+                padding: 5px;
+                border-radius: 4px;
+              "
+            />
           </div>
         </section>
 
-        <aside class="asset-review-actions">
-          <h3>Thao tác</h3>
-          <p class="review-hint">Review prompt tại đây. Ảnh/video chỉ hiện sau khi tạo asset xong.</p>
-          <div class="dialog-actions stacked-actions">
-            <button id="review-edit-image-btn" class="ghost" type="button">Sửa image prompt</button>
-            <button id="review-edit-motion-btn" class="ghost" type="button">Sửa motion prompt</button>
-            <button id="review-regenerate-btn" class="ghost" type="button">Tạo lại scene này</button>
-            <button id="review-approve-btn" class="ghost success" type="button">Ổn / Next scene</button>
+        <section class="settings-section">
+          <h3>Account ChatGPT / Grok</h3>
+          <p class="settings-help">
+            Account được mã hóa bằng Electron safeStorage trên máy này. Tool chỉ
+            tự điền login, không bypass 2FA/Cloudflare và không ghi password vào
+            log/project.
+          </p>
+          <div class="settings-grid credential-grid">
+            <label>
+              Provider
+              <select id="web-account-provider-select">
+                <option value="chatgpt">ChatGPT</option>
+                <option value="grok">Grok</option>
+              </select>
+            </label>
+            <label>
+              Nhãn
+              <input
+                id="web-account-label-input"
+                placeholder="Acc chính / Acc phụ"
+              />
+            </label>
+            <label>
+              Email
+              <input
+                id="web-account-email-input"
+                type="email"
+                autocomplete="username"
+                placeholder="name@example.com"
+              />
+            </label>
+            <label class="settings-field-wide">
+              Password
+              <input
+                id="web-account-password-input"
+                type="password"
+                autocomplete="current-password"
+                placeholder="Chỉ lưu mã hóa local"
+              />
+            </label>
           </div>
-        </aside>
-      </div>
-    </form>
-  </dialog>
+          <div class="dialog-actions compact-actions">
+            <button
+              id="web-account-save-btn"
+              class="ghost primary"
+              type="button"
+            >
+              Lưu account mã hóa
+            </button>
+            <button id="web-account-refresh-btn" class="ghost" type="button">
+              Refresh danh sách
+            </button>
+          </div>
+          <div class="credential-lists">
+            <div>
+              <strong>ChatGPT</strong>
+              <div
+                id="web-chatgpt-account-list"
+                class="credential-account-list"
+              ></div>
+            </div>
+            <div>
+              <strong>Grok</strong>
+              <div
+                id="web-grok-account-list"
+                class="credential-account-list"
+              ></div>
+            </div>
+          </div>
+        </section>
 
-  <dialog id="editor-dialog">
-    <form method="dialog" class="dialog-card">
-      <div class="panel-head split">
-        <div>
-          <h2 id="dialog-title">Edit prompt</h2>
-          <p>Sửa trực tiếp output trước khi approve.</p>
+        <section class="settings-section">
+          <h3>Thiết lập tọa độ VeoUp</h3>
+          <p class="settings-help">
+            Căn chỉnh tọa độ Blue Box, Red Box và Start Video để tự động hóa
+            thao tác trong ứng dụng VeoUp (ở chế độ phóng to/maximized).
+          </p>
+          <div class="veoup-calibration-ui">
+            <div
+              class="calibration-row"
+              style="
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 10px;
+              "
+            >
+              <button
+                id="veoup-start-setup-btn"
+                class="ghost primary"
+                type="button"
+              >
+                1. Bắt đầu căn lề (Mở/Tối đa hóa VeoUp)
+              </button>
+              <span
+                id="veoup-setup-status"
+                class="setup-status"
+                style="font-size: 0.9em; font-weight: 700; color: var(--muted)"
+                >Chưa thiết lập</span
+              >
+            </div>
+            <div
+              class="calibration-steps"
+              id="veoup-calibration-steps"
+              style="
+                display: none;
+                margin-top: 10px;
+                padding: 10px;
+                border: 1px dashed var(--line);
+                border-radius: 12px;
+                background: rgba(0, 0, 0, 0.15);
+              "
+            >
+              <p
+                id="veoup-calibration-instruction"
+                style="
+                  font-size: 0.95em;
+                  color: #ff9800;
+                  margin-bottom: 12px;
+                  font-weight: 700;
+                "
+              ></p>
+              <div
+                style="
+                  display: flex;
+                  flex-direction: column;
+                  gap: 8px;
+                  font-size: 0.9em;
+                "
+              >
+                <div
+                  id="veoup-step-1-row"
+                  style="
+                    display: flex;
+                    align-items: center;
+                    justify-content: space-between;
+                    padding: 4px 8px;
+                    border-radius: 6px;
+                    background: rgba(255, 255, 255, 0.03);
+                    opacity: 0.5;
+                  "
+                >
+                  <span>Bước 1/3: Vùng "Đã chọn 0 ảnh" (Blue Box)</span>
+                  <span id="veoup-step-1-status" class="badge"
+                    >Chờ ghi nhận</span
+                  >
+                </div>
+                <div
+                  id="veoup-step-2-row"
+                  style="
+                    display: flex;
+                    align-items: center;
+                    justify-content: space-between;
+                    padding: 4px 8px;
+                    border-radius: 6px;
+                    background: rgba(255, 255, 255, 0.03);
+                    opacity: 0.5;
+                  "
+                >
+                  <span>Bước 2/3: Vùng nhập prompt (Red Box)</span>
+                  <span id="veoup-step-2-status" class="badge"
+                    >Chờ ghi nhận</span
+                  >
+                </div>
+                <div
+                  id="veoup-step-3-row"
+                  style="
+                    display: flex;
+                    align-items: center;
+                    justify-content: space-between;
+                    padding: 4px 8px;
+                    border-radius: 6px;
+                    background: rgba(255, 255, 255, 0.03);
+                    opacity: 0.5;
+                  "
+                >
+                  <span>Bước 3/3: Nút "Bắt đầu tạo video" (Start Button)</span>
+                  <span id="veoup-step-3-status" class="badge"
+                    >Chờ ghi nhận</span
+                  >
+                </div>
+              </div>
+              <div style="margin-top: 12px; text-align: right">
+                <button
+                  id="veoup-cancel-setup-btn"
+                  class="ghost mini danger"
+                  type="button"
+                  style="min-height: 30px; height: 30px; font-size: 11px"
+                >
+                  Hủy thiết lập
+                </button>
+              </div>
+            </div>
+            <div
+              id="veoup-coords-display"
+              style="
+                margin-top: 10px;
+                font-size: 0.85em;
+                font-family: monospace;
+                color: var(--muted);
+              "
+            ></div>
+            <div style="margin-top: 8px">
+              <label
+                class="settings-toggle"
+                style="
+                  display: flex;
+                  align-items: center;
+                  gap: 8px;
+                  font-size: 0.9em;
+                  cursor: pointer;
+                "
+              >
+                <input id="veoup-preview-start-only-toggle" type="checkbox" />
+                <span
+                  >Chỉ di chuyển chuột tới nút Start để kiểm tra, không bấm tạo
+                  video</span
+                >
+              </label>
+            </div>
+            <div
+              class="dialog-actions compact-actions"
+              style="margin-top: 10px"
+            >
+              <button
+                id="veoup-delete-setup-btn"
+                class="ghost danger"
+                type="button"
+                style="min-height: 34px; height: 34px; font-size: 12px"
+              >
+                Xóa tọa độ đã lưu
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <section class="settings-section">
+          <h3>Review viewer shortcuts</h3>
+          <ul class="settings-shortcuts">
+            <li>
+              <kbd>Ctrl</kbd> + <kbd>+</kbd>/<kbd>-</kbd> zoom ảnh/video review
+            </li>
+            <li><kbd>Ctrl</kbd> + <kbd>0</kbd> reset zoom 100%</li>
+            <li>Giữ <kbd>Space</kbd> rồi kéo chuột để di chuyển vùng zoom</li>
+          </ul>
+        </section>
+
+        <div class="dialog-actions">
+          <button
+            id="settings-save-btn"
+            class="ghost primary"
+            value="default"
+            type="button"
+          >
+            Lưu settings
+          </button>
+          <button class="ghost" value="cancel" type="submit">Đóng</button>
         </div>
-        <button class="icon-btn" value="cancel" type="submit">×</button>
-      </div>
-      <label for="editor-textarea">Nội dung</label>
-      <textarea id="editor-textarea" rows="18"></textarea>
-      <div class="dialog-actions">
-        <button id="save-edit-btn" class="ghost primary" value="default" type="button">Lưu sửa</button>
-        <button class="ghost" value="cancel" type="submit">Đóng</button>
-      </div>
-    </form>
-  </dialog>
+      </form>
+    </dialog>
 
-  <dialog id="settings-dialog" class="settings-dialog">
-    <form method="dialog" class="dialog-card settings-card">
-      <div class="panel-head split">
-        <div>
-          <span class="preview-label">Settings</span>
-          <h2>Workflow config</h2>
-          <p>Chỉnh cách pipeline dừng review và thao tác review ảnh/video.</p>
+    <dialog id="account-required-dialog">
+      <form method="dialog" class="dialog-card">
+        <div class="panel-head split">
+          <div>
+            <span class="preview-label">Account required</span>
+            <h2 id="account-required-title">
+              Cần account để đăng nhập tự động
+            </h2>
+            <p id="account-required-desc">
+              Nhập account để tool mã hóa local rồi tiếp tục pipeline.
+            </p>
+          </div>
+          <button class="icon-btn" value="cancel" type="submit">×</button>
         </div>
-        <button class="icon-btn" value="cancel" type="submit">×</button>
-      </div>
-
-      <section class="settings-section">
-        <h3>Review automation</h3>
-        <label class="auto-review-toggle settings-toggle">
-          <input id="skip-review-toggle" type="checkbox" />
-          <span>Tự động hoàn toàn, không dừng bất kỳ review nào</span>
-        </label>
+        <input id="account-required-provider" type="hidden" />
         <div class="settings-grid">
-          <label class="auto-review-toggle settings-toggle">
-            <input id="skip-prompt-review-toggle" type="checkbox" />
-            <span>Bỏ review prompt</span>
-          </label>
-          <label class="auto-review-toggle settings-toggle">
-            <input id="skip-image-review-toggle" type="checkbox" />
-            <span>Bỏ review ảnh</span>
-          </label>
-          <label class="auto-review-toggle settings-toggle">
-            <input id="skip-video-review-toggle" type="checkbox" />
-            <span>Bỏ review video</span>
-          </label>
-        </div>
-        <p class="settings-help">Nếu bật tự động hoàn toàn, 3 tuỳ chọn review riêng sẽ được bỏ qua vì pipeline tự chạy hết.</p>
-      </section>
-
-      <section class="settings-section">
-        <h3>Continuity references</h3>
-        <label class="auto-review-toggle settings-toggle">
-          <input id="continuity-refs-toggle" type="checkbox" checked />
-          <span>Use previous video references for continuity</span>
-        </label>
-        <div class="settings-grid">
-          <label>
-            Max key frames
-            <select id="continuity-max-keyframes-select">
-              <option value="2">2</option>
-              <option value="3" selected>3</option>
-            </select>
-          </label>
-          <label class="auto-review-toggle settings-toggle">
-            <input id="continuity-chatgpt-toggle" type="checkbox" checked />
-            <span>Send references to ChatGPT</span>
-          </label>
-          <label class="auto-review-toggle settings-toggle">
-            <input id="continuity-grok-toggle" type="checkbox" />
-            <span>Send extra references to Grok</span>
-          </label>
-        </div>
-      </section>
-
-      <section class="settings-section">
-        <h3>Grok recovery</h3>
-        <div class="settings-grid">
-          <label>
-            Max retry
-            <input id="grok-result-retry-limit" type="number" min="0" max="10" step="1" value="2" />
-          </label>
-        </div>
-        <p class="settings-help">Khi Grok lỗi trang/image hoặc không trả video hợp lệ, tool sẽ upload lại ảnh tham chiếu và gửi lại đúng motion prompt scene hiện tại.</p>
-      </section>
-
-      <section class="settings-section">
-        <h3>Prompt cứng</h3>
-        <p class="settings-help">Mở các file prompt cứng trong thư mục dữ liệu app để xem/chỉnh prompt nền.</p>
-        <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-          <button id="open-nv1-prompt-btn" class="ghost" type="button">Mở NV1_TAO_ANH.txt</button>
-          <button id="open-nv2-prompt-btn" class="ghost" type="button">Mở NV2_MOTION_PROMPT.txt</button>
-        </div>
-        <div class="setting-row" style="margin-top: 15px; display: flex; align-items: center;">
-          <label for="custom-target-scenes-input" style="font-weight: bold; color: #fff; margin-right: 10px;">Số scene muốn chạy (1-100):</label>
-          <input type="number" id="custom-target-scenes-input" value="50" min="1" max="100" class="form-control" style="width: 90px; background-color: #1e1e2f; color: #fff; border: 1px solid #444; padding: 5px; border-radius: 4px;">
-        </div>
-      </section>
-
-      <section class="settings-section">
-        <h3>Account ChatGPT / Grok</h3>
-        <p class="settings-help">Account được mã hóa bằng Electron safeStorage trên máy này. Tool chỉ tự điền login, không bypass 2FA/Cloudflare và không ghi password vào log/project.</p>
-        <div class="settings-grid credential-grid">
-          <label>
-            Provider
-            <select id="web-account-provider-select">
-              <option value="chatgpt">ChatGPT</option>
-              <option value="grok">Grok</option>
-            </select>
-          </label>
           <label>
             Nhãn
-            <input id="web-account-label-input" placeholder="Acc chính / Acc phụ" />
+            <input
+              id="account-required-label-input"
+              placeholder="Acc dự phòng"
+            />
           </label>
           <label>
             Email
-            <input id="web-account-email-input" type="email" autocomplete="username" placeholder="name@example.com" />
+            <input
+              id="account-required-email-input"
+              type="email"
+              autocomplete="username"
+            />
           </label>
           <label class="settings-field-wide">
             Password
-            <input id="web-account-password-input" type="password" autocomplete="current-password" placeholder="Chỉ lưu mã hóa local" />
+            <input
+              id="account-required-password-input"
+              type="password"
+              autocomplete="current-password"
+            />
           </label>
         </div>
-        <div class="dialog-actions compact-actions">
-          <button id="web-account-save-btn" class="ghost primary" type="button">Lưu account mã hóa</button>
-          <button id="web-account-refresh-btn" class="ghost" type="button">Refresh danh sách</button>
+        <p class="settings-help">
+          Password chỉ gửi qua IPC nội bộ để main process mã hóa bằng
+          safeStorage, không lưu vào project và không hiện trong log.
+        </p>
+        <div class="dialog-actions">
+          <button
+            id="account-required-save-btn"
+            class="ghost primary"
+            type="button"
+          >
+            Lưu và tiếp tục
+          </button>
+          <button class="ghost" value="cancel" type="submit">Hủy</button>
         </div>
-        <div class="credential-lists">
-          <div>
-            <strong>ChatGPT</strong>
-            <div id="web-chatgpt-account-list" class="credential-account-list"></div>
-          </div>
-          <div>
-            <strong>Grok</strong>
-            <div id="web-grok-account-list" class="credential-account-list"></div>
-          </div>
-        </div>
-      </section>
+      </form>
+    </dialog>
 
-      <section class="settings-section">
-        <h3>Thiết lập tọa độ VeoUp</h3>
-        <p class="settings-help">Căn chỉnh tọa độ Blue Box, Red Box và Start Video để tự động hóa thao tác trong ứng dụng VeoUp (ở chế độ phóng to/maximized).</p>
-        <div class="veoup-calibration-ui">
-          <div class="calibration-row" style="display: flex; align-items: center; justify-content: space-between; gap: 10px;">
-            <button id="veoup-start-setup-btn" class="ghost primary" type="button">1. Bắt đầu căn lề (Mở/Tối đa hóa VeoUp)</button>
-            <span id="veoup-setup-status" class="setup-status" style="font-size: 0.9em; font-weight: 700; color: var(--muted);">Chưa thiết lập</span>
-          </div>
-          <div class="calibration-steps" id="veoup-calibration-steps" style="display: none; margin-top: 10px; padding: 10px; border: 1px dashed var(--line); border-radius: 12px; background: rgba(0,0,0,0.15);">
-            <p id="veoup-calibration-instruction" style="font-size: 0.95em; color: #ff9800; margin-bottom: 12px; font-weight: 700;"></p>
-            <div style="display: flex; flex-direction: column; gap: 8px; font-size: 0.9em;">
-              <div id="veoup-step-1-row" style="display: flex; align-items: center; justify-content: space-between; padding: 4px 8px; border-radius: 6px; background: rgba(255,255,255,0.03); opacity: 0.5;">
-                <span>Bước 1/3: Vùng "Đã chọn 0 ảnh" (Blue Box)</span>
-                <span id="veoup-step-1-status" class="badge">Chờ ghi nhận</span>
-              </div>
-              <div id="veoup-step-2-row" style="display: flex; align-items: center; justify-content: space-between; padding: 4px 8px; border-radius: 6px; background: rgba(255,255,255,0.03); opacity: 0.5;">
-                <span>Bước 2/3: Vùng nhập prompt (Red Box)</span>
-                <span id="veoup-step-2-status" class="badge">Chờ ghi nhận</span>
-              </div>
-              <div id="veoup-step-3-row" style="display: flex; align-items: center; justify-content: space-between; padding: 4px 8px; border-radius: 6px; background: rgba(255,255,255,0.03); opacity: 0.5;">
-                <span>Bước 3/3: Nút "Bắt đầu tạo video" (Start Button)</span>
-                <span id="veoup-step-3-status" class="badge">Chờ ghi nhận</span>
-              </div>
-            </div>
-            <div style="margin-top: 12px; text-align: right;">
-              <button id="veoup-cancel-setup-btn" class="ghost mini danger" type="button" style="min-height:30px; height:30px; font-size:11px;">Hủy thiết lập</button>
-            </div>
-          </div>
-          <div id="veoup-coords-display" style="margin-top: 10px; font-size: 0.85em; font-family: monospace; color: var(--muted);"></div>
-          <div style="margin-top: 8px;">
-            <label class="settings-toggle" style="display: flex; align-items: center; gap: 8px; font-size: 0.9em; cursor: pointer;">
-              <input id="veoup-preview-start-only-toggle" type="checkbox" />
-              <span>Chỉ di chuyển chuột tới nút Start để kiểm tra, không bấm tạo video</span>
-            </label>
-          </div>
-          <div class="dialog-actions compact-actions" style="margin-top: 10px;">
-            <button id="veoup-delete-setup-btn" class="ghost danger" type="button" style="min-height:34px; height:34px; font-size:12px;">Xóa tọa độ đã lưu</button>
-          </div>
-        </div>
-      </section>
-
-      <section class="settings-section">
-        <h3>Review viewer shortcuts</h3>
-        <ul class="settings-shortcuts">
-          <li><kbd>Ctrl</kbd> + <kbd>+</kbd>/<kbd>-</kbd> zoom ảnh/video review</li>
-          <li><kbd>Ctrl</kbd> + <kbd>0</kbd> reset zoom 100%</li>
-          <li>Giữ <kbd>Space</kbd> rồi kéo chuột để di chuyển vùng zoom</li>
-        </ul>
-      </section>
-
-      <div class="dialog-actions">
-        <button id="settings-save-btn" class="ghost primary" value="default" type="button">Lưu settings</button>
-        <button class="ghost" value="cancel" type="submit">Đóng</button>
-      </div>
-    </form>
-  </dialog>
-
-  <dialog id="account-required-dialog">
-    <form method="dialog" class="dialog-card">
-      <div class="panel-head split">
-        <div>
-          <span class="preview-label">Account required</span>
-          <h2 id="account-required-title">Cần account để đăng nhập tự động</h2>
-          <p id="account-required-desc">Nhập account để tool mã hóa local rồi tiếp tục pipeline.</p>
-        </div>
-        <button class="icon-btn" value="cancel" type="submit">×</button>
-      </div>
-      <input id="account-required-provider" type="hidden" />
-      <div class="settings-grid">
-        <label>
-          Nhãn
-          <input id="account-required-label-input" placeholder="Acc dự phòng" />
-        </label>
-        <label>
-          Email
-          <input id="account-required-email-input" type="email" autocomplete="username" />
-        </label>
-        <label class="settings-field-wide">
-          Password
-          <input id="account-required-password-input" type="password" autocomplete="current-password" />
-        </label>
-      </div>
-      <p class="settings-help">Password chỉ gửi qua IPC nội bộ để main process mã hóa bằng safeStorage, không lưu vào project và không hiện trong log.</p>
-      <div class="dialog-actions">
-        <button id="account-required-save-btn" class="ghost primary" type="button">Lưu và tiếp tục</button>
-        <button class="ghost" value="cancel" type="submit">Hủy</button>
-      </div>
-    </form>
-  </dialog>
-
-  <script src="renderer.js"></script>
-</body>
-
+    <script src="renderer.js"></script>
+  </body>
 </html>

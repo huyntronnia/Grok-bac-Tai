@@ -179,7 +179,7 @@ function getRecoveryDecision(reason, attempt = 0) {
   }
 }
 
-function shouldRotateConversation({ sceneOrdinal = 0, conversationStartedAt = 0, assistantMessageCount = 0, domNodeCount = 0, repeatedComposerBusy = 0, repeatedWrongTarget = 0, rotateEveryScenes = 3 } = {}) {
+function shouldRotateConversation({ sceneOrdinal = 0, conversationStartedAt = 0, assistantMessageCount = 0, domNodeCount = 0, repeatedComposerBusy = 0, repeatedWrongTarget = 0, rotateEveryScenes = 20 } = {}) {
   const now = Date.now();
   if (sceneOrdinal > 0 && sceneOrdinal % rotateEveryScenes === 0) return { rotate: true, reason: 'scene-interval' };
   if (conversationStartedAt && now - Number(conversationStartedAt) > CHATGPT_STABILITY_DEFAULTS.maxConversationAgeMs) return { rotate: true, reason: 'conversation-age' };

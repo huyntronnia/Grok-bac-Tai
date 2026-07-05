@@ -6,6 +6,7 @@
   "scripts": {
     "start": "electron .",
     "dev": "electron .",
+    "test": "node tests/partial-mode-cleanup.test.js && node tests/pipeline-stop-cancellation.test.js && node tests/veoup-output-lifecycle.test.js && node tests/chatgpt-stage-isolation.test.js",
     "dist": "electron-builder --win nsis --x64"
   },
   "keywords": [
