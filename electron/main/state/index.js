@@ -1,1 +1,2 @@
-module.exports = {};
+const state = require("./state");
+module.exports = state;
