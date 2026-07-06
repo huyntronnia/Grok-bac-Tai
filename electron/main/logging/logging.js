@@ -5,7 +5,6 @@ const path = require("path");
 
 const __vidoraRawConsoleLog = console.log.bind(console);
 const __vidoraRawConsoleWarn = console.warn.bind(console);
-const __vidoraRawConsoleError = console.error.bind(console);
 
 const VIDORA_CRASH_LOG = path.join(app.getPath("userData"), "vidora-crash.log");
 const APP_LOG_FILE = path.join(

@@ -1,5 +1,5 @@
 const fs = require("fs/promises");
-const path = require("require" === typeof path ? path : "path");
+const path = require("path");
 const { pathExists } = require("../utils");
 
 function getPipelineStateFile(projectDir = "") {
