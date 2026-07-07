@@ -1653,7 +1653,757 @@ function detectUploadedAssetScript() {
   };
 }
 
+
+
+function focusPromptInputScript() {
+  const selectors = [
+    "#prompt-textarea",
+    "textarea",
+    'div[contenteditable="true"].ProseMirror',
+    '.ProseMirror[contenteditable="true"]',
+    '[data-testid="composer"] [contenteditable="true"]',
+    'div[contenteditable="true"]',
+    '[role="textbox"]',
+  ];
+  for (const selector of selectors) {
+    const input = document.querySelector(selector);
+    if (!input) continue;
+    input.scrollIntoView({ block: "center" });
+    input.focus();
+    input.click();
+    const selection = window.getSelection();
+    if (input.isContentEditable && selection) {
+      const range = document.createRange();
+      range.selectNodeContents(input);
+      range.collapse(false);
+      selection.removeAllRanges();
+      selection.addRange(range);
+    }
+    return {
+      ok: true,
+      selector,
+      tag: input.tagName,
+      className: input.className || "",
+    };
+  }
+  return { ok: false, error: "Không tìm thấy composer ChatGPT/Grok." };
+}
+
+function setPromptInputValueScript(prompt) {
+  const selectors = [
+    "#prompt-textarea",
+    "textarea",
+    'div[contenteditable="true"].ProseMirror',
+    '.ProseMirror[contenteditable="true"]',
+    '[data-testid="composer"] [contenteditable="true"]',
+    'div[contenteditable="true"]',
+    '[role="textbox"]',
+  ];
+  const input = selectors
+    .map((selector) => document.querySelector(selector))
+    .find(Boolean);
+  if (!input)
+    return { ok: false, error: "Không tìm thấy composer để set prompt." };
+  input.scrollIntoView({ block: "center" });
+  input.focus();
+  input.click();
+  if ("value" in input) {
+    input.value = "";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.value = prompt;
+    input.dispatchEvent(
+      new InputEvent("input", {
+        bubbles: true,
+        inputType: "insertText",
+        data: prompt,
+      }),
+    );
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  } else {
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(input);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    document.execCommand("delete", false, null);
+    document.execCommand("insertText", false, prompt);
+    input.dispatchEvent(
+      new InputEvent("input", {
+        bubbles: true,
+        inputType: "insertText",
+        data: prompt,
+      }),
+    );
+  }
+  return { ok: true };
+}
+
+function deepFocusNv2ComposerScript() {
+  const selectors = ["main form textarea", '[contenteditable="true"]'];
+  const visible = (node) => {
+    const rect = node?.getBoundingClientRect?.();
+    const style = node ? window.getComputedStyle(node) : null;
+    return (
+      rect &&
+      rect.width > 8 &&
+      rect.height > 8 &&
+      style?.display !== "none" &&
+      style?.visibility !== "hidden"
+    );
+  };
+  const item = selectors
+    .flatMap((selector) =>
+      [...document.querySelectorAll(selector)].map((node) => ({
+        node,
+        selector,
+      })),
+    )
+    .filter(({ node }) => visible(node))
+    .sort(
+      (a, b) =>
+        b.node.getBoundingClientRect().bottom -
+        a.node.getBoundingClientRect().bottom,
+    )[0];
+  if (!item) return { ok: false, error: "nv2-composer-not-found" };
+  const { node, selector } = item;
+  node.scrollIntoView({ block: "center", inline: "nearest" });
+  node.click();
+  node.focus();
+  if (node.isContentEditable) {
+    const range = document.createRange();
+    range.selectNodeContents(node);
+    range.collapse(false);
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+  } else if (typeof node.setSelectionRange === "function") {
+    const length = String(node.value || "").length;
+    node.setSelectionRange(length, length);
+  }
+  const rect = node.getBoundingClientRect();
+  return {
+    ok: true,
+    selector,
+    box: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+  };
+}
+
+function clearNv2ComposerScript() {
+  const node =
+    document.querySelector("main form textarea") ||
+    document.querySelector('[contenteditable="true"]');
+  if (!node) return { ok: false, error: "nv2-composer-not-found" };
+  if ("value" in node) node.value = "";
+  else node.textContent = "";
+  node.dispatchEvent(
+    new InputEvent("beforeinput", {
+      bubbles: true,
+      cancelable: true,
+      inputType: "deleteContentBackward",
+      data: null,
+    }),
+  );
+  node.dispatchEvent(
+    new InputEvent("input", {
+      bubbles: true,
+      inputType: "deleteContentBackward",
+      data: null,
+    }),
+  );
+  node.dispatchEvent(new Event("change", { bubbles: true }));
+  return { ok: true };
+}
+
+function dispatchNv2ComposerInputEventsScript(prompt) {
+  const node =
+    document.querySelector("main form textarea") ||
+    document.querySelector('[contenteditable="true"]');
+  if (!node) return { ok: false, error: "nv2-composer-not-found" };
+  node.focus();
+  node.dispatchEvent(
+    new InputEvent("beforeinput", {
+      bubbles: true,
+      cancelable: true,
+      inputType: "insertText",
+      data: String(prompt || ""),
+    }),
+  );
+  node.dispatchEvent(
+    new InputEvent("input", {
+      bubbles: true,
+      inputType: "insertText",
+      data: String(prompt || ""),
+    }),
+  );
+  node.dispatchEvent(new Event("change", { bubbles: true }));
+  return {
+    ok: true,
+    active:
+      document.activeElement === node || node.contains(document.activeElement),
+  };
+}
+
+function forceSubmitChatGptComposerScript() {
+  const norm = (v) => String(v || "").trim();
+  const composer =
+    document.querySelector("#prompt-textarea") ||
+    document.querySelector("textarea") ||
+    document.querySelector('[contenteditable="true"]');
+  if (!composer) return { ok: false, error: "composer-not-found" };
+
+  const visible = (node) => {
+    const rect = node?.getBoundingClientRect?.();
+    return (
+      rect &&
+      rect.width > 8 &&
+      rect.height > 8 &&
+      rect.bottom > 0 &&
+      rect.right > 0
+    );
+  };
+  const isSendButton = (button) => {
+    const label = [
+      button.getAttribute("aria-label"),
+      button.getAttribute("data-testid"),
+      button.id,
+      button.innerText,
+      button.textContent,
+      button.outerHTML,
+    ]
+      .map(norm)
+      .join(" ")
+      .toLowerCase();
+    if (
+      /stop|cancel|voice|micro|tool|search|image|canvas|attach|upload|file/.test(
+        label,
+      )
+    )
+      return false;
+    return /send|submit|composer-submit|send-button|gửi/.test(label);
+  };
+
+  const form = composer.closest("form");
+  const scopedButtons = [...(form || document).querySelectorAll("button")];
+  const sendButton =
+    document.querySelector(
+      'button[data-testid="send-button"]:not([disabled]), button[data-testid="composer-submit-button"]:not([disabled]), button[aria-label="Send prompt"]:not([disabled]), button[aria-label="Send message"]:not([disabled])',
+    ) ||
+    scopedButtons
+      .filter(
+        (button) =>
+          visible(button) &&
+          !button.disabled &&
+          button.getAttribute("aria-disabled") !== "true" &&
+          isSendButton(button),
+      )
+      .sort((a, b) => {
+        const ar = a.getBoundingClientRect();
+        const br = b.getBoundingClientRect();
+        return br.y - ar.y || br.x - ar.x;
+      })[0];
+
+  if (sendButton) {
+    sendButton.dispatchEvent(
+      new PointerEvent("pointerdown", {
+        bubbles: true,
+        pointerId: 1,
+        pointerType: "mouse",
+        isPrimary: true,
+      }),
+    );
+    sendButton.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    sendButton.click();
+    sendButton.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+    return {
+      ok: true,
+      mode: "button",
+      label: norm(
+        sendButton.getAttribute("aria-label") ||
+          sendButton.getAttribute("data-testid") ||
+          sendButton.textContent,
+      ),
+    };
+  }
+
+  if (form && typeof form.requestSubmit === "function") {
+    form.requestSubmit();
+    return { ok: true, mode: "form-requestSubmit" };
+  }
+
+  composer.dispatchEvent(
+    new KeyboardEvent("keydown", {
+      key: "Enter",
+      code: "Enter",
+      bubbles: true,
+      cancelable: true,
+    }),
+  );
+  composer.dispatchEvent(
+    new KeyboardEvent("keyup", {
+      key: "Enter",
+      code: "Enter",
+      bubbles: true,
+      cancelable: true,
+    }),
+  );
+  return { ok: true, mode: "enter-dispatch" };
+}
+
+function inspectAndClickChatGptSendButton() {
+  const selectors = [
+    'button[data-testid="send-button"]',
+    'button[data-testid="composer-submit-button"]',
+    'button[aria-label="Send prompt"]',
+    'button[aria-label="Send message"]',
+    'button[aria-label*="Send"]',
+    'button[type="submit"]',
+    '[data-testid="composer"] button',
+    "form button",
+  ];
+  let button = null;
+  for (const selector of selectors) {
+    const el = document.querySelector(selector);
+    if (el) {
+      const r = el.getBoundingClientRect();
+      if (r.width > 10 && r.height > 10) {
+        button = el;
+        break;
+      }
+    }
+  }
+
+  if (!button) {
+    return { ok: false, error: "no-button-found" };
+  }
+
+  // Extract real-time state attributes
+  const ariaLabel = (button.getAttribute("aria-label") || "")
+    .toLowerCase()
+    .trim();
+  const innerText = (button.innerText || button.textContent || "")
+    .toLowerCase()
+    .trim();
+  const title = (button.getAttribute("title") || "").toLowerCase().trim();
+
+  // Extract SVG paths / content
+  const svgs = Array.from(button.querySelectorAll("svg"));
+  let hasSquareIcon = false;
+  let hasUpwardArrow = false;
+
+  for (const svg of svgs) {
+    const svgHtml = (svg.innerHTML || "").toLowerCase();
+
+    // Check if SVG has rect, square, stop-circle or classes
+    if (
+      svgHtml.includes("rect") ||
+      svgHtml.includes("square") ||
+      svg.querySelector("rect")
+    ) {
+      hasSquareIcon = true;
+    }
+
+    const paths = Array.from(svg.querySelectorAll("path"));
+    for (const p of paths) {
+      const d = p.getAttribute("d") || "";
+      const cls = (p.getAttribute("class") || "").toLowerCase();
+      const id = (p.getAttribute("id") || "").toLowerCase();
+
+      // Stop/square indicators in path
+      if (
+        cls.includes("square") ||
+        cls.includes("stop") ||
+        id.includes("square") ||
+        id.includes("stop")
+      ) {
+        hasSquareIcon = true;
+      }
+
+      // Upward-pointing arrow in path
+      if (cls.includes("arrow") || cls.includes("up") || cls.includes("send")) {
+        hasUpwardArrow = true;
+      }
+    }
+  }
+
+  // Combine all strings for checking
+  const combinedText = [ariaLabel, innerText, title].join(" ");
+
+  // 1. Check for Stop / Cancel / Dừng / Dừng suy nghĩ / Dừng trả lời
+  const isStopText = /stop|cancel|dừng|abort/i.test(combinedText);
+  const isStop = isStopText || hasSquareIcon;
+
+  if (isStop) {
+    return { ok: true, status: "already-sent-safely", isStop: true };
+  }
+
+  // 2. Check for Send / Submit / Gửi
+  const isSendText = /gửi|send|submit/i.test(combinedText);
+  const isSendTestId =
+    button.getAttribute("data-testid") === "send-button" ||
+    button.getAttribute("data-testid") === "composer-submit-button";
+
+  // Allow if it strictly represents a Send action (label contains "Gửi", "Send", or SVG path has upward arrow, or is a send test-id)
+  const isSend =
+    isSendText ||
+    isSendTestId ||
+    hasUpwardArrow ||
+    (svgs.length > 0 && !hasSquareIcon);
+
+  if (!isSend) {
+    return {
+      ok: false,
+      error: "button-is-not-send-action",
+      label: ariaLabel,
+      innerText,
+    };
+  }
+
+  if (button.disabled || button.getAttribute("aria-disabled") === "true") {
+    return { ok: false, error: "button-disabled", label: ariaLabel };
+  }
+
+  // Execute DOM .click() directly on the button node inside the page
+  button.click();
+  const rect = button.getBoundingClientRect();
+  return {
+    ok: true,
+    status: "clicked",
+    selector:
+      button.getAttribute("data-testid") ||
+      button.getAttribute("aria-label") ||
+      "submit-button",
+    rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+  };
+}
+
+function inspectAndClickChatGptSendButtonSafely() {
+  const norm = (value) =>
+    String(value || "")
+      .trim()
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/\s+/g, " ");
+  const visible = (node) => {
+    const rect = node?.getBoundingClientRect?.();
+    return (
+      rect &&
+      rect.width > 10 &&
+      rect.height > 10 &&
+      rect.bottom > 0 &&
+      rect.right > 0
+    );
+  };
+  const labelOf = (button) =>
+    [
+      button.getAttribute("aria-label"),
+      button.getAttribute("data-testid"),
+      button.getAttribute("title"),
+      button.getAttribute("type"),
+      button.id,
+      button.innerText,
+      button.textContent,
+      button.outerHTML,
+    ]
+      .map(norm)
+      .join(" ");
+  const isStopButton = (button) => {
+    const label = labelOf(button);
+    if (
+      /tool|tools|search|image|canvas|attach|upload|file|voice|micro|record|dictate|plus|paperclip|add files|deep research|web/.test(
+        label,
+      )
+    )
+      return false;
+    const hasSquareIcon = Array.from(button.querySelectorAll("svg")).some(
+      (svg) => {
+        const html = norm(svg.innerHTML);
+        return (
+          html.includes("rect") ||
+          html.includes("square") ||
+          svg.querySelector("rect")
+        );
+      },
+    );
+    return /stop|cancel|abort|dung|composer.*stop/.test(label) || hasSquareIcon;
+  };
+  const isRejectedToolButton = (button) => {
+    const label = labelOf(button);
+    return /tool|tools|search|image|canvas|attach|upload|file|voice|micro|record|dictate|plus|paperclip|add files|deep research|web/.test(
+      label,
+    );
+  };
+  const isStrictSendButton = (button) => {
+    if (
+      !visible(button) ||
+      button.disabled ||
+      button.getAttribute("aria-disabled") === "true"
+    )
+      return false;
+    if (isStopButton(button) || isRejectedToolButton(button)) return false;
+    const label = labelOf(button);
+    return (
+      button.getAttribute("data-testid") === "send-button" ||
+      button.getAttribute("data-testid") === "composer-submit-button" ||
+      /(^|\s)(send|gui|submit)(\s|$)/.test(label) ||
+      /composer-submit|send-button|send prompt|send message|arrow-up|paper-plane/.test(
+        label,
+      )
+    );
+  };
+
+  const composer =
+    document.querySelector("#prompt-textarea") ||
+    document.querySelector("textarea") ||
+    document.querySelector('[contenteditable="true"]');
+  const root =
+    composer?.closest("form") ||
+    composer?.closest('[data-testid="composer"]') ||
+    composer?.closest('[role="main"]') ||
+    document;
+  const buttons = Array.from(root.querySelectorAll("button"));
+  const stopButton = buttons.find(
+    (button) => visible(button) && isStopButton(button),
+  );
+  if (stopButton) {
+    return {
+      ok: true,
+      status: "already-sent-safely",
+      isStop: true,
+      selector:
+        stopButton.getAttribute("data-testid") ||
+        stopButton.getAttribute("aria-label") ||
+        "stop-button",
+    };
+  }
+
+  const button =
+    document.querySelector(
+      'button[data-testid="send-button"]:not([disabled]), button[data-testid="composer-submit-button"]:not([disabled]), button[aria-label="Send prompt"]:not([disabled]), button[aria-label="Send message"]:not([disabled])',
+    ) ||
+    buttons.filter(isStrictSendButton).sort((a, b) => {
+      const ar = a.getBoundingClientRect();
+      const br = b.getBoundingClientRect();
+      return br.y - ar.y || br.x - ar.x;
+    })[0];
+
+  if (!button)
+    return {
+      ok: false,
+      error: "no-send-button-found",
+      buttonCount: buttons.length,
+    };
+  if (!isStrictSendButton(button))
+    return {
+      ok: false,
+      error: "button-is-not-send-action",
+      label: labelOf(button).slice(0, 240),
+    };
+
+  button.dispatchEvent(
+    new PointerEvent("pointerdown", {
+      bubbles: true,
+      pointerId: 1,
+      pointerType: "mouse",
+      isPrimary: true,
+    }),
+  );
+  button.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+  button.click();
+  button.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+  return {
+    ok: true,
+    status: "clicked",
+    selector:
+      button.getAttribute("data-testid") ||
+      button.getAttribute("aria-label") ||
+      "submit-button",
+  };
+}
+
+function clickSendButtonScript() {
+  const candidates = [
+    ...document.querySelectorAll(
+      'button[data-testid="send-button"], button[data-testid="composer-submit-button"], button[aria-label="Send prompt"], button[aria-label="Send message"], button[aria-label*="Send"], button[type="submit"]',
+    ),
+    ...document.querySelectorAll(
+      'form button, [data-testid="composer"] button, button',
+    ),
+  ];
+  const unique = [...new Set(candidates)];
+  const sendButton = unique.find((button) => {
+    if (button.disabled || button.getAttribute("aria-disabled") === "true")
+      return false;
+    const rect = button.getBoundingClientRect();
+    if (rect.width < 20 || rect.height < 20) return false;
+    const nearComposer =
+      rect.top > window.innerHeight * 0.55 &&
+      rect.left > window.innerWidth * 0.45;
+    if (!nearComposer) return false;
+    const label = `${button.getAttribute("aria-label") || ""} ${button.textContent || ""} ${button.dataset?.testid || ""} ${button.innerHTML || ""}`;
+    if (
+      /voice|mic|microphone|dictate|audio|record|waveform|stop|cancel|square/i.test(
+        label,
+      )
+    )
+      return false;
+    const explicitSend =
+      /send|submit|gửi|arrow-up|composer-submit|send-button|up/i.test(label);
+    const hasUpArrowIcon =
+      /M(?:2|8|12)[^<]{0,80}(?:L|V|H)[^<]{0,80}(?:up|arrow)|rotate\(-?90|arrow-up/i.test(
+        label,
+      );
+    return explicitSend || hasUpArrowIcon;
+  });
+  if (!sendButton) {
+    const disabledCandidates = unique
+      .map((button) => {
+        const rect = button.getBoundingClientRect?.();
+        const label = `${button.getAttribute?.("aria-label") || ""} ${button.textContent || ""} ${button.dataset?.testid || ""} ${button.innerHTML || ""}`;
+        return rect
+          ? {
+              label: label.replace(/\s+/g, " ").slice(0, 180),
+              disabled: Boolean(
+                button.disabled ||
+                button.getAttribute?.("aria-disabled") === "true",
+              ),
+              box: {
+                x: rect.x,
+                y: rect.y,
+                width: rect.width,
+                height: rect.height,
+              },
+            }
+          : null;
+      })
+      .filter(Boolean)
+      .filter((item) =>
+        /send|submit|gửi|arrow-up|composer-submit|send-button|up/i.test(
+          item.label,
+        ),
+      )
+      .slice(0, 8);
+    return {
+      ok: false,
+      error: "Không tìm thấy nút send đang enabled.",
+      disabledCandidates,
+    };
+  }
+  sendButton.scrollIntoView({ block: "center", inline: "center" });
+  sendButton.focus();
+  sendButton.click();
+  const rect = sendButton.getBoundingClientRect();
+  return {
+    ok: true,
+    selector:
+      sendButton.getAttribute("data-testid") ||
+      sendButton.getAttribute("aria-label") ||
+      sendButton.textContent ||
+      "button",
+    box: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+  };
+}
+
+function sendPromptScript(prompt) {
+  const selectors = [
+    "textarea",
+    "#prompt-textarea",
+    'div[contenteditable="true"].ProseMirror',
+    '.ProseMirror[contenteditable="true"]',
+    '[data-testid="composer"] [contenteditable="true"]',
+    'div[contenteditable="true"]',
+    '[role="textbox"]',
+  ];
+  const input = selectors
+    .map((selector) => document.querySelector(selector))
+    .find(Boolean);
+  if (!input)
+    return {
+      ok: false,
+      error: "Không tìm thấy ô nhập prompt Ask anything / composer.",
+    };
+
+  input.scrollIntoView({ block: "center" });
+  input.focus();
+  if (input.tagName === "TEXTAREA") {
+    input.value = prompt;
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  } else {
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(input);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    document.execCommand("delete", false, null);
+    document.execCommand("insertText", false, prompt);
+    input.dispatchEvent(
+      new InputEvent("input", {
+        bubbles: true,
+        inputType: "insertText",
+        data: prompt,
+      }),
+    );
+  }
+
+  const buttons = [...document.querySelectorAll("button")];
+  const sendButton =
+    document.querySelector(
+      'button[data-testid="send-button"], button[data-testid="composer-submit-button"], button[aria-label="Send prompt"], button[aria-label="Send message"]',
+    ) ||
+    buttons.find((button) => {
+      const label = `${button.getAttribute("aria-label") || ""} ${button.textContent || ""} ${button.dataset?.testid || ""} ${button.innerHTML || ""}`;
+      return (
+        /send|submit|gửi|arrow-up|composer-submit|send-button/i.test(label) &&
+        !button.disabled
+      );
+    }) ||
+    buttons
+      .reverse()
+      .find((button) => !button.disabled && button.closest("form"));
+
+  setTimeout(() => {
+    const retryButton = document.querySelector(
+      'button[data-testid="send-button"], button[data-testid="composer-submit-button"], button[aria-label="Send prompt"], button[aria-label="Send message"]',
+    );
+    if (retryButton && !retryButton.disabled) retryButton.click();
+  }, 250);
+
+  if (sendButton && !sendButton.disabled) {
+    sendButton.click();
+    return {
+      ok: true,
+      mode: "button",
+      selector:
+        sendButton.getAttribute("data-testid") ||
+        sendButton.getAttribute("aria-label") ||
+        sendButton.textContent ||
+        "button",
+    };
+  }
+
+  input.dispatchEvent(
+    new KeyboardEvent("keydown", {
+      key: "Enter",
+      code: "Enter",
+      bubbles: true,
+      cancelable: true,
+    }),
+  );
+  return { ok: true, mode: "enter" };
+}
+
 module.exports = {
+  sendPromptScript,
+  clickSendButtonScript,
+  inspectAndClickChatGptSendButtonSafely,
+  inspectAndClickChatGptSendButton,
+  forceSubmitChatGptComposerScript,
+  dispatchNv2ComposerInputEventsScript,
+  clearNv2ComposerScript,
+  deepFocusNv2ComposerScript,
+  setPromptInputValueScript,
+  focusPromptInputScript,
   detectLoginScript,
   countAssistantMessagesScript,
   detectBrowserCrashPageScript,
