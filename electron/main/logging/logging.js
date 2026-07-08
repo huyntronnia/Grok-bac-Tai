@@ -6,11 +6,9 @@ const path = require("path");
 const __vidoraRawConsoleLog = console.log.bind(console);
 const __vidoraRawConsoleWarn = console.warn.bind(console);
 
-const VIDORA_CRASH_LOG = path.join(app.getPath("userData"), "vidora-crash.log");
-const APP_LOG_FILE = path.join(
-  app.getPath("userData"),
-  "ai-video-pipeline.log",
-);
+const userDataPath = app && typeof app.getPath === "function" ? app.getPath("userData") : "";
+const VIDORA_CRASH_LOG = userDataPath ? path.join(userDataPath, "vidora-crash.log") : "vidora-crash.log";
+const APP_LOG_FILE = userDataPath ? path.join(userDataPath, "ai-video-pipeline.log") : "ai-video-pipeline.log";
 
 const SECRET_KEY_PATTERN =
   /(api[_-]?key|cookie|password|passwd|secret|session[_-]?token|refresh[_-]?token|bearer|authorization|localStorage|sessionStorage|browserStorage|rawBrowserStorage)/i;

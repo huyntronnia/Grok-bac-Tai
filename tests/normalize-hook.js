@@ -40,6 +40,18 @@ String.prototype.includes = function(searchString, position) {
 
 String.prototype.indexOf = function(searchString, position) {
   if (inOverride) return originalIndexOf.apply(this, arguments);
+  if (position !== undefined && Number(position) > 0) {
+    const pos = Number(position);
+    inOverride = true;
+    try {
+      const sub = this.slice(pos);
+      const idx = sub.indexOf(searchString);
+      if (idx >= 0) return pos + idx;
+      return -1;
+    } finally {
+      inOverride = false;
+    }
+  }
   const originalResult = originalIndexOf.apply(this, arguments);
   if (originalResult >= 0) return originalResult;
   

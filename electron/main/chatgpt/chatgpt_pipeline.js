@@ -1,10 +1,10 @@
 "use strict";
 
-const { nativeImage } = require("electron");
+const { nativeImage, app } = require("electron");
 const fs = require("fs/promises");
 const path = require("path");
-const { appendAppLog, vidoraCompactLogDetails } = require("../logging");
-const { pathExists } = require("../utils");
+const { appendAppLog, vidoraCompactLogDetails, maskRouterText } = require("../logging");
+const { pathExists, sanitizeFileName } = require("../utils");
 const { logMemoryMilestone } = require("../memory");
 const {
   hashChatGptSnapshotText,
@@ -16,13 +16,21 @@ const {
   verifyDraftOwnership,
   isChatGptDotLoadingCanvasAsset,
   isChatGptLimitText,
+  isSameChatTitle,
 } = require("../state");
+const {
+  getChatGptContextFresh,
+  setChatGptContextFresh,
+} = require("../state/chatgpt_state");
 const {
   detectLoginScript,
   readChatGptImageStateScript,
   countChatGptAssistantRootsScript,
   prepareChatGptCreateImageScript,
   readAssistantMessageSnapshotScript,
+  readLatestAssistantScript,
+  detectChatGptActiveGenerationScriptStrict,
+  clickChatGptStopGeneratingScript,
 } = require("./chatgpt_dom");
 const {
   evaluateOnCdpPage,
@@ -33,9 +41,13 @@ const {
   sendPromptViaCdpInput,
   clickSendButtonViaCdp,
   sendNv2PromptViaDeepCdpInput,
+  vidoraChatGptInputGate,
+  vidoraReadChatGptComposerStateReal,
+  vidoraClickChatGptRealSendButton,
 } = require("./chatgpt_send");
 const {
   uploadFilesToChatGptSequentially,
+  uploadFileToChatGptDirectly,
 } = require("./chatgpt_upload");
 const {
   CHATGPT_STAGES,
@@ -43,36 +55,69 @@ const {
 } = require("../../chatgptStability");
 const {
   requestReloadWithReason,
+  recoverCdpPageIfCrashed,
+  recoverChatGptBlockingUi,
+  recoverChatGptResponseChoiceChat,
+  isReloadBlocked,
 } = require("./chatgpt_recovery");
+const {
+  isChatGptPolicyRefusalText,
+  isRetryableChatGptToolErrorText,
+  normalizeChatGptRetryText,
+} = require("../recovery");
 
 // --- Injected dependencies (set via initChatGptPipeline) ---
 let getCdpPage;
 let tryAutoLoginWithStoredAccount;
 let invalidateChatGptConversationIdentity;
 let loginRequiredMessage;
-let getIsChatGptContextFresh;
 let checkProactiveMemoryGuard;
 let maybeSelectChatGptConversationByTitle;
 let getChatGptLocationState;
 let logChatGptStage;
-let waitForChatGptResponse;
+let updateChatGptConversationIdentity;
+let chatGptConversationIdentityCache;
+let renameChatGptCurrentConversation;
+let collectPrepromptRequestFiles;
+let collectRecentProjectKeyframes;
+let writePipelineSceneState;
+let chatGptConversationHealth;
+let setActiveConversationUrl;
+let captureAndLogChatGptDiagnostics;
+let notifyRenderer;
+let notifyChatGptPolicyRefusal;
+let uploadFileViaCdp;
+let persistDurableStage;
 
 function initChatGptPipeline(runtime) {
   getCdpPage = runtime.getCdpPage;
   tryAutoLoginWithStoredAccount = runtime.tryAutoLoginWithStoredAccount;
   invalidateChatGptConversationIdentity = runtime.invalidateChatGptConversationIdentity;
   loginRequiredMessage = runtime.loginRequiredMessage;
-  getIsChatGptContextFresh = runtime.getIsChatGptContextFresh;
   checkProactiveMemoryGuard = runtime.checkProactiveMemoryGuard;
   maybeSelectChatGptConversationByTitle = runtime.maybeSelectChatGptConversationByTitle;
   getChatGptLocationState = runtime.getChatGptLocationState;
   logChatGptStage = runtime.logChatGptStage;
-  waitForChatGptResponse = runtime.waitForChatGptResponse;
+  updateChatGptConversationIdentity = runtime.updateChatGptConversationIdentity;
+  chatGptConversationIdentityCache = runtime.chatGptConversationIdentityCache;
+  renameChatGptCurrentConversation = runtime.renameChatGptCurrentConversation;
+  collectPrepromptRequestFiles = runtime.collectPrepromptRequestFiles;
+  collectRecentProjectKeyframes = runtime.collectRecentProjectKeyframes;
+  writePipelineSceneState = runtime.writePipelineSceneState;
+  chatGptConversationHealth = runtime.chatGptConversationHealth;
+  setActiveConversationUrl = runtime.setActiveConversationUrl;
+  captureAndLogChatGptDiagnostics = runtime.captureAndLogChatGptDiagnostics;
+  notifyRenderer = runtime.notifyRenderer;
+  notifyChatGptPolicyRefusal = runtime.notifyChatGptPolicyRefusal;
+  uploadFileViaCdp = runtime.uploadFileViaCdp;
+  persistDurableStage = runtime.persistDurableStage;
 }
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+const motionPromptSendLocks = new Map();
 
 async function generateImageAndMotionWithChatGPT({
   imagePrompt,
@@ -166,7 +211,7 @@ async function generateImageAndMotionWithChatGPT({
   snapshot.createdAt = new Date().toISOString();
   await writeSceneSnapshot(sceneDir, snapshot);
 
-  if (!getIsChatGptContextFresh()) {
+  if (!getChatGptContextFresh()) {
     await appendAppLog(sceneId, {
       source: "main",
       kind: "info",
@@ -3208,6 +3253,555 @@ async function waitForChatGptImageOrRetry(
   );
 }
 
+
+async function waitForChatGptResponse(page, before, options = {}) {
+  const {
+    sceneId,
+    promptText: instruction,
+    promptHash: instructionHash,
+    targetTitle: chatContextTitle,
+    stage = "motion_prompt",
+    chatGptStability = {},
+    sceneDir,
+  } = options;
+
+  const startedAt = Date.now();
+  let latest = '';
+  let lastState = null;
+  let recoveredOnce = 0;
+  let motionAttemptStartedAt = startedAt;
+  let lastBadMotionText = '';
+  let badMotionTextTicks = 0;
+
+  const retryMotionPrompt = async (reason, state) => {
+    recoveredOnce += 1;
+    if (sceneDir) {
+      await fs.writeFile(
+        path.join(
+          sceneDir,
+          `scene_${String(sceneId).padStart(3, '0')}_chatgpt_motion_recovery_${recoveredOnce}_${reason}.json`
+        ),
+        JSON.stringify({ reason, state, elapsedMs: Date.now() - motionAttemptStartedAt }, null, 2),
+        'utf8'
+      ).catch(() => null);
+    }
+    await appendAppLog(null, {
+      source: 'main',
+      kind: 'running',
+      text: `Scene ${sceneId}: NV2 bị kẹt (${reason}), retry ${recoveredOnce}/3: F5 → Stop → F5 → upload lại ảnh → gửi lại NV2.`
+    });
+    await page.Page.reload({ ignoreCache: true }).catch(() => null);
+    await waitForCdpLoad(page).catch(() => null);
+    await sleep(1800);
+    const responseChoiceRecovery = await recoverChatGptResponseChoiceChat(page, {
+      sceneId,
+      targetTitle: chatContextTitle,
+      stage: `motion-prompt-retry-${recoveredOnce}`,
+    });
+    if (responseChoiceRecovery?.recovered) {
+      await appendAppLog(null, {
+        source: 'main',
+        kind: 'ok',
+        text: `Scene ${sceneId}: NV2 recovery da tao chat moi truoc khi gui lai prompt.`,
+        details: responseChoiceRecovery,
+      });
+    }
+    const stopped = await evaluateOnCdpPage(page, `(${clickChatGptStopGeneratingScript.toString()})()`).catch((error) => ({ ok: false, error: error.message }));
+    await appendAppLog(null, {
+      source: 'main',
+      kind: stopped?.ok ? 'ok' : 'running',
+      text: `Scene ${sceneId}: NV2 recovery Stop: ${stopped?.ok ? stopped.mode || 'ok' : stopped?.error || 'không thấy Stop'}`,
+      details: stopped
+    });
+    await sleep(800);
+    await page.Page.reload({ ignoreCache: true }).catch(() => null);
+    await waitForCdpLoad(page).catch(() => null);
+    await sleep(2200);
+    const imagePath = sceneDir ? path.join(sceneDir, `scene_${String(sceneId).padStart(3, '0')}_keyframe.png`) : '';
+    const uploadAgain = imagePath ? await uploadFileViaCdp(page, imagePath, 'chatgpt').catch((error) => ({ ok: false, error: error.message })) : { ok: false };
+
+    await appendAppLog(null, {
+      source: 'main',
+      kind: uploadAgain?.ok ? 'ok' : 'error',
+      text: `Scene ${sceneId}: NV2 recovery upload lại keyframe: ${uploadAgain?.ok ? 'ChatGPT đã nhận ảnh' : uploadAgain?.error || 'failed'}`,
+      details: uploadAgain
+    });
+    if (!uploadAgain?.ok) throw new Error(uploadAgain?.error || 'Không upload lại được keyframe trước khi retry NV2.');
+    await sleep(1500);
+    const resent = await sendPromptViaCdpInput(page, instruction);
+
+    if (!resent?.ok) throw new Error(resent?.error || 'Không gửi lại Nhiệm vụ 2 sau recovery.');
+    motionAttemptStartedAt = Date.now();
+    lastBadMotionText = '';
+    badMotionTextTicks = 0;
+    await appendAppLog(null, {
+      source: 'main',
+      kind: 'ok',
+      text: `Scene ${sceneId}: đã gửi lại NV2 sau recovery ${recoveredOnce}/3.`,
+      details: { resent }
+    });
+    return true;
+  };
+
+  const NV2_STALLED_NO_PROGRESS_TIMEOUT_MS = 45000;
+  const NV2_ACTIVE_POLL_INTERVAL_MS = 3500;
+  const NV2_FORCE_VALIDATE_NO_PROGRESS_MS = 15000;
+
+  let lastEffectiveTextLength = 0;
+  let lastProgressAt = Date.now();
+  let peakAssistantText = '';
+  let peakAssistantTextLength = 0;
+  let previousIsStillGenerating = false;
+
+  while (true) {
+    await sleep(NV2_ACTIVE_POLL_INTERVAL_MS);
+    const state = await evaluateOnCdpPage(page, `(${readLatestAssistantScript.toString()})()`).catch(() => null);
+    lastState = state;
+
+    const currentText = state?.text ? state.text.trim() : '';
+    const isStillGenerating = Boolean(
+      state?.generating === true ||
+      state?.generation === true ||
+      state?.streamingIndicator === true ||
+      state?.stopButton === true
+    );
+
+    if (currentText.length > peakAssistantTextLength) {
+      peakAssistantText = currentText;
+      peakAssistantTextLength = currentText.length;
+    }
+
+    const effectiveText = currentText.length > 0 ? currentText : peakAssistantText;
+    const effectiveTextLength = effectiveText.length;
+
+    if (effectiveTextLength > lastEffectiveTextLength) {
+      lastEffectiveTextLength = effectiveTextLength;
+      lastProgressAt = Date.now();
+    }
+
+    const noProgressForMs = Date.now() - lastProgressAt;
+    const finishedNow = (previousIsStillGenerating === true && isStillGenerating === false);
+    previousIsStillGenerating = isStillGenerating;
+
+    const MIN_MOTION_PROMPT_TEXT_LENGTH = 100;
+    const shouldForceValidateBecauseTextStalled =
+      isStillGenerating === true &&
+      effectiveTextLength > MIN_MOTION_PROMPT_TEXT_LENGTH &&
+      noProgressForMs >= NV2_FORCE_VALIDATE_NO_PROGRESS_MS;
+
+    await appendAppLog(null, {
+      source: 'main',
+      kind: 'running',
+      text: `[NV2] Polling: textLength=${currentText.length}, peakLength=${peakAssistantTextLength}, effectiveLength=${effectiveTextLength}, noProgressForMs=${noProgressForMs}ms, isStillGenerating=${isStillGenerating}, finishedNow=${finishedNow}, forceValidate=${shouldForceValidateBecauseTextStalled}, source=${state?.source || 'unknown'}`,
+      details: {
+        currentTextLength: currentText.length,
+        peakAssistantTextLength,
+        effectiveTextLength,
+        noProgressForMs,
+        isStillGenerating,
+        finishedNow,
+        shouldForceValidateBecauseTextStalled,
+        generating: state?.generating,
+        generation: state?.generation,
+        streamingIndicator: state?.streamingIndicator,
+        stopButton: state?.stopButton,
+        source: state?.source
+      }
+    }).catch(() => null);
+
+    if (effectiveText) {
+      if (isChatGptPolicyRefusalText(effectiveText)) {
+        await notifyChatGptPolicyRefusal(sceneId, 'NV2/motion-prompt', effectiveText);
+      }
+    }
+
+    const shouldValidateNow =
+      (finishedNow === true && effectiveTextLength > MIN_MOTION_PROMPT_TEXT_LENGTH) ||
+      shouldForceValidateBecauseTextStalled;
+
+    if (shouldValidateNow) {
+      if (shouldForceValidateBecauseTextStalled) {
+        await appendAppLog(null, {
+          source: 'main',
+          kind: 'warning',
+          text: `Scene ${sceneId}: [NV2] Text progress stalled for 15s with valid content. Executing force-validation bypass.`,
+          details: {
+            effectiveTextLength,
+            noProgressForMs,
+            isStillGenerating
+          }
+        }).catch(() => null);
+      }
+
+      const validation = validateMotionPromptResponse(effectiveText, { beforeText: before?.text || '', instruction, taskPrompt: '', state });
+      if (validation.ok) {
+        latest = effectiveText;
+        break;
+      }
+    }
+
+    if (!effectiveText) {
+      if (noProgressForMs >= NV2_STALLED_NO_PROGRESS_TIMEOUT_MS && !isStillGenerating) {
+        if (await retryMotionPrompt('no-assistant-after-send', state)) {
+          lastEffectiveTextLength = 0;
+          lastProgressAt = Date.now();
+          peakAssistantText = '';
+          peakAssistantTextLength = 0;
+          lastBadMotionText = '';
+          badMotionTextTicks = 0;
+          previousIsStillGenerating = false;
+          continue;
+        }
+      }
+      continue;
+    }
+
+    latest = effectiveText;
+    const freshAssistant = state.count > (before?.count || 0) || latest !== before?.text;
+    const quality = validateMotionPromptResponse(latest, { beforeText: before?.text || '', instruction, taskPrompt: '', state });
+    const composerIdle = !isStillGenerating;
+    const composerDone = composerIdle && quality.ok;
+
+    if (freshAssistant && composerDone && quality.ok) break;
+
+    const retryableBadMotionText = freshAssistant && !quality.ok && isRetryableChatGptToolErrorText(latest, 'motion');
+    const normalizedBadMotionText = normalizeChatGptRetryText(latest);
+    if (freshAssistant && !quality.ok && (retryableBadMotionText || quality.error === 'too-short')) {
+      if (normalizedBadMotionText && normalizedBadMotionText === lastBadMotionText) {
+        badMotionTextTicks += 1;
+      } else {
+        lastBadMotionText = normalizedBadMotionText;
+        badMotionTextTicks = 1;
+      }
+    } else if (quality.ok) {
+      lastBadMotionText = '';
+      badMotionTextTicks = 0;
+    }
+
+    if (noProgressForMs >= NV2_STALLED_NO_PROGRESS_TIMEOUT_MS && !isStillGenerating) {
+      if (await retryMotionPrompt('no-progress-during-generation', state)) {
+        lastEffectiveTextLength = 0;
+        lastProgressAt = Date.now();
+        peakAssistantText = '';
+        peakAssistantTextLength = 0;
+        lastBadMotionText = '';
+        badMotionTextTicks = 0;
+        previousIsStillGenerating = false;
+        continue;
+      }
+    }
+
+    if (freshAssistant && !quality.ok && (composerIdle || retryableBadMotionText || badMotionTextTicks >= 3)) {
+      if (await retryMotionPrompt(retryableBadMotionText ? 'retryable-bad-motion-text' : (quality.error || 'bad-response-idle'), state)) {
+        lastEffectiveTextLength = 0;
+        lastProgressAt = Date.now();
+        peakAssistantText = '';
+        peakAssistantTextLength = 0;
+        lastBadMotionText = '';
+        badMotionTextTicks = 0;
+        previousIsStillGenerating = false;
+        continue;
+      }
+    }
+
+    if (composerIdle && noProgressForMs >= NV2_STALLED_NO_PROGRESS_TIMEOUT_MS) {
+      if (await retryMotionPrompt('stuck-after-user-message', state)) {
+        lastEffectiveTextLength = 0;
+        lastProgressAt = Date.now();
+        peakAssistantText = '';
+        peakAssistantTextLength = 0;
+        lastBadMotionText = '';
+        badMotionTextTicks = 0;
+        previousIsStillGenerating = false;
+        continue;
+      }
+    }
+
+    {
+      await vidoraChatGptInputGate(page, {
+        sceneId,
+        stage: 'before-nv2-wait',
+      });
+
+      {
+        let nv2InputState = await vidoraReadChatGptComposerStateReal(page, {
+          sceneId,
+          stage: 'nv2-force-send-before-wait-check',
+        }).catch((error) => ({ ok: false, error: error.message }));
+
+        await appendAppLog(null, {
+          source: 'main',
+          kind: 'running',
+          text: 'NV2 SEND GATE: kiểm tra input trước khi chờ ChatGPT trả motion prompt.',
+          details: { nv2InputState },
+        }).catch(() => null);
+
+        if (nv2InputState?.ok && nv2InputState.composerHasText) {
+          await appendAppLog(null, {
+            source: 'main',
+            kind: 'error',
+            text: 'NV2 SEND GATE: input còn prompt NV2 => chưa gửi thật, ép bấm nút gửi.',
+            details: {
+              textLength: nv2InputState.composerTextLength,
+              textHead: nv2InputState.composerTextHead,
+              sendButton: nv2InputState.sendButton,
+              sendCandidates: nv2InputState.sendCandidates,
+            },
+          }).catch(() => null);
+
+          for (let attempt = 1; attempt <= 5; attempt++) {
+            const click = await vidoraClickChatGptRealSendButton(page, nv2InputState)
+              .catch((error) => ({ ok: false, error: error.message }));
+
+            await sleep(1200);
+
+            const after = await vidoraReadChatGptComposerStateReal(page, {
+              sceneId,
+              stage: 'nv2-force-send-after-click',
+              attempt,
+            }).catch((error) => ({ ok: false, error: error.message }));
+
+            await appendAppLog(null, {
+              source: 'main',
+              kind: (!after?.composerHasText || after?.stopVisible) ? 'ok' : 'running',
+              text: (!after?.composerHasText || after?.stopVisible)
+                ? `NV2 SEND GATE: attempt ${attempt} gửi OK, input đã trống hoặc ChatGPT đang chạy.`
+                : `NV2 SEND GATE: attempt ${attempt} chưa gửi, input vẫn còn nội dung.`,
+              details: { attempt, click, after },
+            }).catch(() => null);
+
+            nv2InputState = after;
+
+            if (!after?.composerHasText || after?.stopVisible) break;
+          }
+
+          if (nv2InputState?.composerHasText && !nv2InputState?.stopVisible) {
+            throw new Error('nv2-send-gate-failed-input-still-has-prompt');
+          }
+        }
+      }
+    }
+  }
+
+  return { ok: true, text: latest };
+}
+
+async function maybeRenameChatGptCurrentConversationUntilTitle(page, title = '', options = {}) {
+  const wanted = String(title || '').trim();
+  if (!wanted) return { ok: false, error: 'missing-title' };
+  const locationState = await getChatGptLocationState(page);
+  const cached = chatGptConversationIdentityCache;
+  if (!options.force && locationState?.conversationId && cached.conversationId && locationState.conversationId !== cached.conversationId) {
+    await invalidateChatGptConversationIdentity('chatgpt-url-changed');
+  }
+  if (!options.force && locationState?.conversationId && cached.conversationId === locationState.conversationId && isSameChatTitle(cached.title, wanted)) {
+    await appendAppLog(null, {
+      source: 'main',
+      kind: 'running',
+      text: 'chatTitleCheck: using cached conversation identity',
+      details: { sceneId: ((typeof options !== 'undefined' && options?.sceneId) || (typeof context !== 'undefined' && context?.sceneId) || ''), reason: options.reason || 'rename-skip', path: locationState.path || '', title: sanitizeChatTitleForLog(wanted) },
+    });
+    return { ok: true, skipped: true, cached: true, title: wanted, path: locationState.path };
+  }
+  const CHAT_TITLE_CHECK_MIN_INTERVAL_MS = 45000;
+  if (!options.force && cached.lastCheckAt && Date.now() - cached.lastCheckAt < CHAT_TITLE_CHECK_MIN_INTERVAL_MS && locationState?.conversationId === cached.conversationId && isSameChatTitle(cached.title, wanted)) {
+    await appendAppLog(null, {
+      source: 'main',
+      kind: 'running',
+      text: `chatTitleCheck: skipped reason=rate-limit-${options.reason || 'rename'}`,
+      details: { sceneId: ((typeof options !== 'undefined' && options?.sceneId) || (typeof context !== 'undefined' && context?.sceneId) || ''), path: locationState?.path || '', title: sanitizeChatTitleForLog(wanted), lastCheckAgoMs: Date.now() - cached.lastCheckAt },
+    });
+    return { ok: true, skipped: true, rateLimited: true, title: wanted, path: locationState?.path || '' };
+  }
+  if (options.force) await appendAppLog(null, { source: 'main', kind: 'running', text: `chatTitleCheck: forced reason=${options.reason || 'rename'}`, details: { sceneId: ((typeof options !== 'undefined' && options?.sceneId) || (typeof context !== 'undefined' && context?.sceneId) || ''), title: sanitizeChatTitleForLog(wanted) } });
+  cached.lastCheckAt = Date.now();
+  const result = await renameChatGptCurrentConversationUntilTitle(page, wanted, options);
+  if (result?.ok) {
+    const verifiedLocation = await getChatGptLocationState(page);
+    updateChatGptConversationIdentity(verifiedLocation, wanted);
+    await appendAppLog(null, { source: 'main', kind: 'ok', text: `chatTitleCheck: verified title=${sanitizeChatTitleForLog(wanted)}`, details: { sceneId: ((typeof options !== 'undefined' && options?.sceneId) || (typeof context !== 'undefined' && context?.sceneId) || ''), reason: options.reason || 'rename', path: verifiedLocation?.path || '' } });
+  }
+  return result;
+}
+
+async function renameChatGptCurrentConversationUntilTitle(page, title = '', { sceneId = '', timeoutMs = 60000, waitForRecent = true, maxAttempts = 2, stableTarget = 2 } = {}) {
+  const wanted = String(title || '').trim();
+  if (!wanted) return { ok: false, error: 'missing-title' };
+  const currentPath = await evaluateOnCdpPage(page, `location.pathname`).catch(() => '');
+  if (!String(currentPath || '').startsWith('/c/')) return { ok: false, error: 'not-in-conversation', path: currentPath };
+  if (isChatTitleStable(currentPath, wanted)) {
+    await appendAppLog(null, { source: 'main', kind: 'running', text: 'chatTitleCheck: using cached conversation identity', details: { sceneId, reason: 'stable-title-cache', path: currentPath, title: sanitizeChatTitleForLog(wanted) } });
+    return { ok: true, skipped: true, stableChecks: 1, title: wanted, path: currentPath };
+  }
+  if (waitForRecent) {
+    const recentsReady = await waitForChatGptRecentItem(page, currentPath, sceneId);
+    await appendAppLog(null, { source: 'main', kind: recentsReady?.ok ? 'running' : 'error', text: `Scene ${sceneId}: Recents ready before rename: ${recentsReady?.ok ? recentsReady.text || recentsReady.mode : recentsReady?.error || 'not-ready'}`, details: recentsReady });
+    if (!recentsReady?.ok) return { ok: false, error: recentsReady?.error || 'recents-not-ready', recentsReady };
+  }
+  const renameDeadline = Date.now() + timeoutMs;
+  let renameAttempt = 0;
+  let renameResult = null;
+  while (Date.now() < renameDeadline) {
+    const titleState = await checkChatGptCurrentConversationTitle(page, wanted, { sceneId, force: true, reason: 'rename-workflow' }).catch((error) => ({ ok: false, error: error.message }));
+    if (titleState?.ok) {
+      const stableChecks = markChatTitleStable(titleState.path || currentPath, wanted, true);
+      if (stableChecks >= 1) return { ok: true, alreadyNamed: true, title: wanted, attempts: renameAttempt, stableChecks, titleState };
+      await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: ChatGPT title đúng ${stableChecks}/3, check thêm để ổn định rồi dừng.`, details: titleState });
+      await sleep(700);
+      continue;
+    }
+    markChatTitleStable(titleState?.path || currentPath, wanted, false);
+    renameAttempt += 1;
+    await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: ChatGPT rename attempt ${renameAttempt}/${maxAttempts}, current="${titleState?.currentTitle || ''}" target="${wanted}"`, details: titleState });
+    renameResult = await renameChatGptCurrentConversation(null, wanted).catch((error) => ({ ok: false, error: error.message }));
+    await appendAppLog(null, { source: 'main', kind: renameResult?.ok ? 'running' : 'error', text: `Scene ${sceneId}: ChatGPT rename attempt ${renameAttempt} ${renameResult?.ok ? 'sent' : renameResult?.error || 'failed'}`, details: renameResult });
+    await sleep(2500);
+    const verifyState = await checkChatGptCurrentConversationTitle(page, wanted, { sceneId, force: true, reason: 'rename-verify' }).catch((error) => ({ ok: false, error: error.message }));
+    if (verifyState?.ok) {
+      const stableChecks = markChatTitleStable(verifyState.path || currentPath, wanted, true);
+      if (stableChecks >= 1) return { ok: true, title: wanted, attempts: renameAttempt, stableChecks, verifyState };
+      await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: rename đã khớp ${stableChecks}/3, verify thêm trước khi dừng.`, details: verifyState });
+      await sleep(700);
+      continue;
+    }
+    markChatTitleStable(verifyState?.path || currentPath, wanted, false);
+    if (renameAttempt >= maxAttempts) break;
+    await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: rename chưa khớp, retry tiếp. current="${verifyState?.currentTitle || ''}"`, details: verifyState });
+    await sleep(1000);
+  }
+  return { ok: false, error: renameResult?.error || 'rename-max-attempts-or-timeout', title: wanted, attempts: renameAttempt, maxAttempts, lastResult: renameResult };
+}
+
+async function waitForChatGptRecentItem(page, conversationPath = "", sceneId = "") {
+  const conversationId = String(conversationPath || "").match(/\/c\/([^/?#]+)/)?.[1] || "";
+  const startedAt = Date.now();
+  let last = null;
+  while (Date.now() - startedAt < 30000) {
+    last = await evaluateOnCdpPage(
+      page,
+      `(() => {
+      try {
+        const conversationId = ${JSON.stringify(conversationId)};
+        const nodes = Array.from(document.querySelectorAll('nav a, aside a, [role="navigation"] a, a[href*="/c/"], nav [role="link"], aside [role="link"], nav li, aside li, nav div, aside div'));
+        const candidates = nodes.map((node) => {
+          const rect = node.getBoundingClientRect ? node.getBoundingClientRect() : null;
+          const href = node.href || (node.getAttribute ? node.getAttribute('href') : '') || '';
+          const text = String(node.innerText || node.textContent || '').trim();
+          const cls = String(node.className || '');
+          const current = node.getAttribute ? (node.getAttribute('aria-current') || node.getAttribute('aria-selected') || '') : '';
+          return { href, rect, text, cls, current };
+        }).filter((item) => item.text && item.rect && item.rect.width > 40 && item.rect.height > 12 && item.rect.x < 220 && item.rect.y > 250);
+        const hrefItem = candidates.find((item) => item.href.indexOf('/c/' + conversationId) >= 0);
+        const activeItem = candidates.find((item) => /page|true|active|selected/i.test(String(item.current) + ' ' + item.cls));
+        const topItem = candidates.slice().sort((a, b) => a.rect.y - b.rect.y)[0];
+        const item = hrefItem || activeItem || null;
+        return { ok: Boolean(item), mode: hrefItem ? 'href' : activeItem ? 'active' : 'missing', text: item?.text || '', candidateCount: candidates.length, topText: topItem?.text || '', path: location.pathname };
+      } catch (error) {
+        return { ok: false, error: error && error.message ? error.message : String(error), path: location.pathname };
+      }
+    })()`
+    ).catch((error) => ({ ok: false, error: error.message }));
+    if (last?.ok) return last;
+    await appendAppLog(null, {
+      source: "main",
+      kind: "running",
+      text: `Scene ${sceneId}: chờ Recents render chat mới (${last?.mode || last?.error || "missing"}), top="${last?.topText || ""}" count=${last?.candidateCount || 0}`,
+    });
+    await sleep(1000);
+  }
+  return {
+    ok: false,
+    error: "Timeout waiting for current chat to appear in Recents.",
+    last,
+  };
+}
+
+async function checkChatGptCurrentConversationTitle(page, expectedTitle = "", options = {}) {
+  const wanted = String(expectedTitle || "").trim();
+  if (!wanted) return { ok: false, error: "missing-expected-title" };
+  const locationState = await getChatGptLocationState(page);
+  const cached = chatGptConversationIdentityCache;
+  if (!options.force && locationState?.conversationId && cached.conversationId === locationState.conversationId && isSameChatTitle(cached.title, wanted)) {
+    await appendAppLog(null, {
+      source: "main",
+      kind: "running",
+      text: "chatTitleCheck: using cached conversation identity",
+      details: { sceneId: (typeof options !== "undefined" && options?.sceneId) || (typeof context !== "undefined" && context?.sceneId) || "", reason: options.reason || "title-check", path: locationState.path || "", title: sanitizeChatTitleForLog(wanted) },
+    });
+    return { ok: true, cached: true, currentTitle: wanted, wanted, mode: "cache", path: locationState.path || "" };
+  }
+  const CHAT_TITLE_CHECK_MIN_INTERVAL_MS = 45000;
+  if (!options.force && cached.lastCheckAt && Date.now() - cached.lastCheckAt < CHAT_TITLE_CHECK_MIN_INTERVAL_MS && isSameChatTitle(cached.title, wanted)) {
+    await appendAppLog(null, {
+      source: "main",
+      kind: "running",
+      text: `chatTitleCheck: skipped reason=rate-limit-${options.reason || "title-check"}`,
+      details: { sceneId: (typeof options !== "undefined" && options?.sceneId) || (typeof context !== "undefined" && context?.sceneId) || "", path: locationState?.path || "", title: sanitizeChatTitleForLog(wanted), lastCheckAgoMs: Date.now() - cached.lastCheckAt },
+    });
+    return { ok: false, skipped: true, rateLimited: true, error: "rate-limited-title-check", path: locationState?.path || "" };
+  }
+  if (options.force) await appendAppLog(null, { source: "main", kind: "running", text: `chatTitleCheck: forced reason=${options.reason || "title-check"}`, details: { sceneId: (typeof options !== "undefined" && options?.sceneId) || (typeof context !== "undefined" && context?.sceneId) || "", title: sanitizeChatTitleForLog(wanted) } });
+  cached.lastCheckAt = Date.now();
+  const state = await evaluateOnCdpPage(
+    page,
+    `(() => {
+    try {
+      const wanted = ${JSON.stringify(wanted)};
+      const m = location.pathname.match(/\\/c\\/([^/?#]+)/);
+      const id = m ? m[1] : '';
+      const norm = (value) => String(value || '').trim().replace(/\\s+/g, ' ');
+      const nodes = Array.from(document.querySelectorAll('nav a, aside a, [role="navigation"] a, a[href*="/c/"], nav [role="link"], aside [role="link"], nav li, aside li, nav div, aside div'));
+      const candidates = nodes.map((node) => {
+        const rect = node.getBoundingClientRect ? node.getBoundingClientRect() : null;
+        const href = node.href || (node.getAttribute ? node.getAttribute('href') : '') || '';
+        const text = norm(node.innerText || node.textContent || '');
+        const cls = String(node.className || '');
+        const current = node.getAttribute ? (node.getAttribute('aria-current') || node.getAttribute('aria-selected') || '') : '';
+        return { href, rect, text, cls, current };
+      }).filter((item) => item.text && item.rect && item.rect.width > 40 && item.rect.height > 12 && item.rect.x < 240 && item.rect.y > 220);
+      const hrefItem = candidates.find((item) => id && item.href.indexOf('/c/' + id) >= 0);
+      const activeItem = candidates.find((item) => /page|true|active|selected/i.test(String(item.current) + ' ' + item.cls));
+      const exactItem = candidates.find((item) => norm(item.text) === norm(wanted));
+      const item = hrefItem || activeItem || exactItem || null;
+      const currentTitle = norm(item && item.text ? item.text : document.title || '');
+      const ok = norm(currentTitle) === norm(wanted) || Boolean(exactItem);
+      return { ok, currentTitle, wanted: norm(wanted), mode: hrefItem ? 'href' : activeItem ? 'active' : exactItem ? 'exact' : 'title', documentTitle: document.title, candidateCount: candidates.length, path: location.pathname };
+    } catch (error) {
+      return { ok: false, error: error && error.message ? error.message : String(error), path: location.pathname };
+    }
+  })()`
+  ).catch((error) => ({ ok: false, error: error.message }));
+  if (state?.ok) {
+    updateChatGptConversationIdentity(state, wanted);
+    await appendAppLog(null, { source: "main", kind: "ok", text: `chatTitleCheck: verified title=${sanitizeChatTitleForLog(wanted)}`, details: { sceneId: (typeof options !== "undefined" && options?.sceneId) || (typeof context !== "undefined" && context?.sceneId) || "", reason: options.reason || "title-check", path: state.path || "" } });
+  } else if (!state?.skipped) {
+    await appendAppLog(null, { source: "main", kind: "running", text: `chatTitleCheck: skipped reason=${state?.error || "title-mismatch"}`, details: { sceneId: (typeof options !== "undefined" && options?.sceneId) || (typeof context !== "undefined" && context?.sceneId) || "", reason: options.reason || "title-check", path: state?.path || "", currentTitle: sanitizeChatTitleForLog(state?.currentTitle || "") } });
+  }
+  return state;
+}
+
+const chatTitleStableChecks = new Map();
+
+function getChatTitleStableKey(pathname = "", title = "") {
+  const id = String(pathname || "").match(/\/c\/([^/?#]+)/)?.[1] || String(pathname || "");
+  return `${id}::${String(title || "").trim().toLowerCase()}`;
+}
+
+function markChatTitleStable(pathname = "", title = "", ok = false) {
+  const key = getChatTitleStableKey(pathname, title);
+  const next = ok ? (chatTitleStableChecks.get(key) || 0) + 1 : 0;
+  chatTitleStableChecks.set(key, next);
+  return next;
+}
+
+function isChatTitleStable(pathname = "", title = "") {
+  return (chatTitleStableChecks.get(getChatTitleStableKey(pathname, title)) || 0) >= 1;
+}
+
+function sanitizeChatTitleForLog(title = "") {
+  return maskRouterText(String(title || "").replace(/\s+/g, " ").trim()).slice(0, 120);
+}
+
 module.exports = {
   initChatGptPipeline,
   generateImageAndMotionWithChatGPT,
@@ -3240,4 +3834,444 @@ module.exports = {
   getChatGptImageCandidateBoxScript,
   getLatestImageBoxScript,
   waitForChatGptImageOrRetry,
+  waitForChatGptResponse,
+  maybeRenameChatGptCurrentConversationUntilTitle,
+  renameChatGptCurrentConversationUntilTitle,
+  waitForChatGptRecentItem,
+  checkChatGptCurrentConversationTitle,
+  getChatTitleStableKey,
+  markChatTitleStable,
+  isChatTitleStable,
+  sanitizeChatTitleForLog,
+};
+
+function isValidChatGptConversationUrl(url = "") {
+  return /^https:\/\/chatgpt\.com\/c\/[^/?#]+/i.test(String(url || "").trim());
+}
+
+async function waitForChatGptHydrationResponse(
+  client,
+  beforeCount = 0,
+  { sceneId = 0, request = 0 } = {},
+) {
+  await captureAndLogChatGptDiagnostics(client, sceneId, beforeCount, `hydration-request-${request}-init`).catch(() => null);
+
+  let lastText = "";
+  let stableTicks = 0;
+  const startedAt = Date.now();
+  let refreshedAfterIdle = false;
+  while (Date.now() - startedAt < 180000) {
+    assertPipelineRunActive();
+    await sleep(2500);
+    const snapshot = await evaluateOnCdpPage(
+      client,
+      `(${readLatestAssistantScript.toString()})()`,
+    ).catch(() => ({}));
+    const text = String(snapshot?.text || "").trim();
+    const hasNewMessage =
+      Number(snapshot?.count || 0) > Number(beforeCount || 0);
+    if (hasNewMessage && text.length > 10) {
+      if (text === lastText) {
+        stableTicks += 1;
+      } else {
+        stableTicks = 0;
+        lastText = text;
+      }
+      if (stableTicks >= 2 && !snapshot.generating) {
+        await appendAppLog(null, {
+          source: "main",
+          kind: "ok",
+          text: `ChatGPT hydration request ${request} acknowledged.`,
+          details: { sceneId, chars: text.length },
+        }).catch(() => null);
+        return text;
+      }
+    }
+    if (
+      !refreshedAfterIdle &&
+      Date.now() - startedAt > 120000 &&
+      !snapshot?.generating &&
+      !hasNewMessage
+    ) {
+      refreshedAfterIdle = true;
+      await appendAppLog(null, {
+        source: "main",
+        kind: "warning",
+        text: `ChatGPT hydration request ${request} has no response after 45s and no loading state. Refreshing page once before continuing wait.`,
+        details: { sceneId, beforeCount, latestCount: snapshot?.count || 0 },
+      }).catch(() => null);
+      const reloadResult = await requestReloadWithReason(client, `hydration_timeout_req_${request}`, sceneId);
+      if (reloadResult) {
+        await waitForCdpLoad(client).catch(() => null);
+        await sleep(5000);
+      }
+    }
+  }
+  await captureAndLogChatGptDiagnostics(client, sceneId, beforeCount, `hydration-request-${request}-timeout-pre`).catch(() => null);
+  throw new Error(`chatgpt-hydration-request-${request}-response-timeout`);
+}
+
+async function hydrateFreshChatGptContextAfterRotation(
+  options = {},
+  sceneId = 0,
+) {
+  const projectDir =
+    options.outputFolder || options.projectPath || options.outputPath || "";
+  const sceneDir = path.join(
+    projectDir,
+    `scene_${String(sceneId).padStart(3, "0")}`,
+  );
+
+  let snapshot = await readSceneSnapshot(sceneDir);
+  if (!snapshot.hydration) {
+    snapshot.hydration = {};
+  }
+  snapshot.hydration.request1Done = !!snapshot.hydration.request1Done;
+  snapshot.hydration.request2Done = !!snapshot.hydration.request2Done;
+  snapshot.hydration.characterUploadDone = !!snapshot.hydration.characterUploadDone;
+  snapshot.hydration.sceneUploadDone = !!snapshot.hydration.sceneUploadDone;
+  snapshot.hydration.lastFrameUploadDone = !!snapshot.hydration.lastFrameUploadDone;
+  snapshot.hydration.promptUploadDone = !!snapshot.hydration.promptUploadDone;
+
+  const page = await getCdpPage("chatgpt", true, { bringToFront: true });
+
+  if (!snapshot.hydration.request1Done) {
+    const prepromptFiles = projectDir
+      ? await collectPrepromptRequestFiles({ outputFolder: projectDir })
+      : [];
+    const beforePreprompt = await evaluateOnCdpPage(
+      page,
+      `(${countChatGptAssistantRootsScript.toString()})()`,
+    ).catch(() => ({ count: 0 }));
+    if (prepromptFiles.length) {
+      await appendAppLog(null, {
+        source: "main",
+        kind: "running",
+        text: `ChatGPT hydrate request 1: uploading ${prepromptFiles.length} preprompt file(s).`,
+        details: {
+          sceneId,
+          prepromptFiles: prepromptFiles.map((file) => path.basename(file)),
+        },
+      }).catch(() => null);
+      const uploadPreprompt = await uploadFilesToChatGptSequentially(
+        page,
+        prepromptFiles,
+        sceneId,
+        {
+          rotationHydration: true,
+          request: 1,
+          trailingUploadLog: `Scene ${sceneId}: Uploading preprompt files for ChatGPT hydration...`,
+        },
+      );
+      if (!uploadPreprompt?.ok)
+        throw new Error(
+          `chatgpt-hydration-preprompt-upload-failed: ${uploadPreprompt?.error || "unknown"}`,
+        );
+    } else {
+      await appendAppLog(null, {
+        source: "main",
+        kind: "warning",
+        text: `ChatGPT hydrate request 1: preprompt folder has no files.`,
+        details: { sceneId, projectDir },
+      }).catch(() => null);
+    }
+    const sentPreprompt = await sendPromptViaCdpInput(
+      page,
+      "Request 1: read and remember all attached preprompt files. Reply only when ready.",
+      {
+        beforeCount: beforePreprompt?.count || 0,
+        sceneId,
+        stage: "hydrate-request-1",
+      },
+    );
+    if (!sentPreprompt?.ok)
+      throw new Error(
+        `chatgpt-hydration-preprompt-message-failed: ${sentPreprompt?.error || "unknown"}`,
+      );
+    await waitForChatGptHydrationResponse(page, beforePreprompt?.count || 0, { sceneId, request: 1 });
+
+    snapshot.hydration.request1Done = true;
+    snapshot.pipelineStage = "HYDRATION_2";
+    await writeSceneSnapshot(sceneDir, snapshot);
+  }
+
+  const deadline = Date.now() + 15000;
+  let promotedUrl = "";
+  while (Date.now() < deadline) {
+    const currentUrl = await evaluateOnCdpPage(page, "location.href").catch(() => "");
+    if (isValidChatGptConversationUrl(currentUrl)) {
+      promotedUrl = currentUrl;
+      break;
+    }
+    await sleep(500);
+  }
+  if (promotedUrl) {
+    setActiveConversationUrl(promotedUrl);
+    await writePipelineSceneState(projectDir, sceneId, {
+      chatUrl: promotedUrl,
+      chatGptConversationUrl: promotedUrl,
+      conversationIndex: chatGptConversationHealth.conversationIndex || 0,
+    }).catch(() => null);
+    await appendAppLog(null, {
+      source: "main",
+      kind: "ok",
+      text: `Scene ${sceneId}: Saved newly rotated and hydrated ChatGPT conversation URL.`,
+      details: { chatUrl: promotedUrl },
+    }).catch(() => null);
+  }
+
+  if (!snapshot.hydration.request2Done) {
+    const recentKeyframes = projectDir
+      ? await collectRecentProjectKeyframes(projectDir, 5, sceneId)
+      : [];
+    const beforeScenes = await evaluateOnCdpPage(
+      page,
+      `(${countChatGptAssistantRootsScript.toString()})()`,
+    ).catch(() => ({ count: 0 }));
+    if (recentKeyframes.length) {
+      await appendAppLog(null, {
+        source: "main",
+        kind: "running",
+        text: `ChatGPT hydrate request 2: uploading ${recentKeyframes.length} recent keyframe(s).`,
+        details: {
+          sceneId,
+          keyframes: recentKeyframes.map((file) => path.basename(file)),
+        },
+      }).catch(() => null);
+      const uploadKeyframes = await uploadFilesToChatGptSequentially(
+        page,
+        recentKeyframes,
+        sceneId,
+        {
+          rotationHydration: true,
+          request: 2,
+          trailingUploadLog: `Scene ${sceneId}: Uploading recent keyframes for ChatGPT hydration...`,
+        },
+      );
+      if (!uploadKeyframes?.ok)
+        throw new Error(
+          `chatgpt-hydration-keyframes-upload-failed: ${uploadKeyframes?.error || "unknown"}`,
+        );
+    } else {
+      await appendAppLog(null, {
+        source: "main",
+        kind: "warning",
+        text: `ChatGPT hydrate request 2: no previous keyframes available; sending acknowledgement request.`,
+        details: { sceneId },
+      }).catch(() => null);
+    }
+    const sentScenes = await sendPromptViaCdpInput(
+      page,
+      "Request 2: read and remember the attached keyframes from up to 20 previous project scenes. Use them as visual continuity context for upcoming requests. Reply only when ready.",
+      {
+        beforeCount: beforeScenes?.count || 0,
+        sceneId,
+        stage: "hydrate-request-2",
+      },
+    );
+    if (!sentScenes?.ok)
+      throw new Error(
+        `chatgpt-hydration-keyframes-message-failed: ${sentScenes?.error || "unknown"}`,
+      );
+    await waitForChatGptHydrationResponse(page, beforeScenes?.count || 0, { sceneId, request: 2 });
+
+    snapshot.hydration.request2Done = true;
+    snapshot.pipelineStage = "NV1_DRAFT_READY";
+    await writeSceneSnapshot(sceneDir, snapshot);
+  }
+
+  setChatGptContextFresh(false);
+  globalThis.__vidoraChatGptNewChatMode = false;
+  return;
+  const scriptText = String(
+    options.scriptText || options.storyText || options.story || "",
+  ).trim();
+  const sceneScriptText = String(
+    options.sceneText || options.currentSceneText || options.imagePrompt || "",
+  ).trim();
+  const sourceSceneText = String(
+    options.sourceSceneText || scriptText || "",
+  ).trim();
+  const sourceSceneFileName = sanitizeFileName(
+    options.sourceSceneFileName || "scene.txt",
+  );
+  const sourceSceneFilePath = String(options.sourceSceneFilePath || "").trim();
+  const contextDir = projectDir || app.getPath("temp");
+  if (false && scriptText) {
+    const scriptPath = path.join(
+      contextDir,
+      "vidora_current_project_script.txt",
+    );
+    await fs.writeFile(scriptPath, scriptText, "utf8").catch(() => null);
+    if (await pathExists(scriptPath)) {
+      await appendAppLog(null, {
+        source: "main",
+        kind: "running",
+        text: `ChatGPT rotation hydrate request 1: uploading project script txt.`,
+        details: { sceneId, scriptPath },
+      }).catch(() => null);
+      const uploadScript = await uploadFilesToChatGptSequentially(
+        page,
+        [scriptPath],
+        sceneId,
+        {
+          rotationHydration: true,
+          request: 1,
+          trailingUploadLog: `Scene ${sceneId}: Uploading project script txt for ChatGPT rotation hydration...`,
+        },
+      );
+      if (!uploadScript?.ok)
+        throw new Error(
+          `chatgpt-rotation-script-upload-failed: ${uploadScript?.error || "unknown"}`,
+        );
+      const sentScript = await sendPromptViaCdpInput(
+        page,
+        "Đây là file kịch bản của project hiện tại. Hãy ghi nhớ ngữ cảnh này cho các request tạo ảnh và motion prompt tiếp theo.",
+      );
+      if (!sentScript?.ok)
+        throw new Error(
+          `chatgpt-rotation-script-message-failed: ${sentScript?.error || "unknown"}`,
+        );
+      await sleep(1500);
+    }
+  }
+  const scriptFiles = [];
+  if (sourceSceneFilePath && (await pathExists(sourceSceneFilePath))) {
+    scriptFiles.push(sourceSceneFilePath);
+  } else if (sourceSceneText || sceneScriptText) {
+    const copiedSceneFilePath = path.join(
+      contextDir,
+      sourceSceneFileName || "scene.txt",
+    );
+    await fs
+      .writeFile(
+        copiedSceneFilePath,
+        sourceSceneText || sceneScriptText,
+        "utf8",
+      )
+      .catch(() => null);
+    if (await pathExists(copiedSceneFilePath))
+      scriptFiles.push(copiedSceneFilePath);
+  }
+  if (scriptFiles.length) {
+    await appendAppLog(null, {
+      source: "main",
+      kind: "running",
+      text: `ChatGPT rotation hydrate request 1: uploading selected scene txt file.`,
+      details: { sceneId, scriptFiles },
+    }).catch(() => null);
+    const uploadScript = await uploadFilesToChatGptSequentially(
+      page,
+      scriptFiles,
+      sceneId,
+      {
+        rotationHydration: true,
+        request: 1,
+        trailingUploadLog: `Scene ${sceneId}: Uploading selected scene txt file for ChatGPT rotation hydration...`,
+      },
+    );
+    if (!uploadScript?.ok)
+      throw new Error(
+        `chatgpt-rotation-script-upload-failed: ${uploadScript?.error || "unknown"}`,
+      );
+    const sentScript = await sendPromptViaCdpInput(
+      page,
+      "Day la file scene .txt goc ma user da chon khi tao project. Hay ghi nho ngu canh nay cho cac request tao anh va motion prompt tiep theo.",
+    );
+    if (!sentScript?.ok)
+      throw new Error(
+        `chatgpt-rotation-script-message-failed: ${sentScript?.error || "unknown"}`,
+      );
+    await sleep(1500);
+  }
+  const keyframes = projectDir
+    ? await collectRecentProjectKeyframes(projectDir, 5)
+    : [];
+  if (keyframes.length) {
+    await appendAppLog(null, {
+      source: "main",
+      kind: "running",
+      text: `ChatGPT rotation hydrate request 2: uploading ${keyframes.length} recent keyframes.`,
+      details: {
+        sceneId,
+        keyframes: keyframes.map((file) => path.basename(file)),
+      },
+    }).catch(() => null);
+    const uploadKeyframes = await uploadFilesToChatGptSequentially(
+      page,
+      keyframes,
+      sceneId,
+      {
+        rotationHydration: true,
+        request: 2,
+        trailingUploadLog: `Scene ${sceneId}: Uploading recent keyframe context for ChatGPT rotation hydration...`,
+      },
+    );
+    if (!uploadKeyframes?.ok)
+      throw new Error(
+        `chatgpt-rotation-keyframe-upload-failed: ${uploadKeyframes?.error || "unknown"}`,
+      );
+    const sentKeyframes = await sendPromptViaCdpInput(
+      page,
+      `Đây là ${keyframes.length} keyframe gần nhất đã tạo trong project. Hãy dùng chúng làm ngữ cảnh hình ảnh liên tục cho các scene tiếp theo.`,
+    );
+    if (!sentKeyframes?.ok)
+      throw new Error(
+        `chatgpt-rotation-keyframe-message-failed: ${sentKeyframes?.error || "unknown"}`,
+      );
+    await sleep(1500);
+  } else {
+    await appendAppLog(null, {
+      source: "main",
+      kind: "running",
+      text: `ChatGPT rotation hydrate request 2: no previous keyframes available; continuing.`,
+      details: { sceneId },
+    }).catch(() => null);
+  }
+  setChatGptContextFresh(false);
+  globalThis.__vidoraChatGptNewChatMode = false;
+}
+
+module.exports = {
+  initChatGptPipeline,
+  generateImageAndMotionWithChatGPT,
+  generateMotionPromptWithChatGPT,
+  generateMotionPromptWithChatGPTOnce,
+  validateMotionPromptResponse,
+  sanitizeAssetUrlForLog,
+  startChatGptImageNetworkCapture,
+  tryExtractChatGptNetworkImage,
+  chatGptImageCandidateSignature,
+  countVisibleChatGptImageCandidates,
+  hasVisibleChatGptImageCandidate,
+  classifyChatGptImageReadiness,
+  captureChatGptImageElementScreenshot,
+  saveChatGPTGeneratedImageAsset,
+  isLikelyChatGptLoadingPlaceholderImage,
+  isPreferredChatGptRealImageAsset,
+  isFalseChatGptImageGeneratingState,
+  refreshChatGptPageBeforeImageExtract,
+  waitForChatGptImageGenerationDoneBeforeExtract,
+  waitForLatestChatGPTGeneratedImage,
+  extractLatestChatGPTGeneratedImageBytes,
+  decodeImageBufferToPng,
+  validateSavedImageFile,
+  collectGeneratedImageUrlsScript,
+  checkExistingCompletedImageScript,
+  ensureChatGptImageLoadedAndHydratedScript,
+  adoptExistingSceneImage,
+  extractLatestChatGPTGeneratedImageBytesScript,
+  getChatGptImageCandidateBoxScript,
+  getLatestImageBoxScript,
+  waitForChatGptImageOrRetry,
+  waitForChatGptResponse,
+  maybeRenameChatGptCurrentConversationUntilTitle,
+  renameChatGptCurrentConversationUntilTitle,
+  waitForChatGptRecentItem,
+  checkChatGptCurrentConversationTitle,
+  getChatTitleStableKey,
+  markChatTitleStable,
+  isChatTitleStable,
+  sanitizeChatTitleForLog,
+  hydrateFreshChatGptContextAfterRotation,
 };

@@ -2708,6 +2708,157 @@ function readAssistantMessageSnapshotScript() {
   };
 }
 
+function readLatestAssistantScript() {
+  const bodyText = document.body?.innerText || "";
+  const bodyTail = bodyText.slice(-4000);
+
+  const visible = (node) => {
+    const rect = node.getBoundingClientRect?.();
+    if (!rect || rect.width < 4 || rect.height < 4) return false;
+    const style = window.getComputedStyle?.(node);
+    return !(
+      style &&
+      (style.visibility === "hidden" ||
+        style.display === "none" ||
+        Number(style.opacity || 1) === 0)
+    );
+  };
+
+  const buttons = [...document.querySelectorAll('button, [role="button"]')]
+    .map((node) => {
+      const rect = node.getBoundingClientRect?.();
+      const text =
+        `${node.textContent || ""} ${node.getAttribute?.("aria-label") || ""} ${node.title || ""}`.trim();
+      const html = String(node.innerHTML || "").slice(0, 1000);
+      return { rect, text, html };
+    })
+    .filter((item) => item.rect && item.rect.width > 8 && item.rect.height > 8);
+
+  const composerButtons = buttons.filter(
+    (item) =>
+      item.rect.top > window.innerHeight * 0.72 &&
+      item.rect.left > window.innerWidth * 0.55,
+  );
+  const stopButton = composerButtons.some(
+    (item) =>
+      /stop|cancel|dừng/i.test(item.text) ||
+      /<rect|data-icon=["']stop|stop-circle|square/i.test(item.html),
+  );
+  const voiceReady = composerButtons.some(
+    (item) =>
+      /voice|mic|microphone|record|dictate/i.test(item.text) ||
+      /waveform|audio|voice|mic/i.test(item.html),
+  );
+  const sendReady =
+    composerButtons.some(
+      (item) =>
+        !/stop|cancel|dung/i.test(item.text) &&
+        /send|submit|gui|arrow-up|paper-plane|composer-submit/i.test(
+          `${item.text} ${item.html}`,
+        ),
+    ) && !stopButton;
+
+  const thinkingText =
+    /Thinking about your request|Đang suy nghĩ|Generating|Creating/i.test(
+      bodyTail,
+    );
+  const streamingIndicator =
+    stopButton ||
+    [
+      ...document.querySelectorAll(
+        '[aria-busy="true"], [role="progressbar"], [data-testid*="loading"], [data-testid*="spinner"], [class*="result-streaming"]',
+      ),
+    ].some(visible);
+
+  const selectors = [
+    '[data-message-author-role="assistant"] .markdown',
+    '[data-message-author-role="assistant"]',
+    ".markdown",
+    "article .markdown",
+    'main [data-message-author-role="assistant"]',
+    "article",
+    ".message",
+    '[class*="response"]',
+  ];
+
+  let text = "";
+  let source = "empty";
+
+  for (const selector of selectors) {
+    const nodes = [...document.querySelectorAll(selector)]
+      .filter(visible)
+      .filter((node) => {
+        if (node.closest?.('[data-message-author-role="user"]')) return false;
+        if (node.querySelector?.('[data-message-author-role="user"]'))
+          return false;
+
+        const t = (node.innerText || "").trim();
+        if (t.length <= 20) return false;
+        if (
+          /^NHIỆM\s*VỤ\s*1\s*:|^NHIỆM\s*VỤ\s*2\s*:|^---\s*SCENE|^Dựa trên ảnh keyframe|Show more/i.test(
+            t,
+          ) &&
+          t.length < 300
+        )
+          return false;
+        return true;
+      });
+
+    if (nodes.length > 0) {
+      const lastNode = nodes.at(-1);
+      const extractedText = (
+        lastNode.innerText ||
+        lastNode.textContent ||
+        ""
+      ).trim();
+      if (extractedText.length > 20) {
+        text = extractedText;
+        source = selector;
+        break;
+      }
+    }
+  }
+
+  if (!text) {
+    const fallbackNodes = [
+      ...document.querySelectorAll(
+        '[data-message-author-role="assistant"], article',
+      ),
+    ]
+      .filter(visible)
+      .filter((node) => {
+        if (node.closest?.('[data-message-author-role="user"]')) return false;
+        const t = (node.innerText || "").trim();
+        return t.length > 20;
+      });
+    if (fallbackNodes.length > 0) {
+      text = fallbackNodes.at(-1).innerText.trim();
+      source = "fallback-unfiltered";
+    }
+  }
+
+  const generating = sendReady
+    ? false
+    : stopButton || (thinkingText && !voiceReady);
+
+  return {
+    count:
+      document.querySelectorAll('[data-message-author-role="assistant"]')
+        .length || 1,
+    text,
+    textLength: text.length,
+    source,
+    generating,
+    generation: false,
+    streamingIndicator,
+    stopButton,
+    sendReady,
+    voiceReady,
+    composerButtonCount: buttons.length,
+    mode: source,
+  };
+}
+
 module.exports = {
   clickChatGptStartNewChatScript,
   sendPromptScript,
@@ -2738,4 +2889,5 @@ module.exports = {
   clickUploadButtonScript,
   prepareChatGptCreateImageScript,
   readAssistantMessageSnapshotScript,
+  readLatestAssistantScript,
 };

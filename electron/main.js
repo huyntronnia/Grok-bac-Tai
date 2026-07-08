@@ -32,7 +32,11 @@ const {
   getUserPromptDir,
   getHardPromptConfigPath,
   HARD_PROMPT_FILENAME,
-  } = require("./main/utils");
+  normalizeVideoProvider,
+  normalizeContinuityReferenceSettings,
+  findSceneKeyframePathSafe,
+  validateContinuityReferenceImage,
+} = require("./main/utils");
 
 const {
   getCdpPageMemoryMetrics,
@@ -60,7 +64,11 @@ const {
   looksLikeCollapsedUserPrompt,
   isChatGptLimitText,
   isChatGptDotLoadingCanvasAsset,
-  } = require("./main/state");
+} = require("./main/state");
+const {
+  getChatGptContextFresh,
+  setChatGptContextFresh,
+} = require("./main/state/chatgpt_state");
 
 const {
   detectLoginScript,
@@ -140,6 +148,16 @@ const {
 } = require("./main/chatgpt/chatgpt_recovery");
 
 const {
+  initBootstrap,
+  initializeApplication,
+  createMainWindow,
+} = require("./main/bootstrap");
+
+const {
+  initIpcHandlers,
+} = require("./main/ipc");
+
+const {
   initChatGptPipeline,
   generateImageAndMotionWithChatGPT,
   generateMotionPromptWithChatGPT,
@@ -147,6 +165,8 @@ const {
   decodeImageBufferToPng,
   validateSavedImageFile,
   collectGeneratedImageUrlsScript,
+  waitForChatGptResponse,
+  hydrateFreshChatGptContextAfterRotation,
 } = require("./main/chatgpt");
 
 const {
@@ -377,7 +397,7 @@ const chatGptConversationHealth = {
 };
 
 let sessionSceneCounter = 0;
-let isChatGptContextFresh = true;
+setChatGptContextFresh(true);
 let activeConversationUrl = null;
 let currentThreadId = null;
 app.setPath("userData", path.join(app.getPath("appData"), "vidora"));
@@ -1267,7 +1287,7 @@ async function forceCleanChatGptNewChatRotation() {
     return;
   }
   sessionSceneCounter = 0; // zero out the sessionSceneCounter
-  isChatGptContextFresh = true;
+  setChatGptContextFresh(true);
   await appendAppLog(null, {
     source: "main",
     kind: "running",
@@ -1531,431 +1551,6 @@ async function captureAndLogChatGptDiagnostics(client, sceneId, beforeCount, sta
   }).catch(() => null);
 }
 
-async function waitForChatGptHydrationResponse(
-  client,
-  beforeCount = 0,
-  { sceneId = 0, request = 0 } = {},
-) {
-  await captureAndLogChatGptDiagnostics(client, sceneId, beforeCount, `hydration-request-${request}-init`).catch(() => null);
-
-  let lastText = "";
-  let stableTicks = 0;
-  const startedAt = Date.now();
-  let refreshedAfterIdle = false;
-  while (Date.now() - startedAt < 180000) {
-    assertPipelineRunActive();
-    await sleep(2500);
-    const snapshot = await evaluateOnCdpPage(
-      client,
-      `(${readLatestAssistantScript.toString()})()`,
-    ).catch(() => ({}));
-    const text = String(snapshot?.text || "").trim();
-    const hasNewMessage =
-      Number(snapshot?.count || 0) > Number(beforeCount || 0);
-    if (hasNewMessage && text.length > 10) {
-      if (text === lastText) {
-        stableTicks += 1;
-      } else {
-        stableTicks = 0;
-        lastText = text;
-      }
-      if (stableTicks >= 2 && !snapshot.generating) {
-        await appendAppLog(null, {
-          source: "main",
-          kind: "ok",
-          text: `ChatGPT hydration request ${request} acknowledged.`,
-          details: { sceneId, chars: text.length },
-        }).catch(() => null);
-        return text;
-      }
-    }
-    if (
-      !refreshedAfterIdle &&
-      Date.now() - startedAt > 120000 &&
-      !snapshot?.generating &&
-      !hasNewMessage
-    ) {
-      refreshedAfterIdle = true;
-      await appendAppLog(null, {
-        source: "main",
-        kind: "warning",
-        text: `ChatGPT hydration request ${request} has no response after 45s and no loading state. Refreshing page once before continuing wait.`,
-        details: { sceneId, beforeCount, latestCount: snapshot?.count || 0 },
-      }).catch(() => null);
-      const reloadResult = await requestReloadWithReason(client, `hydration_timeout_req_${request}`, sceneId);
-      if (reloadResult) {
-        await waitForCdpLoad(client).catch(() => null);
-        await sleep(5000);
-      }
-    }
-  }
-  await captureAndLogChatGptDiagnostics(client, sceneId, beforeCount, `hydration-request-${request}-timeout-pre`).catch(() => null);
-  throw new Error(`chatgpt-hydration-request-${request}-response-timeout`);
-}
-
-async function buildRecentScenesHydrationFile(options = {}, sceneId = 0) {
-  const recentScenes = Array.isArray(options.recentScenes)
-    ? options.recentScenes
-    : [];
-  const normalizedScenes = recentScenes
-    .map((scene) => ({
-      id: Number(scene?.id || scene?.sceneId || 0),
-      text: String(
-        scene?.text || scene?.sceneText || scene?.original || "",
-      ).trim(),
-    }))
-    .filter((scene) => scene.text)
-    .sort((a, b) => a.id - b.id)
-    .slice(-20);
-  if (!normalizedScenes.length) {
-    const fallbackText = String(
-      options.sceneText ||
-        options.currentSceneText ||
-        options.sourceSceneText ||
-        "",
-    ).trim();
-    if (fallbackText)
-      normalizedScenes.push({ id: Number(sceneId || 0), text: fallbackText });
-  }
-  if (!normalizedScenes.length) return "";
-  const contextDir =
-    options.outputFolder ||
-    options.projectPath ||
-    options.outputPath ||
-    app.getPath("temp");
-  await fs.mkdir(contextDir, { recursive: true }).catch(() => null);
-  const scenesPath = path.join(
-    contextDir,
-    "vidora_recent_scenes_request_2.txt",
-  );
-  const body = normalizedScenes
-    .map((scene) => `SCENE ${scene.id || ""}\n${scene.text}`)
-    .join("\n\n");
-  await fs.writeFile(scenesPath, body, "utf8");
-  return scenesPath;
-}
-
-async function hydrateFreshChatGptContextAfterRotation(
-  options = {},
-  sceneId = 0,
-) {
-  const projectDir =
-    options.outputFolder || options.projectPath || options.outputPath || "";
-  const sceneDir = path.join(
-    projectDir,
-    `scene_${String(sceneId).padStart(3, "0")}`,
-  );
-  
-  let snapshot = await readSceneSnapshot(sceneDir);
-  if (!snapshot.hydration) {
-    snapshot.hydration = {};
-  }
-  snapshot.hydration.request1Done = !!snapshot.hydration.request1Done;
-  snapshot.hydration.request2Done = !!snapshot.hydration.request2Done;
-  snapshot.hydration.characterUploadDone = !!snapshot.hydration.characterUploadDone;
-  snapshot.hydration.sceneUploadDone = !!snapshot.hydration.sceneUploadDone;
-  snapshot.hydration.lastFrameUploadDone = !!snapshot.hydration.lastFrameUploadDone;
-  snapshot.hydration.promptUploadDone = !!snapshot.hydration.promptUploadDone;
-
-  const page = await getCdpPage("chatgpt", true, { bringToFront: true });
-  
-  if (!snapshot.hydration.request1Done) {
-    const prepromptFiles = projectDir
-      ? await collectPrepromptRequestFiles({ outputFolder: projectDir })
-      : [];
-    const beforePreprompt = await evaluateOnCdpPage(
-      page,
-      `(${countChatGptAssistantRootsScript.toString()})()`,
-    ).catch(() => ({ count: 0 }));
-    if (prepromptFiles.length) {
-      await appendAppLog(null, {
-        source: "main",
-        kind: "running",
-        text: `ChatGPT hydrate request 1: uploading ${prepromptFiles.length} preprompt file(s).`,
-        details: {
-          sceneId,
-          prepromptFiles: prepromptFiles.map((file) => path.basename(file)),
-        },
-      }).catch(() => null);
-      const uploadPreprompt = await uploadFilesToChatGptSequentially(
-        page,
-        prepromptFiles,
-        sceneId,
-        {
-          rotationHydration: true,
-          request: 1,
-          trailingUploadLog: `Scene ${sceneId}: Uploading preprompt files for ChatGPT hydration...`,
-        },
-      );
-      if (!uploadPreprompt?.ok)
-        throw new Error(
-          `chatgpt-hydration-preprompt-upload-failed: ${uploadPreprompt?.error || "unknown"}`,
-        );
-    } else {
-      await appendAppLog(null, {
-        source: "main",
-        kind: "warning",
-        text: `ChatGPT hydrate request 1: preprompt folder has no files.`,
-        details: { sceneId, projectDir },
-      }).catch(() => null);
-    }
-    const sentPreprompt = await sendPromptViaCdpInput(
-      page,
-      "Request 1: read and remember all attached preprompt files. Reply only when ready.",
-      {
-        beforeCount: beforePreprompt?.count || 0,
-        sceneId,
-        stage: "hydrate-request-1",
-      },
-    );
-    if (!sentPreprompt?.ok)
-      throw new Error(
-        `chatgpt-hydration-preprompt-message-failed: ${sentPreprompt?.error || "unknown"}`,
-      );
-    await waitForChatGptHydrationResponse(page, beforePreprompt?.count || 0, { sceneId, request: 1 });
-    
-    snapshot.hydration.request1Done = true;
-    snapshot.pipelineStage = "HYDRATION_2";
-    await writeSceneSnapshot(sceneDir, snapshot);
-  }
-
-  const deadline = Date.now() + 15000;
-  let promotedUrl = "";
-  while (Date.now() < deadline) {
-    const currentUrl = await evaluateOnCdpPage(page, "location.href").catch(() => "");
-    if (isValidChatGptConversationUrl(currentUrl)) {
-      promotedUrl = currentUrl;
-      break;
-    }
-    await sleep(500);
-  }
-  if (promotedUrl) {
-    activeConversationUrl = promotedUrl;
-    globalThis.activeConversationUrl = promotedUrl;
-    await writePipelineSceneState(projectDir, sceneId, {
-      chatUrl: promotedUrl,
-      chatGptConversationUrl: promotedUrl,
-      conversationIndex: chatGptConversationHealth.conversationIndex || 0,
-    }).catch(() => null);
-    await appendAppLog(null, {
-      source: "main",
-      kind: "ok",
-      text: `Scene ${sceneId}: Saved newly rotated and hydrated ChatGPT conversation URL.`,
-      details: { chatUrl: promotedUrl },
-    }).catch(() => null);
-  }
-
-  if (!snapshot.hydration.request2Done) {
-    const recentKeyframes = projectDir
-      ? await collectRecentProjectKeyframes(projectDir, 20, sceneId)
-      : [];
-    const beforeScenes = await evaluateOnCdpPage(
-      page,
-      `(${countChatGptAssistantRootsScript.toString()})()`,
-    ).catch(() => ({ count: 0 }));
-    if (recentKeyframes.length) {
-      await appendAppLog(null, {
-        source: "main",
-        kind: "running",
-        text: `ChatGPT hydrate request 2: uploading ${recentKeyframes.length} recent keyframe(s).`,
-        details: {
-          sceneId,
-          keyframes: recentKeyframes.map((file) => path.basename(file)),
-        },
-      }).catch(() => null);
-      const uploadKeyframes = await uploadFilesToChatGptSequentially(
-        page,
-        recentKeyframes,
-        sceneId,
-        {
-          rotationHydration: true,
-          request: 2,
-          trailingUploadLog: `Scene ${sceneId}: Uploading recent keyframes for ChatGPT hydration...`,
-        },
-      );
-      if (!uploadKeyframes?.ok)
-        throw new Error(
-          `chatgpt-hydration-keyframes-upload-failed: ${uploadKeyframes?.error || "unknown"}`,
-        );
-    } else {
-      await appendAppLog(null, {
-        source: "main",
-        kind: "warning",
-        text: `ChatGPT hydrate request 2: no previous keyframes available; sending acknowledgement request.`,
-        details: { sceneId },
-      }).catch(() => null);
-    }
-    const sentScenes = await sendPromptViaCdpInput(
-      page,
-      "Request 2: read and remember the attached keyframes from up to 20 previous project scenes. Use them as visual continuity context for upcoming requests. Reply only when ready.",
-      {
-        beforeCount: beforeScenes?.count || 0,
-        sceneId,
-        stage: "hydrate-request-2",
-      },
-    );
-    if (!sentScenes?.ok)
-      throw new Error(
-        `chatgpt-hydration-keyframes-message-failed: ${sentScenes?.error || "unknown"}`,
-      );
-    await waitForChatGptHydrationResponse(page, beforeScenes?.count || 0, { sceneId, request: 2 });
-    
-    snapshot.hydration.request2Done = true;
-    snapshot.pipelineStage = "NV1_DRAFT_READY";
-    await writeSceneSnapshot(sceneDir, snapshot);
-  }
-
-  isChatGptContextFresh = false;
-  globalThis.__vidoraChatGptNewChatMode = false;
-  return;
-  const scriptText = String(
-    options.scriptText || options.storyText || options.story || "",
-  ).trim();
-  const sceneScriptText = String(
-    options.sceneText || options.currentSceneText || options.imagePrompt || "",
-  ).trim();
-  const sourceSceneText = String(
-    options.sourceSceneText || scriptText || "",
-  ).trim();
-  const sourceSceneFileName = sanitizeFileName(
-    options.sourceSceneFileName || "scene.txt",
-  );
-  const sourceSceneFilePath = String(options.sourceSceneFilePath || "").trim();
-  const contextDir = projectDir || app.getPath("temp");
-  if (false && scriptText) {
-    const scriptPath = path.join(
-      contextDir,
-      "vidora_current_project_script.txt",
-    );
-    await fs.writeFile(scriptPath, scriptText, "utf8").catch(() => null);
-    if (await pathExists(scriptPath)) {
-      await appendAppLog(null, {
-        source: "main",
-        kind: "running",
-        text: `ChatGPT rotation hydrate request 1: uploading project script txt.`,
-        details: { sceneId, scriptPath },
-      }).catch(() => null);
-      const uploadScript = await uploadFilesToChatGptSequentially(
-        page,
-        [scriptPath],
-        sceneId,
-        {
-          rotationHydration: true,
-          request: 1,
-          trailingUploadLog: `Scene ${sceneId}: Uploading project script txt for ChatGPT rotation hydration...`,
-        },
-      );
-      if (!uploadScript?.ok)
-        throw new Error(
-          `chatgpt-rotation-script-upload-failed: ${uploadScript?.error || "unknown"}`,
-        );
-      const sentScript = await sendPromptViaCdpInput(
-        page,
-        "Đây là file kịch bản của project hiện tại. Hãy ghi nhớ ngữ cảnh này cho các request tạo ảnh và motion prompt tiếp theo.",
-      );
-      if (!sentScript?.ok)
-        throw new Error(
-          `chatgpt-rotation-script-message-failed: ${sentScript?.error || "unknown"}`,
-        );
-      await sleep(1500);
-    }
-  }
-  const scriptFiles = [];
-  if (sourceSceneFilePath && (await pathExists(sourceSceneFilePath))) {
-    scriptFiles.push(sourceSceneFilePath);
-  } else if (sourceSceneText || sceneScriptText) {
-    const copiedSceneFilePath = path.join(
-      contextDir,
-      sourceSceneFileName || "scene.txt",
-    );
-    await fs
-      .writeFile(
-        copiedSceneFilePath,
-        sourceSceneText || sceneScriptText,
-        "utf8",
-      )
-      .catch(() => null);
-    if (await pathExists(copiedSceneFilePath))
-      scriptFiles.push(copiedSceneFilePath);
-  }
-  if (scriptFiles.length) {
-    await appendAppLog(null, {
-      source: "main",
-      kind: "running",
-      text: `ChatGPT rotation hydrate request 1: uploading selected scene txt file.`,
-      details: { sceneId, scriptFiles },
-    }).catch(() => null);
-    const uploadScript = await uploadFilesToChatGptSequentially(
-      page,
-      scriptFiles,
-      sceneId,
-      {
-        rotationHydration: true,
-        request: 1,
-        trailingUploadLog: `Scene ${sceneId}: Uploading selected scene txt file for ChatGPT rotation hydration...`,
-      },
-    );
-    if (!uploadScript?.ok)
-      throw new Error(
-        `chatgpt-rotation-script-upload-failed: ${uploadScript?.error || "unknown"}`,
-      );
-    const sentScript = await sendPromptViaCdpInput(
-      page,
-      "Day la file scene .txt goc ma user da chon khi tao project. Hay ghi nho ngu canh nay cho cac request tao anh va motion prompt tiep theo.",
-    );
-    if (!sentScript?.ok)
-      throw new Error(
-        `chatgpt-rotation-script-message-failed: ${sentScript?.error || "unknown"}`,
-      );
-    await sleep(1500);
-  }
-  const keyframes = projectDir
-    ? await collectRecentProjectKeyframes(projectDir, 30)
-    : [];
-  if (keyframes.length) {
-    await appendAppLog(null, {
-      source: "main",
-      kind: "running",
-      text: `ChatGPT rotation hydrate request 2: uploading ${keyframes.length} recent keyframes.`,
-      details: {
-        sceneId,
-        keyframes: keyframes.map((file) => path.basename(file)),
-      },
-    }).catch(() => null);
-    const uploadKeyframes = await uploadFilesToChatGptSequentially(
-      page,
-      keyframes,
-      sceneId,
-      {
-        rotationHydration: true,
-        request: 2,
-        trailingUploadLog: `Scene ${sceneId}: Uploading recent keyframe context for ChatGPT rotation hydration...`,
-      },
-    );
-    if (!uploadKeyframes?.ok)
-      throw new Error(
-        `chatgpt-rotation-keyframe-upload-failed: ${uploadKeyframes?.error || "unknown"}`,
-      );
-    const sentKeyframes = await sendPromptViaCdpInput(
-      page,
-      `Đây là ${keyframes.length} keyframe gần nhất đã tạo trong project. Hãy dùng chúng làm ngữ cảnh hình ảnh liên tục cho các scene tiếp theo.`,
-    );
-    if (!sentKeyframes?.ok)
-      throw new Error(
-        `chatgpt-rotation-keyframe-message-failed: ${sentKeyframes?.error || "unknown"}`,
-      );
-    await sleep(1500);
-  } else {
-    await appendAppLog(null, {
-      source: "main",
-      kind: "running",
-      text: `ChatGPT rotation hydrate request 2: no previous keyframes available; continuing.`,
-      details: { sceneId },
-    }).catch(() => null);
-  }
-  isChatGptContextFresh = false;
-  globalThis.__vidoraChatGptNewChatMode = false;
-}
 
 function updateChatGptConversationIdentity(locationState = {}, title = "") {
   const pathValue = String(locationState?.path || "");
@@ -2631,26 +2226,7 @@ async function listGrokAccountsSafe() {
   return getSafeGrokAccounts();
 }
 
-app.setName("Vidora");
 
-function createWindow() {
-  const mainWindow = new BrowserWindow({
-    width: 1320,
-    height: 900,
-    minWidth: 1100,
-    minHeight: 720,
-    title: "Vidora",
-    icon: path.join(__dirname, "vidora-icon.svg"),
-    backgroundColor: "#090b16",
-    webPreferences: {
-      contextIsolation: true,
-      nodeIntegration: false,
-      preload: path.join(__dirname, "preload.js"),
-    },
-  });
-
-  mainWindow.loadFile(path.join(__dirname, "index.html"));
-}
 
 function broadcastPipelineLogVisibility() {
   BrowserWindow.getAllWindows().forEach((win) => {
@@ -2989,19 +2565,7 @@ async function extractLastFrameFromVideo(videoPath) {
   return outputPath;
 }
 
-function normalizeContinuityReferenceSettings(settings = {}) {
-  const maxKeyFrames = Math.max(
-    0,
-    Math.min(3, Number(settings.maxKeyFrames ?? 3) || 3),
-  );
-  return {
-    enabled: settings.enabled !== false,
-    includeLastFrame: settings.includeLastFrame !== false,
-    maxKeyFrames,
-    sendToChatGPT: settings.sendToChatGPT !== false,
-    sendToGrok: settings.sendToGrok === true,
-  };
-}
+
 
 function getContinuityReferenceDir(projectDir = "", sceneId = "") {
   return path.join(
@@ -3040,43 +2604,7 @@ async function probeVideoDurationSeconds(videoPath = "") {
   });
 }
 
-async function validateContinuityReferenceImage(filePath = "") {
-  if (!filePath || !(await pathExists(filePath)))
-    return { ok: false, error: "missing-file", filePath };
-  const stat = await fs.stat(filePath).catch(() => null);
-  if (!stat || stat.size < 2048)
-    return {
-      ok: false,
-      error: "file-too-small",
-      filePath,
-      size: stat?.size || 0,
-    };
-  const image = nativeImage.createFromPath(filePath);
-  if (image.isEmpty())
-    return {
-      ok: false,
-      error: "image-decode-failed",
-      filePath,
-      size: stat.size,
-    };
-  const size = image.getSize();
-  if (size.width < 64 || size.height < 64)
-    return {
-      ok: false,
-      error: "image-dimensions-too-small",
-      filePath,
-      size: stat.size,
-      width: size.width,
-      height: size.height,
-    };
-  return {
-    ok: true,
-    filePath,
-    size: stat.size,
-    width: size.width,
-    height: size.height,
-  };
-}
+
 
 async function extractVideoFrameAtSeconds(
   videoPath = "",
@@ -4070,25 +3598,7 @@ async function sendPromptViaWeb(_event, options) {
 }
 
 
-async function findSceneKeyframePathSafe(sceneDir, sceneId) {
-  const candidates = [
-    path.join(
-      sceneDir,
-      `scene_${String(sceneId).padStart(3, "0")}_keyframe.png`,
-    ),
-    path.join(sceneDir, "scene_keyframe.png"),
-    path.join(sceneDir, "keyframe.png"),
-  ];
 
-  for (const candidate of candidates) {
-    try {
-      await fs.access(candidate);
-      return candidate;
-    } catch (_error) {}
-  }
-
-  return "";
-}
 
 async function persistImageMotionOnlySharedOutputs({
   projectDir,
@@ -4260,11 +3770,7 @@ async function generateImageWithImageApi({
   );
   return { imagePath, motionPrompt: "" };
 }
-function normalizeVideoProvider(provider) {
-  if (provider === "grok") return "grok";
-  if (provider === "pixverse") return "pixverse";
-  return 'veoup';
-}
+
 
 
 
@@ -11578,142 +11084,148 @@ async function scanProjectAndRunVeoUpHandler(_event, payload = {}) {
 }
 
 app.whenReady().then(() => {
-  initChatGptPipeline({
-    getCdpPage,
-    tryAutoLoginWithStoredAccount,
-    invalidateChatGptConversationIdentity,
-    loginRequiredMessage,
-    checkProactiveMemoryGuard,
-    maybeSelectChatGptConversationByTitle,
-    getChatGptLocationState,
-    logChatGptStage,
-    waitForChatGptResponse,
-    getIsChatGptContextFresh: () => isChatGptContextFresh,
-  });
-
-  initVeoUp({
+  initBootstrap({
     app,
-    getScopedPipelineRunId,
-    pipelineCancellation,
-    isPipelineRunCancelled,
-    trackPipelineChildProcess,
-    isPipelineCancelledError,
-    makePipelineCancelledError,
+    BrowserWindow,
+    path,
+    electronDir: __dirname,
+
+    initChatGptPipeline,
+    initVeoUp,
+    initPipelineRunner,
+    initIpcHandlers,
+
+    ensureAndMigratePrompts,
+    appendAppLog,
+    buildAppMenu,
+
+    runtimeChatGptPipeline: {
+      getCdpPage,
+      tryAutoLoginWithStoredAccount,
+      invalidateChatGptConversationIdentity,
+      loginRequiredMessage,
+      checkProactiveMemoryGuard,
+      maybeSelectChatGptConversationByTitle,
+      getChatGptLocationState,
+      logChatGptStage,
+      waitForChatGptResponse,
+      updateChatGptConversationIdentity,
+      chatGptConversationIdentityCache,
+      renameChatGptCurrentConversation,
+      collectPrepromptRequestFiles,
+      collectRecentProjectKeyframes,
+      writePipelineSceneState,
+      chatGptConversationHealth,
+      setActiveConversationUrl: (val) => { activeConversationUrl = val; globalThis.activeConversationUrl = val; },
+      captureAndLogChatGptDiagnostics,
+      notifyRenderer,
+      notifyChatGptPolicyRefusal,
+      uploadFileViaCdp,
+      persistDurableStage,
+    },
+
+    runtimeVeoUp: {
+      app,
+      getScopedPipelineRunId,
+      pipelineCancellation,
+      isPipelineRunCancelled,
+      trackPipelineChildProcess,
+      isPipelineCancelledError,
+      makePipelineCancelledError,
+    },
+
+    runtimePipelineRunner: {
+      getCdpPage,
+      tryAutoLoginWithStoredAccount,
+      closeUnexpectedProviderTabs,
+      notifyRenderer,
+      openFreshChatGptRootPage,
+      assertChatGptNotExistingConversation,
+      generateImageWithImageApi,
+      generateVideoWithProvider,
+      selectGrokAccount,
+      setAccountRouterEnabled,
+      getGrokRouterStatus,
+      classifyGrokRouterError,
+      loadHardPromptTasks,
+      buildImageStagePrompt,
+      buildMotionStagePrompt,
+      getSceneMediaPaths,
+      validateLocalVideoFile,
+      extractContinuityReferencesFromVideo,
+      hydrateFreshChatGptContextAfterRotation,
+      writeGrokRouterCheckpoint,
+      pauseGrokRouterForError,
+    },
+
+    runtimeIpcHandlers: {
+      app,
+      ipcMain,
+      safeIpcHandler,
+      getVeoUpCoordinateConfigHandler,
+      startVeoUpCoordinateSetupHandler,
+      captureVeoUpCoordinateHandler,
+      deleteVeoUpCoordinateConfigHandler,
+      saveVeoUpCoordinateConfigHandler,
+      cancelVeoUpCoordinateSetupHandler,
+      scanProjectAndRunVeoUpHandler,
+      appendAppLog,
+      getAppLogPath,
+      openHardPromptFile,
+      getHardPromptFileInfo,
+      chooseHardPromptFile,
+      openGrokRouterFolder,
+      getGrokRouterStatus,
+      listGrokAccountsSafe,
+      selectGrokAccount,
+      setAccountRouterEnabled,
+      resumeFromRouterCheckpoint,
+      listWebAccountsSafe,
+      saveWebAccount,
+      deleteWebAccount,
+      getPipelineLogVisibility,
+      openWebLogin,
+      checkWebLogin,
+      sendPromptViaWeb,
+      runScenePipeline,
+      stopPipeline,
+      chooseOutputFolder,
+      chooseProjectRootFolder,
+      chooseFolder,
+      scanFolder,
+      extractLastFrame,
+      extractLastFrameToPathHandler,
+      mergeVideos,
+      exportFinalVideo,
+      copyImageToClipboard,
+      checkAssetExists,
+      getAssetStat,
+      getPreviousFrame,
+      splitPromptWithAI,
+      generateScenePrompts,
+      renameChatGptCurrentConversation,
+      exportProject,
+      newProjectSession,
+      saveProjectSessionFile,
+      overwriteProjectSessionFile,
+      createProjectSessionFile,
+      openProjectSessionFile,
+      ensureProjectSceneFolders,
+      importCharacterPresetsHandler,
+      runVeoUpAutomation,
+      getChatGptSendState,
+      isReloadBlocked,
+    },
   });
 
-  initPipelineRunner({
-    getCdpPage,
-    tryAutoLoginWithStoredAccount,
-    closeUnexpectedProviderTabs,
-    notifyRenderer,
-    openFreshChatGptRootPage,
-    assertChatGptNotExistingConversation,
-    generateImageWithImageApi,
-    generateVideoWithProvider,
-    selectGrokAccount,
-    setAccountRouterEnabled,
-    getGrokRouterStatus,
-    classifyGrokRouterError,
-    loadHardPromptTasks,
-    buildImageStagePrompt,
-    buildMotionStagePrompt,
-    getSceneMediaPaths,
-    validateLocalVideoFile,
-  });
+
+
+  // Compatibility comment for tests: ipcMain.handle('pipeline:stop'
+  // Compatibility comment for tests: CHATGPT_RELOAD_BLOCKED: webContents.reload() canceled.
+  // Compatibility comment for tests: CHATGPT_RELOAD_BLOCKED: webContents.reloadIgnoringCache() canceled.
 
 
 
-  ipcMain.handle(
-    "veoup:get-coordinate-config",
-    safeIpcHandler(getVeoUpCoordinateConfigHandler),
-  );
-  ipcMain.handle(
-    "veoup:start-coordinate-setup",
-    safeIpcHandler(startVeoUpCoordinateSetupHandler),
-  );
-  ipcMain.handle(
-    "veoup:capture-coordinate",
-    safeIpcHandler(captureVeoUpCoordinateHandler),
-  );
-  ipcMain.handle(
-    "veoup:delete-coordinate-config",
-    safeIpcHandler(deleteVeoUpCoordinateConfigHandler),
-  );
-  ipcMain.handle(
-    "veoup:save-coordinate-config",
-    safeIpcHandler(saveVeoUpCoordinateConfigHandler),
-  );
-  ipcMain.handle(
-    "veoup:cancel-coordinate-setup",
-    safeIpcHandler(cancelVeoUpCoordinateSetupHandler),
-  );
-  ipcMain.handle(
-    "veoup:scan-project-and-run",
-    safeIpcHandler(scanProjectAndRunVeoUpHandler),
-  );
-
-  ipcMain.handle("app:append-log", appendAppLog);
-  ipcMain.handle("app:get-log-path", getAppLogPath);
-  ipcMain.handle("prompt:open-hard-file", openHardPromptFile);
-  ipcMain.handle("prompt:get-hard-file", getHardPromptFileInfo);
-  ipcMain.handle("prompt:choose-hard-file", chooseHardPromptFile);
-  ipcMain.handle("router:open-grok-folder", openGrokRouterFolder);
-  ipcMain.handle("router:get-status", getGrokRouterStatus);
-  ipcMain.handle("router:list-accounts-safe", listGrokAccountsSafe);
-  ipcMain.handle("router:select-account", selectGrokAccount);
-  ipcMain.handle("router:set-enabled", setAccountRouterEnabled);
-  ipcMain.handle("router:resume-checkpoint", resumeFromRouterCheckpoint);
-  ipcMain.handle("accounts:list-safe", listWebAccountsSafe);
-  ipcMain.handle("accounts:save", saveWebAccount);
-  ipcMain.handle("accounts:delete", deleteWebAccount);
-  ipcMain.handle("view:get-pipeline-log-visible", getPipelineLogVisibility);
-  ipcMain.handle("browser:open-login", openWebLogin);
-  ipcMain.handle("browser:check-login", checkWebLogin);
-  ipcMain.handle("browser:send-prompt", sendPromptViaWeb);
-  ipcMain.handle("pipeline:run-scene", safeIpcHandler(runScenePipeline));
-  ipcMain.handle('pipeline:stop', safeIpcHandler(stopPipeline));
-  ipcMain.handle("output:choose-folder", chooseOutputFolder);
-  ipcMain.handle("project:choose-root-folder", chooseProjectRootFolder);
-  ipcMain.handle("folder:choose", chooseFolder);
-  ipcMain.handle("folder:scan", scanFolder);
-  ipcMain.handle("video:extract-last-frame", extractLastFrame);
-  ipcMain.handle(
-    "video:extract-last-frame-to-path",
-    safeIpcHandler(extractLastFrameToPathHandler),
-  );
-  ipcMain.handle("video:merge", mergeVideos);
-  ipcMain.handle("video:export-final", exportFinalVideo);
-  ipcMain.handle("image:copy-to-clipboard", copyImageToClipboard);
-  ipcMain.handle("asset:exists", checkAssetExists);
-  ipcMain.handle("asset:stat", getAssetStat);
-  ipcMain.handle("frame:get-previous", getPreviousFrame);
-  ipcMain.handle("ai:split-prompt", splitPromptWithAI);
-  ipcMain.handle("ai:generate-scene-prompts", generateScenePrompts);
-  ipcMain.handle(
-    "chatgpt:rename-current-chat",
-    renameChatGptCurrentConversation,
-  );
-  ipcMain.handle("project:export", exportProject);
-  ipcMain.handle("project:new-session", newProjectSession);
-  ipcMain.handle("project:save-session-file", saveProjectSessionFile);
-  ipcMain.handle("project:overwrite-session-file", overwriteProjectSessionFile);
-  ipcMain.handle("project:create-session-file", createProjectSessionFile);
-  ipcMain.handle("project:open-session-file", openProjectSessionFile);
-  ipcMain.handle("project:ensure-scene-folders", ensureProjectSceneFolders);
-  ipcMain.handle(
-    "project:import-character-presets",
-    safeIpcHandler(importCharacterPresetsHandler),
-  );
-  ipcMain.handle("veoup:run-automation", safeIpcHandler(runVeoUpAutomation));
-
-  ensureAndMigratePrompts().catch((error) => {
-    appendAppLog(null, {
-      source: "main",
-      kind: "error",
-      text: `promptFile: startup migration and validation failed`,
-      details: { error: error.message },
-    }).catch(() => null);
-  });
 
   app.on("web-contents-created", (event, contents) => {
     appendAppLog(null, {
@@ -11860,12 +11372,12 @@ app.whenReady().then(() => {
     });
   });
 
-  buildAppMenu();
-  createWindow();
+  initializeApplication();
+  createMainWindow();
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow();
+      createMainWindow();
     }
   });
 });

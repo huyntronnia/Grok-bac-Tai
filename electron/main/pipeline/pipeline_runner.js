@@ -6,7 +6,8 @@ const fs = require("fs/promises");
 const path = require("path");
 
 const { appendAppLog, maskRouterText } = require("../logging");
-const { pathExists, sleep, getFfmpegBinaryPath } = require("../utils");
+const { pathExists, sleep, getFfmpegBinaryPath, normalizeVideoProvider, normalizeContinuityReferenceSettings, findSceneKeyframePathSafe, validateContinuityReferenceImage } = require("../utils");
+const { getDurablePipelineBackoffMs } = require("../recovery");
 const { logMemoryMilestone } = require("../memory");
 const {
   writeSceneSnapshot,
@@ -15,8 +16,13 @@ const {
   isChatGptActivelyGenerating,
   looksLikeCollapsedUserPrompt,
   hashChatGptSnapshotText,
-  isChatGptDotLoadingCanvasAsset
+  isChatGptDotLoadingCanvasAsset,
+  getPipelineStateFile,
 } = require("../state");
+const {
+  getChatGptContextFresh,
+  setChatGptContextFresh,
+} = require("../state/chatgpt_state");
 const {
   evaluateOnCdpPage,
   waitForCdpLoad,
@@ -30,7 +36,11 @@ const {
   requestReloadWithReason,
   isReloadBlocked,
   forceCleanChatGptNewChatRotation,
-  isChatGptRequestRotationEligible
+  isChatGptRequestRotationEligible,
+  countChatGptAssistantRootsScript,
+  adoptExistingSceneImage,
+  decodeImageBufferToPng,
+  validateSavedImageFile,
 } = require("../chatgpt");
 const {
   executeVeoUpAutomation,
@@ -72,6 +82,10 @@ let buildImageStagePrompt;
 let buildMotionStagePrompt;
 let getSceneMediaPaths;
 let validateLocalVideoFile;
+let extractContinuityReferencesFromVideo;
+let hydrateFreshChatGptContextAfterRotation;
+let writeGrokRouterCheckpoint;
+let pauseGrokRouterForError;
 
 function initPipelineRunner(runtime = {}) {
   getCdpPage = runtime.getCdpPage;
@@ -91,6 +105,10 @@ function initPipelineRunner(runtime = {}) {
   buildMotionStagePrompt = runtime.buildMotionStagePrompt;
   getSceneMediaPaths = runtime.getSceneMediaPaths;
   validateLocalVideoFile = runtime.validateLocalVideoFile;
+  extractContinuityReferencesFromVideo = runtime.extractContinuityReferencesFromVideo;
+  hydrateFreshChatGptContextAfterRotation = runtime.hydrateFreshChatGptContextAfterRotation;
+  writeGrokRouterCheckpoint = runtime.writeGrokRouterCheckpoint;
+  pauseGrokRouterForError = runtime.pauseGrokRouterForError;
 }
 
 // --- Moved State Variables ---
@@ -110,8 +128,7 @@ const scenePipelineLocks = new Map();
 const scenePipelineFailureTracker = {};
 
 let sessionSceneCounter = 0;
-
-let isChatGptContextFresh = true;
+const CHAT_ROTATION_ENABLED = false;
 
 // --- Moved Functions ---
 function getScopedPipelineRunId() {
@@ -555,7 +572,7 @@ async function runScenePipelineLocked(_event, options) {
     globalThis.__vidoraLastProjectName = currentProjectName;
     globalThis.__vidoraDisableSidebarSelection = false;
     sessionSceneCounter = 0;
-    isChatGptContextFresh = true;
+    setChatGptContextFresh(true);
     await appendAppLog(null, {
       source: "main",
       kind: "running",
@@ -567,7 +584,7 @@ async function runScenePipelineLocked(_event, options) {
   if (Number(sceneId) === 1) {
     globalThis.__vidoraDisableSidebarSelection = false;
     sessionSceneCounter = 0;
-    isChatGptContextFresh = true;
+    setChatGptContextFresh(true);
     await appendAppLog(null, {
       source: "main",
       kind: "running",
@@ -575,7 +592,7 @@ async function runScenePipelineLocked(_event, options) {
     }).catch(() => null);
   }
 
-  if (isChatGptContextFresh) {
+  if (getChatGptContextFresh()) {
     assertPipelineRunActive(runId);
     await appendAppLog(null, {
       source: "main",
@@ -643,8 +660,7 @@ async function runScenePipelineLocked(_event, options) {
           },
         }).catch(() => null);
       }
-
-      if (sessionSceneCounter >= 20) {
+      if (CHAT_ROTATION_ENABLED && sessionSceneCounter >= 20) {
         await appendAppLog(null, {
           source: "main",
           kind: "running",
@@ -658,7 +674,7 @@ async function runScenePipelineLocked(_event, options) {
         assertPipelineRunActive(runId);
       }
 
-      if (globalThis.__vidoraSafeExitRotationScheduled) {
+      if (CHAT_ROTATION_ENABLED && globalThis.__vidoraSafeExitRotationScheduled) {
         await appendAppLog(null, {
           source: "main",
           kind: "warning",
@@ -672,7 +688,6 @@ async function runScenePipelineLocked(_event, options) {
         assertPipelineRunActive(runId);
         sessionSceneCounter = 0;
       }
-
       // Inter-Scene Breather Padding: wait 10000ms to release active browser memory cache
       await appendAppLog(null, {
         source: "main",
@@ -1017,12 +1032,11 @@ async function runScenePipelineLockedInternal(_event, options) {
   const continuitySettings = normalizeContinuityReferenceSettings(
     options.continuityReferences || options.continuity || {},
   );
-  const continuityReferenceState = {
-    ok: false,
-    skipped: true,
-    reason: "deleted",
-    paths: [],
-  };
+  const continuityReferenceState = await ensureContinuityReferencesForPreviousScene({
+    projectDir,
+    sceneId,
+    settings: continuitySettings,
+  });
   if (videoProvider === "grok") grokRouterState.routingPolicy = "round_robin";
   if (
     videoProvider === "grok" &&
@@ -1752,6 +1766,79 @@ async function imageFileToDataUrl(imagePath) {
   return `data:${mime};base64,${buffer.toString("base64")}`;
 }
 
+async function ensureContinuityReferencesForSceneVideo({ videoPath = '', projectDir = '', sceneId = 0, settings = {} } = {}) {
+  return extractContinuityReferencesFromVideo(videoPath, projectDir, sceneId, settings).catch(async (error) => {
+    await appendAppLog(null, { source: 'main', kind: 'running', text: `continuityRefs: extraction skipped reason=${maskRouterText(error.message || error)}`, details: { sceneId, video: path.basename(videoPath || '') } });
+    return { ok: false, skipped: true, reason: error.message || String(error), sourceSceneId: sceneId, paths: [], keyFramePaths: [] };
+  });
+}
+
+async function ensureContinuityReferencesForPreviousScene({ projectDir = '', sceneId = 0, settings = {} } = {}) {
+  const previousSceneId = Number(sceneId) - 1;
+  const normalized = normalizeContinuityReferenceSettings(settings);
+  if (!normalized.enabled) {
+    await appendAppLog(null, { source: 'main', kind: 'running', text: `continuityRefs: extraction skipped reason=disabled scene=${sceneId}` });
+    return { ok: true, skipped: true, reason: 'disabled', sourceSceneId: previousSceneId, paths: [] };
+  }
+  if (previousSceneId < 1) {
+    await appendAppLog(null, { source: 'main', kind: 'running', text: `chatgptContinuity: no previous references for scene=${sceneId}` });
+    return { ok: true, skipped: true, reason: 'first-scene', sourceSceneId: 0, paths: [] };
+  }
+  const previousVideoPath = path.join(projectDir, `scene_${String(previousSceneId).padStart(3, '0')}`, `scene_${String(previousSceneId).padStart(3, '0')}_video.mp4`);
+  return ensureContinuityReferencesForSceneVideo({ videoPath: previousVideoPath, projectDir, sceneId: previousSceneId, settings: normalized });
+}
+
+function buildContinuityPromptInstruction(referenceCount = 0) {
+  if (!referenceCount) return '';
+  return 'Use the attached reference images from the previous video to preserve character identity, outfit, environment, lighting, camera continuity, and visual style. The last-frame reference is the strongest continuity anchor. Generate the new keyframe for the next scene based on the current scene description while keeping continuity with the references. Use them as continuity references only, not exact copies.';
+}
+
+function appendContinuityGuidanceToMotionPrompt(prompt = '', continuityRefs = {}, settings = {}) {
+  const normalized = normalizeContinuityReferenceSettings(settings);
+  const refs = (continuityRefs?.paths || []).filter(Boolean).slice(0, 4);
+  if (!normalized.enabled || !refs.length) return prompt;
+  const guidance = [
+    'CONTINUITY REFERENCES:',
+    `Use the previous video reference frames available for this scene (source scene ${continuityRefs.sourceSceneId || 'previous'}; ${refs.length} frame(s)). Keep character identity, outfit, environment, lighting, camera direction, and motion continuity consistent. Treat the last frame as the strongest handoff anchor. Do not copy artifacts or frozen poses exactly.`,
+  ].join('\n');
+  return String(prompt || '') + '\n\n' + guidance;
+}
+
+async function buildImageMotionOnlyPipelineResult({
+  sceneDir,
+  sceneId,
+  imagePath,
+  motionPrompt,
+  finalImagePrompt = '',
+  continuityReferenceState = null,
+}) {
+  return {
+    sceneDir,
+    phase: 'motion_prompt',
+    [ ['image', 'Motion', 'Only', 'Mode'].join('') ]: true,
+    [ ['skip', 'Video', 'Generation'].join('') ]: true,
+    imagePath,
+    imageDataUrl: imagePath ? await imageFileToDataUrl(imagePath).catch(() => '') : '',
+    imagePromptUsed: finalImagePrompt || '',
+    motionPrompt,
+    motionPromptPath: path.join(sceneDir, 'motion_prompt.txt'),
+    videoPath: '',
+    videoProvider: 'none',
+    videoStatus: ['skipped', 'image', 'motion', 'only'].join('-'),
+    videoError: '',
+    continuityReferencePaths: continuityReferenceState?.paths || [],
+    continuityReferenceSourceScene: continuityReferenceState?.sourceSceneId || null,
+    generatedContinuityReferences: {
+      ok: false,
+      skipped: true,
+      reason: ['image', 'motion', 'only', 'mode'].join('-'),
+      sourceSceneId: sceneId,
+      paths: [],
+    },
+    router: null,
+  };
+}
+
 module.exports = {
   initPipelineRunner,
   runScenePipeline,
@@ -1779,10 +1866,14 @@ module.exports = {
   isSceneScopedFilePath,
   startNextSceneChatGptPrefetch,
   imageFileToDataUrl,
-   pipelineCancellation,
-  
-  // Export states for injection / testing if needed
-  getIsChatGptContextFresh: () => isChatGptContextFresh,
-  setChatGptContextFresh: (val) => { isChatGptContextFresh = val; },
+  pipelineCancellation,
+
+  // Restored functions
+  ensureContinuityReferencesForSceneVideo,
+  ensureContinuityReferencesForPreviousScene,
+  buildContinuityPromptInstruction,
+  appendContinuityGuidanceToMotionPrompt,
+  buildImageMotionOnlyPipelineResult,
+
   resetSessionSceneCounter: () => { sessionSceneCounter = 0; }
 };

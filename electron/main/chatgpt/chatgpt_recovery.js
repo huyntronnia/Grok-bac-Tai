@@ -24,6 +24,9 @@ const {
   isChatGptActivelyGenerating,
   sanitizeChatGptImageSnapshot,
 } = require("../state");
+const {
+  setChatGptContextFresh,
+} = require("../state/chatgpt_state");
 const CDP = require("chrome-remote-interface");
 
 // Injected dependencies
@@ -32,7 +35,6 @@ let tryAutoLoginWithStoredAccount = () => null;
 let closeUnexpectedProviderTabs = () => null;
 let invalidateChatGptConversationIdentity = () => null;
 let resetSessionSceneCounter = () => null;
-let setChatGptContextFresh = () => null;
 let assertPipelineRunActive = () => null;
 let CHROME_DEBUG_PORT = 9223;
 let PROVIDER_META = {};
@@ -53,9 +55,6 @@ function initChatGptRecovery(runtime = {}) {
   }
   if (typeof runtime.resetSessionSceneCounter === "function") {
     resetSessionSceneCounter = runtime.resetSessionSceneCounter;
-  }
-  if (typeof runtime.setChatGptContextFresh === "function") {
-    setChatGptContextFresh = runtime.setChatGptContextFresh;
   }
   if (typeof runtime.assertPipelineRunActive === "function") {
     assertPipelineRunActive = runtime.assertPipelineRunActive;
