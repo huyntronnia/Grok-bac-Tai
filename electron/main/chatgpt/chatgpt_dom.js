@@ -2393,7 +2393,323 @@ function sendPromptScript(prompt) {
   return { ok: true, mode: "enter" };
 }
 
+
+function clickChatGptStartNewChatScript() {
+  const fold = (value) =>
+    String(value || "")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase()
+      .replace(/\s+/g, " ")
+      .trim();
+  const visible = (node) => {
+    const rect = node?.getBoundingClientRect?.();
+    const style = node ? window.getComputedStyle(node) : null;
+    return (
+      rect &&
+      rect.width > 8 &&
+      rect.height > 8 &&
+      rect.bottom > 0 &&
+      rect.right > 0 &&
+      rect.top < window.innerHeight &&
+      rect.left < window.innerWidth &&
+      style?.display !== "none" &&
+      style?.visibility !== "hidden" &&
+      Number(style?.opacity ?? 1) > 0
+    );
+  };
+  const items = [
+    ...document.querySelectorAll('a, button, [role="button"], [role="link"]'),
+  ]
+    .filter(visible)
+    .map((node) => {
+      const rect = node.getBoundingClientRect();
+      const text = `${node.innerText || node.textContent || ""} ${node.getAttribute?.("aria-label") || ""} ${node.title || ""}`;
+      return { node, text, folded: fold(text), rect };
+    });
+  const target =
+    items.find((item) =>
+      /bat dau doan chat moi|tao doan chat moi|doan chat moi|new chat|start new chat/.test(
+        item.folded,
+      ),
+    ) ||
+    items.find(
+      (item) =>
+        /new|plus|\+/.test(item.folded) &&
+        item.rect.left < window.innerWidth * 0.35 &&
+        item.rect.top < window.innerHeight * 0.35,
+    );
+  if (!target)
+    return {
+      ok: false,
+      error: "new-chat-button-not-found",
+      candidates: items
+        .slice(0, 12)
+        .map((item) => ({
+          text: item.text.slice(0, 80),
+          box: {
+            x: item.rect.x,
+            y: item.rect.y,
+            width: item.rect.width,
+            height: item.rect.height,
+          },
+        })),
+    };
+  target.node.scrollIntoView?.({ block: "center", inline: "center" });
+  const x = target.rect.x + target.rect.width / 2;
+  const y = target.rect.y + target.rect.height / 2;
+  target.node.dispatchEvent(
+    new PointerEvent("pointerdown", {
+      bubbles: true,
+      pointerType: "mouse",
+      isPrimary: true,
+      clientX: x,
+      clientY: y,
+    }),
+  );
+  target.node.dispatchEvent(
+    new MouseEvent("mousedown", { bubbles: true, clientX: x, clientY: y }),
+  );
+  target.node.click?.();
+  target.node.dispatchEvent(
+    new MouseEvent("mouseup", { bubbles: true, clientX: x, clientY: y }),
+  );
+  return {
+    ok: true,
+    text: target.text.slice(0, 100),
+    box: {
+      x: target.rect.x,
+      y: target.rect.y,
+      width: target.rect.width,
+      height: target.rect.height,
+    },
+  };
+}
+
+function prepareChatGptCreateImageScript() {
+  const textOf = (node) =>
+    `${node.textContent || ""} ${node.getAttribute?.("aria-label") || ""} ${node.title || ""}`.trim();
+  const visible = (node) => {
+    const rect = node.getBoundingClientRect?.();
+    return rect && rect.width > 4 && rect.height > 4;
+  };
+  const clickNode = (node) => {
+    node.scrollIntoView({ block: "center", inline: "center" });
+    node.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true }));
+    node.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    node.click();
+    node.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+  };
+  const plus = [...document.querySelectorAll('button, [role="button"]')]
+    .filter(visible)
+    .find(
+      (node) =>
+        /Add files and more|Attach|Add|\+/i.test(textOf(node)) ||
+        (node.getBoundingClientRect().width <= 60 &&
+          /svg|path/i.test(node.innerHTML || "")),
+    );
+  if (plus) clickNode(plus);
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < 1500) {
+    const createImage = [
+      ...document.querySelectorAll(
+        'button, [role="menuitem"], [role="option"], div, span',
+      ),
+    ]
+      .filter(visible)
+      .find((node) =>
+        /Create image|Tạo ảnh|Generate image/i.test(textOf(node)),
+      );
+    if (createImage) {
+      clickNode(createImage);
+      return { ok: true, mode: "create-image-menu" };
+    }
+  }
+  return {
+    ok: Boolean(plus),
+    mode: plus ? "plus-opened-no-create-image-item" : "no-plus-found",
+  };
+}
+
+function readAssistantMessageSnapshotScript() {
+  const visible = (node) => {
+    const rect = node.getBoundingClientRect?.();
+    if (!rect || rect.width < 4 || rect.height < 4) return false;
+    const style = window.getComputedStyle?.(node);
+    return !(
+      style &&
+      (style.visibility === "hidden" ||
+        style.display === "none" ||
+        Number(style.opacity || 1) === 0)
+    );
+  };
+  const hashText = (value = "") => {
+    const text = String(value || "")
+      .replace(/\s+/g, " ")
+      .trim();
+    let hash = 2166136261;
+    for (let index = 0; index < text.length; index += 1) {
+      hash ^= text.charCodeAt(index);
+      hash = Math.imul(hash, 16777619);
+    }
+    return (hash >>> 0).toString(16);
+  };
+  const readStableId = (node) => {
+    const candidates = [
+      node.getAttribute?.("data-message-id"),
+      node.getAttribute?.("data-testid"),
+      node.id,
+      node.closest?.("[data-message-id]")?.getAttribute?.("data-message-id"),
+      node.closest?.("[data-testid]")?.getAttribute?.("data-testid"),
+      node.closest?.("article")?.getAttribute?.("data-message-id"),
+      node.closest?.("article")?.id,
+    ];
+    return String(candidates.find(Boolean) || "").trim();
+  };
+  const readAssistantText = (node) => {
+    const contentSelectors = [
+      '[data-message-author-role="assistant"] [data-message-id]',
+      ".markdown",
+      '[class*="markdown"]',
+      '[data-testid*="markdown"]',
+      '[class*="prose"]',
+      'div[dir="auto"]',
+      "p",
+      "li",
+      "pre",
+      "code",
+    ];
+    const pieces = [];
+    for (const selector of contentSelectors) {
+      for (const child of [...(node.querySelectorAll?.(selector) || [])].filter(
+        visible,
+      )) {
+        const text = String(child.innerText || child.textContent || "").trim();
+        if (text && !pieces.includes(text)) pieces.push(text);
+      }
+      if (pieces.join("\n").trim().length > 20) break;
+    }
+    return (
+      pieces.join("\n").trim() ||
+      String(node.innerText || node.textContent || "").trim()
+    );
+  };
+  const roleNodes = [...document.querySelectorAll("[data-message-author-role]")]
+    .filter(visible)
+    .map((node, turnIndex) => {
+      const role = String(
+        node.getAttribute?.("data-message-author-role") || "",
+      ).trim();
+      return { node, role, turnIndex };
+    });
+  const userMessages = roleNodes
+    .filter((entry) => entry.role === "user")
+    .map((entry, index) => {
+      const text = String(
+        entry.node.innerText || entry.node.textContent || "",
+      ).trim();
+      return {
+        index,
+        turnIndex: entry.turnIndex,
+        id: readStableId(entry.node),
+        text,
+        textLength: text.length,
+        hash: hashText(text),
+      };
+    });
+  const messages = roleNodes
+    .filter((entry) => entry.role === "assistant")
+    .map((entry, index) => {
+      const node = entry.node;
+      const text = readAssistantText(node);
+      return {
+        index,
+        turnIndex: entry.turnIndex,
+        id: readStableId(node),
+        text,
+        textLength: text.length,
+        hash: hashText(text),
+      };
+    });
+  const buttons = [...document.querySelectorAll('button, [role="button"]')]
+    .map((node) => {
+      const rect = node.getBoundingClientRect?.();
+      const text =
+        `${node.textContent || ""} ${node.getAttribute?.("aria-label") || ""} ${node.title || ""} ${node.getAttribute?.("data-testid") || ""}`.trim();
+      const html = String(node.innerHTML || "").slice(0, 1000);
+      return { rect, text, html };
+    })
+    .filter((item) => item.rect && item.rect.width > 8 && item.rect.height > 8);
+  const composerButtons = buttons.filter(
+    (item) =>
+      item.rect.top > window.innerHeight * 0.58 &&
+      item.rect.left > window.innerWidth * 0.45,
+  );
+  const stopVisible = composerButtons.some(
+    (item) =>
+      /stop generating|stop responding|stop|cancel|dá»«ng/i.test(item.text) ||
+      /<rect|data-icon=["']stop|stop-circle|square/i.test(item.html),
+  );
+  const sendReady =
+    composerButtons.some(
+      (item) =>
+        !/stop generating|stop responding|stop|cancel|dung/i.test(item.text) &&
+        /send|submit|gui|arrow-up|paper-plane|composer-submit/i.test(
+          `${item.text} ${item.html}`,
+        ),
+    ) && !stopVisible;
+  const streamingIndicator = [
+    ...document.querySelectorAll(
+      '[aria-busy="true"], [role="progressbar"], [data-testid*="loading"], [data-testid*="spinner"], [class*="result-streaming"]',
+    ),
+  ].some(visible);
+  const composerBusy = [
+    ...document.querySelectorAll(
+      'main form textarea, [contenteditable="true"], #prompt-textarea, [role="textbox"], [data-testid="composer"]',
+    ),
+  ]
+    .filter(visible)
+    .some((node) => {
+      const form = node.closest?.("form");
+      return (
+        node.disabled ||
+        node.getAttribute?.("aria-disabled") === "true" ||
+        node.getAttribute?.("aria-busy") === "true" ||
+        form?.getAttribute?.("aria-busy") === "true" ||
+        form?.className?.toString?.().match?.(/busy|disabled|loading/i)
+      );
+    });
+  const activeGenerationMarker = [
+    ...document.querySelectorAll(
+      '[data-testid*="composer"] [aria-busy="true"], main form [aria-busy="true"], [class*="streaming"], [data-is-streaming="true"]',
+    ),
+  ].some(visible);
+  return {
+    ok: true,
+    url: location.href,
+    count: messages.length,
+    userCount: userMessages.length,
+    maxTurnIndex: roleNodes.length ? roleNodes.at(-1).turnIndex : -1,
+    ids: messages.map((message) => message.id).filter(Boolean),
+    hashes: messages.map((message) => message.hash).filter(Boolean),
+    userIds: userMessages.map((message) => message.id).filter(Boolean),
+    userHashes: userMessages.map((message) => message.hash).filter(Boolean),
+    userMessages,
+    latestUserTurnIndex: userMessages.at(-1)?.turnIndex ?? -1,
+    stopVisible,
+    composerBusy,
+    streamingIndicator,
+    activeGenerationMarker,
+    generationActive: Boolean(
+      composerBusy || streamingIndicator || activeGenerationMarker,
+    ),
+    sendReady,
+    messages,
+  };
+}
+
 module.exports = {
+  clickChatGptStartNewChatScript,
   sendPromptScript,
   clickSendButtonScript,
   inspectAndClickChatGptSendButtonSafely,
@@ -2420,4 +2736,6 @@ module.exports = {
   readChatGptImageStateScript,
   detectUploadedAssetScript,
   clickUploadButtonScript,
+  prepareChatGptCreateImageScript,
+  readAssistantMessageSnapshotScript,
 };
