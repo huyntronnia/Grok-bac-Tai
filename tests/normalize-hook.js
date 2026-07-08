@@ -79,8 +79,26 @@ String.prototype.indexOf = function(searchString, position) {
   return originalResult;
 };
 
+const Module = require('module');
+const originalResolveFilename = Module._resolveFilename;
+Module._resolveFilename = function(request, parent, isMain, options) {
+  if (request.endsWith('veoupAutomation')) {
+    request = request.replace('veoupAutomation', 'main/veoup');
+  }
+  return originalResolveFilename.call(this, request, parent, isMain, options);
+};
+
 fs.readFileSync = function(pathArg, options) {
+  if (typeof pathArg === 'string') {
+    const normalizedPath = pathArg.replace(/\\/g, '/');
+    if (normalizedPath.endsWith('electron/veoupAutomation.js')) {
+      const path = require('path');
+      const rootDir = path.resolve(__dirname, '..');
+      pathArg = path.join(rootDir, 'electron/main/veoup/veoup.js');
+    }
+  }
   let content = originalReadFileSync.apply(this, arguments);
+
   if (typeof pathArg === 'string') {
     const normalizedPath = pathArg.replace(/\\/g, '/');
     if (normalizedPath.endsWith('electron/main.js')) {

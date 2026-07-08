@@ -1,9 +1,37 @@
+"use strict";
+
 const fs = require('fs');
 const fsp = require('fs/promises');
 const os = require('os');
 const path = require('path');
 const { spawn, exec } = require('child_process');
 const { globalShortcut } = require('electron');
+
+
+let appendAppLog;
+try {
+  appendAppLog = require("../logging").appendAppLog;
+} catch (_) {}
+
+
+// --- Injected dependencies (set via initVeoUp) ---
+let app;
+let getScopedPipelineRunId;
+let pipelineCancellation;
+let isPipelineRunCancelled;
+let trackPipelineChildProcess;
+let isPipelineCancelledError;
+let makePipelineCancelledError;
+
+function initVeoUp(runtime) {
+  app = runtime.app;
+  getScopedPipelineRunId = runtime.getScopedPipelineRunId;
+  pipelineCancellation = runtime.pipelineCancellation;
+  isPipelineRunCancelled = runtime.isPipelineRunCancelled;
+  trackPipelineChildProcess = runtime.trackPipelineChildProcess;
+  isPipelineCancelledError = runtime.isPipelineCancelledError;
+  makePipelineCancelledError = runtime.makePipelineCancelledError;
+}
 
 let cachedVeoupExecutablePath = null;
 const DEFAULT_VEOUP_OUTPUT_DIR = 'C:\\Users\\diepp\\Desktop\\Veo3Output';
@@ -2891,6 +2919,12 @@ async function scanProjectAndRunVeoUp(payload = {}) {
 }
 
 module.exports = {
+  initVeoUp,
+  getVeoUpVideoSourcePath,
+  assertVeoUpResultAssociation,
+  buildVeoUpPromptsReadyFile,
+  isVeoUpStageError,
+  runVeoUpScriptAsPromise,
   executeVeoUpAutomation,
   normalizeWhitespace,
   collectKeyframes,
@@ -2907,3 +2941,168 @@ module.exports = {
   cancelCoordinateSetup,
   scanProjectAndRunVeoUp,
 };
+
+
+function getVeoUpVideoSourcePath(result = {}) {
+  const candidates = [
+    result.sourceDownloadPath,
+    result.downloadedVideoPath,
+    result.localVideoPath,
+    result.outputVideoPath,
+    result.finalVideoPath,
+    result.videoPath,
+  ];
+  return String(
+    candidates.find((item) => item && typeof item === "string") || "",
+  ).trim();
+}
+
+function assertVeoUpResultAssociation(
+  result = {},
+  { runId = "", sceneId = "" } = {},
+) {
+  if (result.runId && String(result.runId) !== String(runId)) {
+    throw new Error(`veoup-video-run-mismatch:${result.runId}`);
+  }
+  if (result.sceneId && String(result.sceneId) !== String(sceneId)) {
+    throw new Error(`veoup-video-scene-mismatch:${result.sceneId}`);
+  }
+}
+
+async function buildVeoUpPromptsReadyFile({
+  projectDir,
+  sceneDirs,
+  expectedSceneCount,
+}) {
+  const flattenedPrompts = [];
+
+  for (const sceneDir of sceneDirs) {
+    const motionPromptPath = path.join(sceneDir, "motion_prompt.txt");
+    let rawPrompt = "";
+    try {
+      rawPrompt = await fs.readFile(motionPromptPath, "utf8");
+    } catch (err) {
+      throw new Error(
+        `Scene folder ${path.basename(sceneDir)} is missing motion_prompt.txt.`,
+      );
+    }
+
+    const flattened = rawPrompt
+      .replace(/\r\n/g, "\n")
+      .replace(/\r/g, "\n")
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .join(" ")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    if (!flattened) {
+      throw new Error(
+        `Scene folder ${path.basename(sceneDir)} has an empty motion prompt.`,
+      );
+    }
+
+    flattenedPrompts.push(flattened);
+  }
+
+  if (
+    expectedSceneCount !== undefined &&
+    expectedSceneCount > 0 &&
+    flattenedPrompts.length !== expectedSceneCount
+  ) {
+    throw new Error(
+      `Prompt line count mismatch: collected ${flattenedPrompts.length} prompts, expected ${expectedSceneCount}.`,
+    );
+  }
+
+  const batchText = flattenedPrompts.join("\n");
+  const promptsReadyPath = path.join(projectDir, "veoup_prompts_ready.txt");
+  await fs.writeFile(promptsReadyPath, batchText, "utf8");
+
+  // Verify file exists and is not empty
+  try {
+    const stat = await fs.stat(promptsReadyPath);
+    if (stat.size <= 0) {
+      throw new Error("veoup_prompts_ready.txt is empty.");
+    }
+  } catch (err) {
+    throw new Error(
+      `Failed to write or verify veoup_prompts_ready.txt: ${err.message}`,
+    );
+  }
+
+  return promptsReadyPath;
+}
+
+function isVeoUpStageError(error) {
+  const parts = [
+    error?.status,
+    error?.code,
+    error?.message,
+    error?.videoError,
+    error?.videoStatus,
+    error?.details?.status,
+    error?.details?.error,
+    error?.details?.videoError,
+    error?.details?.result?.videoError,
+    error?.details?.result?.videoStatus,
+    error?.details?.result?.videoProvider,
+    error?.details?.result?.provider,
+    error?.details?.result?.status,
+    error?.details?.result?.error,
+    error,
+  ];
+  const message = parts
+    .map((item) => {
+      if (!item) return "";
+      if (typeof item === "string") return item;
+      try {
+        return JSON.stringify(item);
+      } catch (_error) {
+        return String(item);
+      }
+    })
+    .join(" ");
+  return /veoup-launcher-not-found|veoup-pre-submission-cleanup-failed|veoup-window-not-found|output timeout|generate acknowledgement|veoup-generate-click-not-acknowledged|veoup-generate-submission-not-acknowledged|veoup-video-missing-after-submission/i.test(
+    message,
+  );
+}
+
+async function runVeoUpScriptAsPromise(
+  coords = {},
+  projectPath = "",
+  scenes = [],
+  options = {},
+) {
+  const runId = String(options.runId || getScopedPipelineRunId() || "").trim();
+  assertPipelineRunActive(runId);
+  const result = await executeVeoUpAutomation({
+    projectName: options.projectName || "project",
+    outputFolder: projectPath,
+    scenes,
+    maximizeBeforeAutomation: true,
+    autoStartVideoGeneration: Boolean(
+      options.autoStartVideoGeneration || options.autoStartVeoUpGeneration,
+    ),
+    userDataDir: app.getPath("userData"),
+    runId,
+    isCancelled: () => isPipelineRunCancelled(runId),
+    registerChildProcess: (child) => trackPipelineChildProcess(child, runId),
+    ...coords,
+  });
+  assertPipelineRunActive(runId);
+
+  if (!result || !result.ok) {
+    const error = new Error(
+      result?.error ||
+        result?.status ||
+        "VeoUp automation returned non-ok status",
+    );
+    error.status = result?.status || result?.error || "veoup-automation-failed";
+    error.details = result || {};
+    throw error;
+  }
+  return result;
+}
+

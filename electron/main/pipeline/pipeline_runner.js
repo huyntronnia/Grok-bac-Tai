@@ -35,7 +35,8 @@ const {
 const {
   executeVeoUpAutomation,
   scanProjectAndRunVeoUp
-} = require("../../veoupAutomation");
+} = require("../veoup");
+
 const {
   CHATGPT_STAGES,
   CHATGPT_ERROR_REASONS,
