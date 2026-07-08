@@ -226,6 +226,7 @@ const {
   finalizeValidatedSceneVideo,
   validateSceneVideoAndLastFrame,
   imageFileToDataUrl,
+  pipelineCancellation,
 } = require("./main/pipeline");
 
 
@@ -336,13 +337,7 @@ const GROK_IMAGINE_AGENT_URL = "https://grok.com/imagine";
 const CHAT_TITLE_CHECK_MIN_INTERVAL_MS = 45000;
 const GROK_SEND_RETRY_LIMIT = 2;
 
-const pipelineRunScope = new AsyncLocalStorage();
-const pipelineCancellation = {
-  cancelledRunIds: new Set(),
-  activeRunIds: new Set(),
-  waiters: new Map(),
-  childProcesses: new Map(),
-};
+
 
 
 

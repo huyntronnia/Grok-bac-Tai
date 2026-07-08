@@ -1779,6 +1779,7 @@ module.exports = {
   isSceneScopedFilePath,
   startNextSceneChatGptPrefetch,
   imageFileToDataUrl,
+   pipelineCancellation,
   
   // Export states for injection / testing if needed
   getIsChatGptContextFresh: () => isChatGptContextFresh,
