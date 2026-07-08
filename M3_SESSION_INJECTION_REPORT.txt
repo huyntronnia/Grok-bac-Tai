@@ -1,0 +1,202 @@
+================================================================================
+MILESTONE 3: SESSION-AWARE CONTEXT INJECTION REPORT
+================================================================================
+
+This report documents the structural changes implemented for Phase 3 of the 
+approved implementation plan in "electron/main.js".
+
+1. MULTI-ASSET SEQUENTIAL UPLOAD ENGINE
+--------------------------------------------------------------------------------
+File Location: electron/main.js
+Lines: 3633 - 3702
+
+```javascript
+async function uploadFilesToChatGptSequentially(page, filePaths, sceneId = '') {
+  await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: ChatGPT sequential upload starting for files: ${filePaths.map(f => path.basename(f)).join(', ')}` });
+  
+  const handle = await page.DOM.getDocument();
+  let nodeId = null;
+  try {
+    const query = await page.DOM.querySelector({ nodeId: handle.root.nodeId, selector: 'input[type="file"]' });
+    nodeId = query.nodeId;
+  } catch (_error) {
+    nodeId = null;
+  }
+  if (!nodeId) {
+    const clicked = await evaluateOnCdpPage(page, `(${clickUploadButtonScript.toString()})('chatgpt')`);
+    await sleep(1500);
+    const refreshed = await page.DOM.getDocument();
+    try {
+      const query = await page.DOM.querySelector({ nodeId: refreshed.root.nodeId, selector: 'input[type="file"]' });
+      nodeId = query.nodeId;
+    } catch (_error) {
+      nodeId = null;
+    }
+    if (!nodeId && !clicked?.ok) {
+      return { ok: false, error: clicked?.error || 'Không tìm thấy input[type=file] sau khi bấm upload.' };
+    }
+  }
+  if (!nodeId) return { ok: false, error: 'Không tìm thấy input[type=file] trong DOM.' };
+
+  // Clear existing attachments
+  await evaluateOnCdpPage(page, `(() => {
+    const selectors = [
+      'button[aria-label*="Xóa tệp"]',
+      'button[aria-label*="Remove file"]',
+      'button[aria-label*="Remove"]',
+      'button[aria-label*="Cancel"]',
+      '[class*="file-preview"] button',
+      '[class*="attachment"] [class*="remove"]',
+      '[class*="attachment"] button',
+      '.file-preview button',
+      'main form button[class*="close"]',
+      'main form button[class*="remove"]',
+      'main form [data-testid*="remove"]',
+      'main form [class*="Attachment"] button'
+    ];
+    let clickedCount = 0;
+    for (const selector of selectors) {
+      const elms = document.querySelectorAll(selector);
+      for (const el of elms) {
+        el.click();
+        clickedCount++;
+      }
+    }
+    return { ok: true, clickedCount };
+  })()`).catch(() => null);
+  await sleep(400);
+
+  // Sequentially upload each file with staggered delays
+  for (const filePath of filePaths) {
+    await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: Uploading asset file sequentially: ${path.basename(filePath)}` });
+    await page.DOM.setFileInputFiles({ nodeId, files: [filePath] });
+    await sleep(1500);
+  }
+
+  // After all sequential uploads, do the global 5000ms Post-Upload padding
+  await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: Sequential upload done. Waiting for 5000ms post-upload delay...` });
+  await sleep(5000);
+
+  const accepted = await evaluateOnCdpPage(page, `(${detectUploadedAssetScript.toString()})()`).catch((error) => ({ ok: false, error: error.message }));
+  await appendAppLog(null, { source: 'main', kind: accepted?.ok ? 'ok' : 'error', text: `Scene ${sceneId}: ChatGPT sequential upload result: ${accepted?.ok ? 'đã nhận files' : accepted?.error || 'chưa nhận files'}`, details: accepted });
+  return accepted?.ok ? { ok: true, uploaded: accepted } : { ok: false, error: accepted?.error || 'ChatGPT chưa nhận files upload.' };
+}
+```
+
+2. SESSION-AWARE CONTEXT INJECTION BLOCK IN generateImageAndMotionWithChatGPT
+--------------------------------------------------------------------------------
+File Location: electron/main.js
+Lines: 3409 - 3518
+
+```javascript
+  // --- Start Milestone 3: Session-Aware Context Injection Strategy ---
+  const screenplayText = options.sceneText || '';
+  const outputFolder = options.outputFolder || options.projectPath || options.outputPath || path.dirname(sceneDir);
+  const charactersDir = path.join(outputFolder, 'characters');
+  const fsSync = require('fs');
+
+  let matchedCharName = null;
+  let matchedCharImg = null;
+  let matchedCharTxt = null;
+
+  if (screenplayText && fsSync.existsSync(charactersDir)) {
+    try {
+      const files = fsSync.readdirSync(charactersDir);
+      const screenplayLower = screenplayText.toLowerCase();
+      const baseNames = [...new Set(files.map(file => {
+        const ext = path.extname(file);
+        return path.basename(file, ext);
+      }))];
+
+      for (const base of baseNames) {
+        if (!base) continue;
+        const baseLower = base.toLowerCase();
+        const wordRegex = new RegExp('\\b' + base.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&') + '\\b', 'i');
+        const isMatched = wordRegex.test(screenplayText) || screenplayLower.includes(baseLower);
+
+        if (isMatched) {
+          // Resolve image files
+          const imgExts = ['.png', '.jpg', '.jpeg'];
+          let imgPath = null;
+          for (const imgExt of imgExts) {
+            const matchedFile = files.find(f => f.toLowerCase() === (base + imgExt).toLowerCase());
+            if (matchedFile) {
+              imgPath = path.join(charactersDir, matchedFile);
+              break;
+            }
+          }
+          const matchedTxtFile = files.find(f => f.toLowerCase() === (base + '.txt').toLowerCase());
+          const txtPath = matchedTxtFile ? path.join(charactersDir, matchedTxtFile) : null;
+
+          if (imgPath || txtPath) {
+            matchedCharName = base;
+            matchedCharImg = imgPath;
+            matchedCharTxt = txtPath;
+            break; // Stop at first matched character
+          }
+        }
+      }
+    } catch (err) {
+      await appendAppLog(currentSceneId, 'error', `M3: Error scanning characters directory: ${err.message}`);
+    }
+  }
+
+  const filesToUpload = [];
+  let characterBaseline = '';
+
+  if (isChatGptContextFresh) {
+    await appendAppLog(currentSceneId, 'info', `Scene ${currentSceneId}: Fresh ChatGPT context thread detected (isChatGptContextFresh = true).`);
+    if (matchedCharImg) {
+      await appendAppLog(currentSceneId, 'info', `Scene ${currentSceneId}: Matched character preset image for "${matchedCharName}": ${path.basename(matchedCharImg)}`);
+      filesToUpload.push(matchedCharImg);
+    }
+    if (currentSceneId > 1) {
+      const prevSceneId = currentSceneId - 1;
+      const prevSceneFolder = `scene_${String(prevSceneId).padStart(3, '0')}`;
+      const prevLastFramePath = path.join(outputFolder, prevSceneFolder, `${prevSceneFolder}_last_frame.png`);
+      if (fsSync.existsSync(prevLastFramePath)) {
+        await appendAppLog(currentSceneId, 'info', `Scene ${currentSceneId}: Adding preceding last frame reference: ${path.basename(prevLastFramePath)}`);
+        filesToUpload.push(prevLastFramePath);
+      } else {
+        await appendAppLog(currentSceneId, 'warning', `Scene ${currentSceneId}: Preceding last frame not found at: ${prevLastFramePath}`);
+      }
+    }
+    if (matchedCharTxt && fsSync.existsSync(matchedCharTxt)) {
+      try {
+        characterBaseline = fsSync.readFileSync(matchedCharTxt, 'utf8').trim();
+        await appendAppLog(currentSceneId, 'info', `Scene ${currentSceneId}: Loaded character description text from ${path.basename(matchedCharTxt)} (length=${characterBaseline.length}).`);
+      } catch (err) {
+        await appendAppLog(currentSceneId, 'error', `M3: Error reading character text description: ${err.message}`);
+      }
+    }
+  } else {
+    await appendAppLog(currentSceneId, 'info', `Scene ${currentSceneId}: Established ChatGPT context thread detected (isChatGptContextFresh = false).`);
+    if (currentSceneId > 1) {
+      const prevSceneId = currentSceneId - 1;
+      const prevSceneFolder = `scene_${String(prevSceneId).padStart(3, '0')}`;
+      const prevLastFramePath = path.join(outputFolder, prevSceneFolder, `${prevSceneFolder}_last_frame.png`);
+      if (fsSync.existsSync(prevLastFramePath)) {
+        await appendAppLog(currentSceneId, 'info', `Scene ${currentSceneId}: Adding preceding last frame reference: ${path.basename(prevLastFramePath)}`);
+        filesToUpload.push(prevLastFramePath);
+      } else {
+        await appendAppLog(currentSceneId, 'warning', `Scene ${currentSceneId}: Preceding last frame not found at: ${prevLastFramePath}`);
+      }
+    }
+  }
+
+  // Upload files sequentially if any
+  if (filesToUpload.length > 0) {
+    await appendAppLog(currentSceneId, 'running', `Scene ${currentSceneId}: Starting multi-asset upload for ${filesToUpload.length} files...`);
+    const uploadRes = await uploadFilesToChatGptSequentially(page, filesToUpload, sceneId);
+    if (!uploadRes.ok) {
+      throw new Error(`ChatGPT sequential upload failed: ${uploadRes.error}`);
+    }
+  }
+
+  // Prepend baseline text if available
+  let finalPrompt = imageInstruction;
+  if (characterBaseline) {
+    finalPrompt = characterBaseline + '\n\n' + finalPrompt;
+  }
+  // --- End Milestone 3: Session-Aware Context Injection Strategy ---
+```

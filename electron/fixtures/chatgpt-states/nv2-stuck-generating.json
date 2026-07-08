@@ -1,0 +1,9 @@
+{
+  "composerFound": true,
+  "composerTextLength": 0,
+  "stopVisible": true,
+  "composerBusy": true,
+  "generating": true,
+  "latestAssistantTextLength": 1200,
+  "reason": "composer-busy"
+}

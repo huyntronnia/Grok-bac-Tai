@@ -1,0 +1,194 @@
+================================================================================
+SOURCE MODIFICATION DUMP: SEQUENTIAL ORCHESTRATION & ANTI-SPAM DELAYS
+================================================================================
+
+This document logs the completed orchestration structures, cooldown delays, 
+passive evaluation guards, and retry handlers implemented in electron/main.js 
+to complete Milestone 4.
+
+1. COOLDOWN DELAYS (SIMULATING HUMAN WORKFLOW)
+--------------------------------------------------------------------------------
+A. Post-Send Padding (8000ms)
+Location: sendPromptViaCdpInput & sendPromptViaCdpInputSingle
+Purpose: Wait after prompt submission to allow ChatGPT's parsing and layout engine to settle.
+
+Inside sendPromptViaCdpInput:
+```javascript
+  // Post-Send Padding: inject 8000ms delay to let ChatGPT clear internal parsing and layout
+  await appendAppLog(null, { source: 'main', kind: 'running', text: 'Post-Send Padding: sleeping 8000ms after prompt submission...' }).catch(() => null);
+  await sleep(8000);
+
+  return ladderResult;
+```
+
+Inside sendPromptViaCdpInputSingle:
+```javascript
+  // Post-Send Padding: inject 8000ms delay to let ChatGPT clear internal parsing and layout
+  await appendAppLog(null, { source: 'main', kind: 'running', text: 'Post-Send Padding: sleeping 8000ms after prompt submission...' }).catch(() => null);
+  await sleep(8000);
+
+  return {
+    ok: ladderResult.ok,
+    mode: ladderResult.send,
+    ...
+```
+
+B. Inter-Scene Breather Padding (10000ms)
+Location: runScenePipelineLocked (Success Return Path)
+Purpose: Release browser resources and clear cache tokens before transitioning.
+
+```javascript
+    // Inter-Scene Breather Padding: wait 10000ms to release active browser memory cache
+    await appendAppLog(null, { source: 'main', kind: 'running', text: `Scene ${sceneId}: Inter-Scene Breather: sleeping 10000ms before returning success...` }).catch(() => null);
+    await sleep(10000);
+
+    return result;
+```
+
+C. Post-Rotation Padding (7000ms)
+Location: forceCleanChatGptNewChatRotation (End of Function)
+Purpose: Wait for the freshly spawned workspace to load fully before uploading presets.
+
+```javascript
+  // Post-Rotation Padding: Ensure the brand-new chat workspace settles down completely
+  await appendAppLog(null, { source: 'main', kind: 'running', text: 'Post-Rotation Padding: sleeping 7000ms for workspace to settle...' }).catch(() => null);
+  await sleep(7000);
+}
+```
+
+
+2. PASSIVE EVALUATION MOTION PROMPT POLL GUARD (NV2)
+--------------------------------------------------------------------------------
+Location: generateMotionPromptWithChatGPTOnce (Text Monitoring Loop)
+Purpose: Avoid immediate failure triggers on premature indicator disappearance. Evaluates DOM text length over 15s.
+
+```javascript
+      // Passive Motion Prompt Poll Guard: if indicators disappeared prematurely but quality is not ok yet
+      if (composerIdle && !quality.ok) {
+        await appendAppLog(null, {
+          source: 'main',
+          kind: 'warning',
+          text: `Scene ${sceneId}: Generation indicators/stop button disappeared prematurely. Running 15s passive evaluation loop...`
+        }).catch(() => null);
+
+        let passiveSuccess = false;
+        for (let tick = 1; tick <= 5; tick++) {
+          await sleep(3000);
+          const passiveState = await evaluateOnCdpPage(page, `(${readLatestAssistantScript.toString()})()`).catch(() => null);
+          if (passiveState) {
+            const passiveText = passiveState.text ? passiveState.text.trim() : '';
+            const passiveQuality = validateMotionPromptResponse(passiveText, { beforeText: before?.text || '', instruction, taskPrompt: prompt, state: passiveState });
+            
+            await appendAppLog(null, {
+              source: 'main',
+              kind: 'running',
+              text: `Scene ${sceneId}: Passive poll iteration ${tick}/5: textLength=${passiveText.length}, ok=${passiveQuality.ok}`
+            }).catch(() => null);
+
+            if (passiveQuality.ok) {
+              latest = passiveText;
+              quality = passiveQuality;
+              state = passiveState;
+              composerIdle = true;
+              composerDone = true;
+              freshAssistant = true;
+              passiveSuccess = true;
+              break;
+            }
+          }
+        }
+
+        if (passiveSuccess) {
+          await appendAppLog(null, {
+            source: 'main',
+            kind: 'ok',
+            text: `Scene ${sceneId}: Passive evaluation successful! Accepted text length: ${latest.length}.`
+          }).catch(() => null);
+          break; // Break the main while(true) loop on success
+        }
+      }
+```
+
+
+3. HARD-CEILING 2-RETRY NEW CHAT RESET
+--------------------------------------------------------------------------------
+Location: retryMotionPrompt in generateMotionPromptWithChatGPTOnce & runScenePipelineLocked Error Handling
+Purpose: Allow up to 2 local retries, then halt, purge thread anchors, and recursively restart execution.
+
+Local retries inside generateMotionPromptWithChatGPTOnce:
+```javascript
+      // Hard enforcement: Break out immediately if local retries meet or exceed 2
+      const localRetryMatch = String(retryStatusString || '').match(/(\d+)\/2/);
+      const currentLocalRetryCount = localRetryMatch ? parseInt(localRetryMatch[1], 10) : 0;
+
+      if (currentLocalRetryCount >= 2 || currentAttemptIndex >= 2) {
+          await appendAppLog(sceneId, 'warning', `Scene ${sceneId}: Local retry threshold reached (${retryStatusString || currentAttemptIndex}/2). Forcing clean chat relocation immediately.`).catch(() => null);
+          
+          // 1. Wipe context memory and force hard reload + click New Chat
+          await forceCleanChatGptNewChatRotation();
+          isChatGptContextFresh = true;
+          
+          // 2. Reset session counters to guarantee clean alignment
+          if (typeof sessionSceneCounter !== 'undefined') sessionSceneCounter = 0;
+          
+          // Bulletproof scope declaration to prevent ReferenceError entirely
+          let activeConfigObject = null;
+          try {
+              if (typeof options !== 'undefined' && options) activeConfigObject = options;
+              else if (typeof config !== 'undefined' && config) activeConfigObject = config;
+              else if (typeof payload !== 'undefined' && payload) activeConfigObject = payload;
+          } catch (e) {}
+
+          if (!activeConfigObject) {
+              // Reconstruct clean options package if scope contamination occurs
+              activeConfigObject = {
+                  sceneId: sceneId || 0,
+                  projectPath: globalThis.__vidoraLastValidProjectPath,
+                  outputPath: globalThis.__vidoraLastValidProjectPath,
+                  outputFolder: globalThis.__vidoraLastValidProjectPath,
+                  isFirstSceneOfRun: false
+              };
+          } else {
+              const savedPath = activeConfigObject.projectPath || activeConfigObject.outputPath || activeConfigObject.outputFolder || globalThis.__vidoraLastValidProjectPath;
+              activeConfigObject.projectPath = savedPath;
+              activeConfigObject.outputPath = savedPath;
+              activeConfigObject.outputFolder = savedPath;
+              activeConfigObject.isFirstSceneOfRun = false;
+          }
+          
+          await appendAppLog(sceneId, 'info', `Scene ${sceneId}: Executing secure recursive recovery with clean reference state.`).catch(() => null);
+          const result = await runScenePipelineLocked(sceneId, activeConfigObject); 
+          const err = new Error('BREAKOUT_RECURSIVE_RETRY');
+          err.result = result;
+          throw err;
+      }
+```
+
+Pipeline-level failures in runScenePipelineLocked catch block:
+```javascript
+    if (consecutiveFailures >= 2) {
+      await appendAppLog(null, {
+        source: 'main',
+        kind: 'warning',
+        text: `Scene ${sceneId}: Encountered 2 consecutive final pipeline retry errors. Triggering Fresh Room Recovery sequence!`
+      }).catch(() => null);
+
+      try {
+        // Trigger clean ChatGPT rotation & reference obliteration
+        await forceCleanChatGptNewChatRotation();
+        isChatGptContextFresh = true;
+
+        // Step E: Automatically re-inject the active scene's prompt payload.
+        const recoveryOptions = {
+          ...options,
+          forceRegenerateImage: options.forceRegenerateImage || !options.imagePath,
+        };
+
+        await appendAppLog(null, { source: 'main', kind: 'running', text: `Fresh Room Recovery Step E: Retrying pipeline with clean state...` });
+        const result = await runScenePipelineLockedInternal(_event, recoveryOptions);
+        
+        scenePipelineFailureTracker[attemptKey] = 0; // reset on success
+        return result;
+      } catch (recoveryError) {
+        ...
+```

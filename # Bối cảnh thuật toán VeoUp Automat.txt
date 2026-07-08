@@ -1,0 +1,571 @@
+# Bối cảnh thuật toán VeoUp Automation trong Vidora
+
+## Mục tiêu
+
+Vidora đang có workflow:
+
+1. ChatGPT tạo keyframe image cho từng scene.
+2. ChatGPT tạo `motion_prompt.txt` cho từng scene.
+3. Vidora gom toàn bộ keyframe + motion prompt.
+4. Vidora tự động mở VeoUp.
+5. Vidora import toàn bộ ảnh vào VeoUp.
+6. Vidora paste toàn bộ prompt vào VeoUp.
+7. Vidora bấm Start / Bắt đầu tạo video.
+
+Phần VeoUp automation đã được test standalone thành công. Vấn đề hiện tại chủ yếu nằm ở ChatGPT pipeline, không phải VeoUp.
+
+---
+
+## Cấu trúc output project
+
+Ví dụ project:
+
+```text
+D:\TOOL VIDEO\1\3\69780
+```
+
+Bên trong project có dạng:
+
+```text
+scene_001/
+  scene_001_keyframe.png
+  motion_prompt.txt
+
+scene_002/
+  scene_002_keyframe.png
+  motion_prompt.txt
+
+...
+
+keyframes/
+  scene_001_keyframe.png
+  scene_002_keyframe.png
+  ...
+
+veoup_prompts_ready.txt
+pipeline_state.json
+```
+
+Trong đó:
+
+* Mỗi `scene_XXX_keyframe.png` là ảnh keyframe đã tạo từ ChatGPT.
+* Mỗi `motion_prompt.txt` là prompt chuyển động tương ứng với scene.
+* Folder `keyframes/` là nơi gom toàn bộ ảnh keyframe theo thứ tự scene.
+* File `veoup_prompts_ready.txt` là file prompt đã được flatten, mỗi scene đúng 1 dòng.
+* Số ảnh trong `keyframes/` phải bằng số dòng trong `veoup_prompts_ready.txt`.
+
+---
+
+## Thuật toán gom prompt cho VeoUp
+
+Sau khi tạo xong các scene, Vidora chạy hàm kiểu:
+
+```js
+buildVeoUpPromptsReadyFile(projectDir)
+```
+
+Logic:
+
+1. Tìm tất cả folder dạng:
+
+```text
+scene_001
+scene_002
+scene_003
+...
+```
+
+2. Sort theo số scene tăng dần.
+
+3. Đọc từng file:
+
+```text
+scene_XXX/motion_prompt.txt
+```
+
+4. Flatten mỗi prompt thành 1 dòng:
+
+```js
+text
+  .replace(/\r\n/g, '\n')
+  .replace(/\r/g, '\n')
+  .split('\n')
+  .map(line => line.trim())
+  .filter(Boolean)
+  .join(' ')
+  .replace(/\s+/g, ' ')
+  .trim()
+```
+
+5. Ghi ra file:
+
+```text
+projectDir/veoup_prompts_ready.txt
+```
+
+6. Validate:
+
+* số dòng prompt phải bằng số scene
+* không có dòng rỗng
+* thứ tự dòng phải khớp thứ tự ảnh
+
+---
+
+## Thuật toán gom ảnh keyframe
+
+Vidora dùng folder:
+
+```text
+projectDir/keyframes/
+```
+
+Nếu folder này chưa đủ ảnh, Vidora scan từng scene:
+
+```text
+scene_001/scene_001_keyframe.png
+scene_002/scene_002_keyframe.png
+...
+```
+
+Rồi copy hoặc gom vào:
+
+```text
+keyframes/scene_001_keyframe.png
+keyframes/scene_002_keyframe.png
+...
+```
+
+Điều kiện hợp lệ:
+
+```text
+số file .png trong keyframes/ == số dòng trong veoup_prompts_ready.txt
+```
+
+Nếu thiếu ảnh hoặc thiếu prompt thì không được chạy VeoUp.
+
+---
+
+## Thuật toán tìm và mở VeoUp
+
+Vidora có module:
+
+```text
+electron/veoupAutomation.js
+```
+
+Nhiệm vụ:
+
+1. Tìm executable VeoUp tự động.
+
+Các path thường gặp:
+
+```text
+D:\bac_tai\veoup_video
+D:\veoup_video_1.4.4\veoup_video
+D:\veoup_video_...\...
+```
+
+2. Scan ổ C và D để tìm folder / exe có tên liên quan:
+
+```text
+VeoUp
+veoup_video
+VeoUp_video_generator
+```
+
+3. Ưu tiên:
+
+* ổ D
+* version mới hơn
+* exe thật của VeoUp
+
+4. Mở VeoUp nếu chưa mở.
+
+5. Nếu VeoUp đã mở thì focus cửa sổ thật.
+
+---
+
+## Nhận diện cửa sổ VeoUp thật
+
+Trước đó từng bị lỗi nhận nhầm Notepad vì title có chữ `test-veoup.js`.
+
+Đã sửa bằng strict window detection:
+
+* Dùng Win32 `EnumWindows`
+* Lấy:
+
+  * title
+  * class name
+  * process name
+  * process path
+  * rect
+* Chấm điểm candidate.
+
+VeoUp thật thường có:
+
+```text
+Title: VeoUp v...
+Class: Qt690QWindowIcon
+Process: VeoUp_video_generator
+```
+
+Các app bị reject:
+
+```text
+notepad
+vscode
+code
+powershell
+cmd
+terminal
+chrome
+edge
+firefox
+explorer
+node
+electron
+test-veoup
+```
+
+Chỉ khi score đủ cao mới chọn là VeoUp thật.
+
+---
+
+## Maximize VeoUp trước khi click
+
+Trước khi thao tác, automation luôn:
+
+1. Focus cửa sổ VeoUp.
+2. Gọi Win32:
+
+```text
+ShowWindow(hwnd, SW_MAXIMIZE)
+SetForegroundWindow(hwnd)
+```
+
+3. Đợi khoảng 500ms.
+4. Đọc lại rect mới của cửa sổ.
+
+Lý do: tọa độ click được lưu theo offset tương đối từ cửa sổ maximized. Nếu không maximize, click có thể lệch.
+
+---
+
+## File tọa độ VeoUp
+
+Tọa độ được lưu tại:
+
+```text
+%APPDATA%\vidora\veoup-coordinates.json
+```
+
+Có thể có fallback từ:
+
+```text
+veoup-test-coordinates.json
+```
+
+Format đại khái:
+
+```json
+{
+  "blueBoxOffsetX": 712,
+  "blueBoxOffsetY": 117,
+  "redBoxOffsetX": 475,
+  "redBoxOffsetY": 261,
+  "startButtonOffsetX": 152,
+  "startButtonOffsetY": 799,
+  "startButtonValidated": true,
+  "windowMode": "maximized"
+}
+```
+
+Các offset là tọa độ tương đối so với rect của VeoUp sau khi maximize.
+
+---
+
+## Thiết lập tọa độ VeoUp
+
+Trong Vidora có UI Settings / Cài đặt:
+
+```text
+Thiết lập tọa độ VeoUp
+Xóa tọa độ VeoUp
+Kiểm tra tự động VeoUp
+Quét project & chạy VeoUp
+```
+
+Quy trình setup tọa độ:
+
+1. Vidora mở/focus/maximize VeoUp.
+2. User đưa chuột vào Blue Box: nút chọn ảnh, thường là vùng “Đã chọn 0 ảnh”.
+3. User nhấn Enter hoặc F8.
+4. Vidora capture current cursor position bằng Win32 `GetCursorPos`.
+5. Tính offset so với cửa sổ VeoUp.
+6. Với Blue Box, Vidora test ngay:
+
+   * click thử Blue Box
+   * chờ Windows Open File Dialog xuất hiện
+   * nếu có dialog thì đóng bằng Esc
+   * nếu không có dialog thì báo tọa độ sai, không lưu
+7. User capture Red Box bằng Enter/F8.
+8. User capture Start Button bằng Enter/F8.
+9. Với Start Button, Vidora chỉ preview:
+
+   * di chuyển chuột tới tọa độ Start
+   * không click
+   * user xác nhận con trỏ nằm đúng nút “Bắt đầu tạo video”
+10. Nếu đúng thì lưu `startButtonValidated: true`.
+
+Lưu ý: setup không dùng click vào nút Vidora để capture, vì khi click Vidora thì chuột rời khỏi vị trí target. Dùng Enter/F8 để capture là đúng.
+
+---
+
+## Thuật toán import ảnh vào VeoUp
+
+Sau khi có:
+
+```text
+keyframesDir
+promptsReadyPath
+expectedSceneCount
+```
+
+Vidora chạy:
+
+```js
+runVeoUpAutomation({
+  projectDir,
+  keyframesDir,
+  promptsReadyPath,
+  expectedSceneCount,
+  maximizeBeforeAutomation: true,
+  autoStartVideoGeneration: true,
+  autoConfirmStartDialog: true,
+  previewStartButtonOnly: false
+})
+```
+
+Các bước:
+
+1. Focus và maximize VeoUp.
+2. Click Blue Box bằng tọa độ đã calibrate.
+3. Chờ Windows Open File Dialog.
+4. Không dùng Ctrl+A trong folder vì dễ lỗi.
+5. Tạo danh sách file PNG dạng quoted full path:
+
+```text
+"D:\...\keyframes\scene_001_keyframe.png" "D:\...\keyframes\scene_002_keyframe.png" ...
+```
+
+6. Trong Open File Dialog:
+
+   * focus ô File name
+   * paste danh sách full path
+   * nhấn Enter
+7. Chờ VeoUp import ảnh.
+8. Validate sơ bộ số ảnh / row nếu có thể.
+
+---
+
+## Thuật toán paste prompt vào VeoUp
+
+1. Đọc file:
+
+```text
+veoup_prompts_ready.txt
+```
+
+2. Validate:
+
+* số dòng = expectedSceneCount
+* mỗi dòng không rỗng
+
+3. Focus lại VeoUp.
+4. Click Red Box bằng tọa độ calibrate.
+5. Copy toàn bộ nội dung prompt vào clipboard.
+6. Paste vào Red Box.
+7. Chờ VeoUp nhận prompt.
+8. Validate số prompt row nếu có thể.
+
+---
+
+## Thuật toán bấm Start Button
+
+Trước khi click Start:
+
+1. Focus lại VeoUp.
+2. Maximize lại VeoUp.
+3. Đọc lại window rect mới.
+4. Tính tọa độ tuyệt đối:
+
+```js
+startX = rect.Left + startButtonOffsetX
+startY = rect.Top + startButtonOffsetY
+```
+
+5. Kiểm tra tọa độ an toàn:
+
+Reject nếu:
+
+```text
+startY < rect.Top + 80
+```
+
+vì có thể nằm trên title bar.
+
+Reject nếu:
+
+```text
+startX > rect.Right - 220 && startY < rect.Top + 100
+```
+
+vì có thể nằm gần nút minimize/maximize/close.
+
+Reject nếu tọa độ nằm ngoài rect cửa sổ.
+
+6. Nếu `previewStartButtonOnly === true`:
+
+   * chỉ move chuột tới Start Button
+   * không click
+   * dùng để test tránh tốn quota VeoUp
+
+7. Nếu real mode:
+
+   * click Start Button
+   * chờ 700ms
+   * gọi Win32 `IsIconic(hwnd)` để xem VeoUp có bị minimize không
+   * nếu bị minimize:
+
+     * restore/maximize lại
+     * fail với lỗi cần recalibrate Start Button
+   * nếu có popup confirm thì nhấn Enter một lần
+
+---
+
+## Chế độ Preview Start Button
+
+Có checkbox:
+
+```text
+Chỉ di chuyển chuột tới nút Start để kiểm tra, không bấm tạo video
+```
+
+Khi bật:
+
+* VeoUp vẫn import ảnh
+* VeoUp vẫn paste prompt
+* chuột chỉ di chuyển tới Start Button
+* không click tạo video
+
+Dùng khi test để tránh tốn quota hoặc tránh bấm nhầm.
+
+---
+
+## Scan project & chạy VeoUp
+
+Nếu pipeline ChatGPT bị chết nhưng output đã đủ, có nút:
+
+```text
+Quét project & chạy VeoUp
+```
+
+Thuật toán:
+
+1. Scan project folder.
+2. Tìm tất cả `scene_XXX`.
+3. Kiểm tra mỗi scene có:
+
+   * keyframe
+   * motion_prompt.txt
+4. Rebuild `keyframes/`.
+5. Rebuild `veoup_prompts_ready.txt`.
+6. Validate count.
+7. Chạy `runVeoUpAutomation`.
+
+Dùng khi gặp lỗi:
+
+```text
+Resume stopped: no runnable scene in current batch
+```
+
+Nhưng file output thực tế đã có đủ.
+
+---
+
+## Những lỗi VeoUp từng gặp và cách đã xử lý
+
+### 1. Nhận nhầm cửa sổ
+
+Lỗi: chọn Notepad vì title có chữ `test-veoup.js`.
+
+Fix:
+
+* strict window detection
+* reject Notepad/VSCode/Terminal/Chrome
+* ưu tiên Qt class + process VeoUp
+
+### 2. Click Blue Box sai
+
+Lỗi: click không mở Open File Dialog.
+
+Fix:
+
+* calibration bằng Enter/F8
+* Blue Box validation bắt buộc phải mở File Dialog
+* nếu không mở thì không lưu tọa độ
+
+### 3. Start Button làm VeoUp bị minimize
+
+Lỗi: tọa độ Start sai, click vào window chrome.
+
+Fix:
+
+* đọc lại rect ngay trước click
+* guard tọa độ titlebar/window controls
+* dùng `IsIconic` phát hiện minimize sau click
+* bắt setup lại Start Button nếu sai
+
+### 4. Thiếu coordinate config
+
+Lỗi:
+
+```text
+Missing calibrated coordinate file
+```
+
+Fix:
+
+* thêm UI setup tọa độ trong app
+* lưu vào `%APPDATA%\vidora\veoup-coordinates.json`
+* thêm nút xóa tọa độ
+* scan nhiều path fallback
+
+---
+
+## Trạng thái hiện tại
+
+Phần standalone VeoUp test đã thành công.
+
+Thuật toán VeoUp về cơ bản ổn:
+
+```text
+open/focus/maximize VeoUp
+load calibrated coordinates
+click Blue Box
+import explicit PNG file list
+click Red Box
+paste veoup_prompts_ready.txt
+preview/click Start Button safely
+detect minimize
+confirm popup nếu có
+```
+
+Các lỗi hiện tại chủ yếu nằm ở ChatGPT pipeline:
+
+* prompt dài paste xong Send không gửi
+* composer input còn text sau click
+* cần send ladder: mouse click, DOM click, Enter, Ctrl+Enter
+* cần delay sau khi paste prompt dài
+* cần reset ChatGPT page mỗi 5 scene để tránh memory bloat
+
+VeoUp automation chỉ cần giữ nguyên, không merge lại Stability Layer hỏng nếu không cần.

@@ -118,6 +118,13 @@ try {
 const quotedPngList = pngFiles.map(f => `"${path.join(keyframesFolder, f)}"`).join(' ');
 console.log(`[INFO] Quoted file list length: ${quotedPngList.length} chars.`);
 
+// Build a PowerShell array literal of individual file paths for per-scene import loop
+const psPngArrayLiteral = '@(' + pngFiles.map(f => {
+  const fullPath = path.join(keyframesFolder, f).replace(/'/g, "''");
+  return `'${fullPath}'`;
+}).join(', ') + ')';
+console.log(`[INFO] PowerShell PNG array literal item count: ${pngFiles.length}`);
+
 // Validate batchPromptsFile
 if (!fs.existsSync(batchPromptsFile)) {
   console.error(`[ERROR] batchPromptsFile does not exist: ${batchPromptsFile}`);
@@ -144,6 +151,7 @@ function buildTestPowerShellScript() {
   const escapedQuotedPngList = quotedPngList.replace(/'/g, "''");
   const escapedPromptText = promptText.replace(/'/g, "''");
   const escapedConfigPath = CALIBRATION_CONFIG_PATH.replace(/\\/g, '\\\\').replace(/'/g, "''");
+  const escapedKeyframesFolder = keyframesFolder.replace(/'/g, "''");
 
   return `
 $ErrorActionPreference = 'Stop'
@@ -262,10 +270,20 @@ function Move-Cursor([double]$X, [double]$Y) {
   Start-Sleep -Milliseconds 120
 }
 
+function Safe-SetClipboardText([string]$Text) {
+  for ($i = 1; $i -le 7; $i++) {
+    try {
+      [System.Windows.Forms.Clipboard]::SetText($Text)
+      return
+    } catch {
+      Start-Sleep -Milliseconds 250
+    }
+  }
+  throw "Clipboard operation failed permanently after 7 retries."
+}
+
 function Set-ClipboardText([string]$Text) {
-  [System.Windows.Forms.Clipboard]::Clear()
-  Start-Sleep -Milliseconds 150
-  [System.Windows.Forms.Clipboard]::SetText($Text)
+  Safe-SetClipboardText $Text
 }
 
 function Get-ActiveWindowTitle {
@@ -498,8 +516,8 @@ $redY = $rect.Top + $RedBoxOffsetY
 $startX = $rect.Left + $StartButtonOffsetX
 $startY = $rect.Top + $StartButtonOffsetY
 
-# Click Blue Box
-Take-Screenshot "test-veoup-before-bluebox.png"
+# One-Shot Folder Import Logic
+Write-Host "[TEST-VEOUP] Importing all keyframes from folder: $keyframesFolder..."
 Write-Host "[TEST-VEOUP] Clicking Blue Box image import area at absolute coordinate ($blueX, $blueY)..."
 if ($DebugCoordinates) {
   Move-Cursor $blueX $blueY
@@ -507,50 +525,55 @@ if ($DebugCoordinates) {
 }
 Click-Point $blueX $blueY
 
-# Wait for file dialog
 Write-Host "[TEST-VEOUP] Waiting for Open File dialog..."
 if (!(Wait-For-FileDialog)) {
   $activeTitle = Get-ActiveWindowTitle
   $activeClass = Get-ActiveWindowClassName
   Write-Host "[TEST-VEOUP] Calibrated Blue Box click did not open the file dialog."
-  Write-Host "[TEST-VEOUP] Please rerun CALIBRATION_MODE=true and point to the actual clickable center of the import button/area."
   Write-Host "[TEST-VEOUP] Current active window: $activeTitle (Class: $activeClass)"
   exit 1
 }
+Start-Sleep -Milliseconds 2000
 
-$activeTitle = Get-ActiveWindowTitle
-$activeClass = Get-ActiveWindowClassName
-Write-Host "[TEST-VEOUP] Active window after dialog wait: $activeTitle (Class: $activeClass)"
-
-# Paste image file list
-Write-Host "[TEST-VEOUP] Copying PNG file list to clipboard..."
-$QuotedPngFileList = '${escapedQuotedPngList}'
-Set-ClipboardText $QuotedPngFileList
-
-Write-Host "[TEST-VEOUP] Pasting PNG file list into File name input..."
-[System.Windows.Forms.SendKeys]::SendWait('%n')
-Start-Sleep -Milliseconds 300
-[System.Windows.Forms.SendKeys]::SendWait('^a')
+Write-Host "[TEST-VEOUP] Navigating to keyframes directory..."
+[System.Windows.Forms.SendKeys]::SendWait('%d')
+Start-Sleep -Milliseconds 500
+Set-ClipboardText $keyframesFolder
 Start-Sleep -Milliseconds 200
 [System.Windows.Forms.SendKeys]::SendWait('^v')
+Start-Sleep -Milliseconds 100
+[System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+
+Write-Host "[TEST-VEOUP] Waiting for Windows Explorer to render folder view..."
+Start-Sleep -Milliseconds 1500
+
+Write-Host "[TEST-VEOUP] Anchor focus in File Name box first..."
+[System.Windows.Forms.SendKeys]::SendWait('%n')
+Start-Sleep -Milliseconds 300
+[System.Windows.Forms.SendKeys]::SendWait('scene_001_keyframe')
+Start-Sleep -Milliseconds 500
+
+Write-Host "[TEST-VEOUP] Send Shift+TAB (+{TAB}) to shift focus directly UP into the image grid view container..."
+[System.Windows.Forms.SendKeys]::SendWait('+{TAB}')
+Start-Sleep -Milliseconds 500
+
+Write-Host "[TEST-VEOUP] Selecting all keyframe files..."
+[System.Windows.Forms.SendKeys]::SendWait('^a')
 Start-Sleep -Milliseconds 500
 [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
 
-Start-Sleep -Milliseconds 1500
+Write-Host "[TEST-VEOUP] Waiting 5 seconds for VeoUp image grid to append assets..."
+Start-Sleep -Milliseconds 5000
+
 $titleAfterOpen = Get-ActiveWindowTitle
 $classAfterOpen = Get-ActiveWindowClassName
 Write-Host "[TEST-VEOUP] Active window after dialog ENTER: $titleAfterOpen (Class: $classAfterOpen)"
 
-if (($titleAfterOpen -match 'open|mở|chọn|select|keyframe|folder') -or ($classAfterOpen -eq '#32770')) {
+if (($titleAfterOpen -match 'open|select|keyframe|folder') -or ($classAfterOpen -eq '#32770')) {
   Write-Host "[TEST-VEOUP] ERROR: File dialog is still open. Import path or file selection failed."
   exit 1
 }
 
-# Wait for render grid
-Write-Host "[TEST-VEOUP] Waiting 3 seconds for VeoUp image grid to render..."
-Start-Sleep -Seconds 3
-
-# Refocus VeoUp
 Write-Host "[TEST-VEOUP] Refocusing VeoUp window..."
 [VidoraNativeWin]::SetForegroundWindow($hwnd) | Out-Null
 Start-Sleep -Milliseconds 500
@@ -563,7 +586,6 @@ if ($title -notmatch 'VeoUp') {
   exit 1
 }
 
-# Red Box
 Take-Screenshot "test-veoup-before-redbox.png"
 Write-Host "[TEST-VEOUP] Setting prompts text in clipboard..."
 $PromptBatchText = '${escapedPromptText}'
@@ -594,13 +616,16 @@ if ($ClearRedBoxBeforePaste) {
   Start-Sleep -Milliseconds 150
 }
 [System.Windows.Forms.SendKeys]::SendWait('^v')
-Start-Sleep -Milliseconds 250
+Start-Sleep -Milliseconds 500
+
+Write-Host "[VeoUp Macro Progress] All keyframes and prompt lines dispatched."
 
 $title = Get-ActiveWindowTitle
 $className = Get-ActiveWindowClassName
 Write-Host "[TEST-VEOUP] Active window after pasting prompts: $title (Class: $className)"
 
 # Click Start Video Button
+Start-Sleep -Seconds 1.5
 if ($ClickStartButton) {
   Write-Host "[TEST-VEOUP] Start Button offset loaded: X=$StartButtonOffsetX, Y=$StartButtonOffsetY"
   Write-Host "[TEST-VEOUP] Refocusing VeoUp before Start button click..."
@@ -622,7 +647,7 @@ if ($ClickStartButton) {
     $titleAfterStart = Get-ActiveWindowTitle
     $classAfterStart = Get-ActiveWindowClassName
     Write-Host "[TEST-VEOUP] Active window after Start click: $titleAfterStart (Class: $classAfterStart)"
-    
+
     Write-Host "[TEST-VEOUP] Start confirmation sent."
     [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
     Start-Sleep -Seconds 1
@@ -630,6 +655,9 @@ if ($ClickStartButton) {
 } else {
   Write-Host "[TEST-VEOUP] CLICK_START_VIDEO_BUTTON=false, skipping final Start button click."
 }
+
+if (Get-Command Clear-Clipboard -ErrorAction SilentlyContinue) { Clear-Clipboard } else { [System.Windows.Forms.Clipboard]::Clear() }
+Write-Host "[VeoUp Macro Progress] Final Start triggered and clipboard cleared."
 
 Write-Host "[TEST-VEOUP] Row validation unavailable in standalone macro test. Please visually confirm VeoUp loaded ${expectedSceneCount} rows."
 Write-Host "[TEST-VEOUP] Integration test completed successfully."

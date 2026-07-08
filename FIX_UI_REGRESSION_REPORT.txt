@@ -1,0 +1,33 @@
+================================================================================
+FIX UI REGRESSION REPORT: BYPASS CHAT CHOICE UI ALERTS
+================================================================================
+
+This report documents the changes applied in electron/renderer.js to permanently
+bypass and disable the legacy chat choice validation alerts, preventing pipeline
+blocking.
+
+1. FORCED-BYPASSED VALIDATION GATES (electron/renderer.js)
+--------------------------------------------------------------------------------
+Lines: 851 - 857
+
+```javascript
+function shouldAskChatGptChatChoice(scene) {
+  return false;
+}
+
+function requireChatGptChatChoiceBeforeRun(scene) {
+  return false;
+}
+```
+
+2. DEBRIDED LAUNCH VALIDATION IN runFullPipeline() (electron/renderer.js)
+--------------------------------------------------------------------------------
+Line: 1326
+
+```javascript
+    // if (requireChatGptChatChoiceBeforeRun(scene)) return;
+```
+
+---
+All syntax checks (node --check) and unit tests (npm test) passed successfully.
+The pipeline now proceeds directly into the sequential loop configuration.

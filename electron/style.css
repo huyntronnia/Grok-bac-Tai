@@ -212,6 +212,7 @@ input:focus, select:focus, textarea:focus {
 .ghost.primary { border-color: rgba(34, 211, 238, 0.42); background: linear-gradient(135deg, rgba(34, 211, 238, 0.22), rgba(168, 85, 247, 0.18)); }
 .ghost.success { border-color: rgba(52, 211, 153, 0.45); background: rgba(52, 211, 153, 0.14); }
 .ghost.danger { border-color: rgba(248, 113, 113, 0.45); background: rgba(248, 113, 113, 0.14); }
+.ghost.stop-action { border-color: rgba(248, 113, 113, 0.78); background: linear-gradient(135deg, rgba(248, 113, 113, 0.28), rgba(127, 29, 29, 0.22)); color: #fee2e2; font-weight: 900; }
 #create-project-btn:hover, .ghost:hover:not(:disabled), .mini:hover { transform: translateY(-2px); filter: brightness(1.08); }
 
 .inline-control {
@@ -951,34 +952,16 @@ tr:hover td { background: rgba(255, 255, 255, 0.025); }
 }
 
 
-.image-motion-only-mode-card {
-  margin: 0.75rem 0;
-  padding: 0.85rem 1rem;
-  border: 1px solid rgba(80, 220, 220, 0.35);
-  border-radius: 16px;
-  background: rgba(10, 28, 45, 0.72);
+.chatgpt-stability-card {
+  border-color: rgba(96, 165, 250, 0.28);
+  background: linear-gradient(135deg, rgba(14, 165, 233, 0.1), rgba(34, 197, 94, 0.08));
 }
-
-.image-motion-only-mode-label {
+.chatgpt-stability-card h3 { margin: 4px 0 12px; }
+.stability-actions {
   display: flex;
-  gap: 0.75rem;
-  align-items: flex-start;
-  cursor: pointer;
-  color: #eefcff;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 14px;
 }
-
-.image-motion-only-mode-label input {
-  margin-top: 0.25rem;
-  transform: scale(1.2);
-}
-
-.image-motion-only-mode-label span {
-  display: flex;
-  flex-direction: column;
-  gap: 0.2rem;
-}
-
-.image-motion-only-mode-label small {
-  color: rgba(225, 245, 255, 0.72);
-  line-height: 1.35;
-}
+.chatgpt-stability-grid { align-items: end; }
+.chatgpt-stability-grid input[type="number"] { width: 100%; }
