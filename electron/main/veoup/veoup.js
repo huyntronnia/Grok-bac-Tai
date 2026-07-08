@@ -7,11 +7,8 @@ const path = require('path');
 const { spawn, exec } = require('child_process');
 const { globalShortcut } = require('electron');
 
+const { appendAppLog } = require("../logging");
 
-let appendAppLog;
-try {
-  appendAppLog = require("../logging").appendAppLog;
-} catch (_) {}
 
 
 // --- Injected dependencies (set via initVeoUp) ---
