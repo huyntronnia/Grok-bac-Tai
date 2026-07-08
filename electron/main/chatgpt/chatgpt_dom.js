@@ -1362,23 +1362,32 @@ function readChatGptImageStateScript() {
       node.querySelector?.("img, picture source, canvas") ||
       /Generated image/i.test(node.innerText || ""),
   );
-  const mediaRoot = mediaRoots.at(-1) || document;
-  const urls = [...mediaRoot.querySelectorAll("img, picture source")]
-    .filter((node) => {
-      const rect = node.getBoundingClientRect?.();
-      if (!rect || rect.width < 180 || rect.height < 120) return false;
-      const label = `${node.alt || ""} ${node.getAttribute?.("aria-label") || ""} ${node.className || ""}`;
-      return !/avatar|profile|logo|icon|emoji/i.test(label);
-    })
-    .map(
-      (node) =>
-        node.currentSrc ||
-        node.src ||
-        node.getAttribute("srcset") ||
-        node.getAttribute("src") ||
-        "",
-    )
-    .filter((url) => /^https?:|^blob:|^data:image\//i.test(url));
+  const mediaRoot = mediaRoots.at(-1);
+  const urls = [];
+  if (mediaRoot) {
+    const foundUrls = [...mediaRoot.querySelectorAll("img, picture source")]
+      .filter((node) => {
+        const label = `${node.alt || ""} ${node.getAttribute?.("aria-label") || ""} ${node.className || ""}`;
+        if (/avatar|profile|logo|icon|emoji/i.test(label)) return false;
+        if (node.tagName === "IMG") {
+          if (!node.complete || !node.naturalWidth || node.naturalWidth < 120) return false;
+        } else {
+          const rect = node.getBoundingClientRect?.();
+          if (!rect || rect.width < 120 || rect.height < 80) return false;
+        }
+        return true;
+      })
+      .map(
+        (node) =>
+          node.currentSrc ||
+          node.src ||
+          node.getAttribute("srcset") ||
+          node.getAttribute("src") ||
+          "",
+      )
+      .filter((url) => /^https?:|^blob:|^data:image\//i.test(url));
+    urls.push(...foundUrls);
+  }
 
   const hasVisibleMedia = urls.length > 0;
 
@@ -1476,37 +1485,39 @@ function readChatGptImageStateScript() {
     /Generated image|Edit image|Download|Tải xuống|Open image|Image created|Ảnh đã được tạo/i.test(
       latestAssistantText,
     );
-  const visibleImageBoxes = [
-    ...mediaRoot.querySelectorAll("img, canvas, button, div"),
-  ]
-    .map((node) => {
-      const rect = node.getBoundingClientRect?.();
-      const style = window.getComputedStyle?.(node);
-      const text = node.innerText || "";
-      const label = `${node.alt || ""} ${node.getAttribute?.("aria-label") || ""} ${node.className || ""}`;
-      const isMedia =
-        node.tagName === "IMG" ||
-        node.tagName === "CANVAS" ||
-        (/Edit|Generated image/i.test(text) &&
-          node.querySelector?.("button")) ||
-        (style?.backgroundImage &&
-          style.backgroundImage !== "none" &&
-          !style.backgroundImage.includes("gradient"));
-      return rect &&
-        isMedia &&
-        rect.width >= 180 &&
-        rect.height >= 120 &&
-        !/avatar|profile|logo|icon|emoji/i.test(label)
-        ? {
+  const visibleImageBoxes = mediaRoot
+    ? [
+        ...mediaRoot.querySelectorAll("img, canvas, button, div"),
+      ]
+        .map((node) => {
+          const rect = node.getBoundingClientRect?.();
+          const style = window.getComputedStyle?.(node);
+          const text = node.innerText || "";
+          const label = `${node.alt || ""} ${node.getAttribute?.("aria-label") || ""} ${node.className || ""}`;
+          const isMedia =
+            node.tagName === "IMG" ||
+            node.tagName === "CANVAS" ||
+            (/Edit|Generated image/i.test(text) &&
+              node.querySelector?.("button")) ||
+            (style?.backgroundImage &&
+              style.backgroundImage !== "none" &&
+              !style.backgroundImage.includes("gradient"));
+          if (!rect || !isMedia || /avatar|profile|logo|icon|emoji/i.test(label)) return null;
+          if (node.tagName === "IMG") {
+            if (!node.complete || !node.naturalWidth || node.naturalWidth < 120) return null;
+          } else {
+            if (rect.width < 120 || rect.height < 80) return null;
+          }
+          return {
             y: Math.round(rect.y + window.scrollY),
             w: Math.round(rect.width),
             h: Math.round(rect.height),
             tag: node.tagName,
-          }
-        : null;
-    })
-    .filter(Boolean)
-    .sort((a, b) => b.y - a.y);
+          };
+        })
+        .filter(Boolean)
+        .sort((a, b) => b.y - a.y)
+    : [];
   if (
     !urls.length &&
     visibleImageBoxes.length &&
