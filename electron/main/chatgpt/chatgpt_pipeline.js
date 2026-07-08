@@ -1175,6 +1175,8 @@ async function waitForChatGptImageGenerationDoneBeforeExtract(
   let retryableImageTextTicks = 0;
   let lastRetryableImageText = "";
   let refreshedForStaleOutput = false;
+  let grayPlaceholderStartAt = 0;
+  let hasReloadedForGrayPlaceholder = false;
 
   while (Date.now() - startedAt < 900000) {
     const imageState = await evaluateOnCdpPage(
@@ -1203,6 +1205,47 @@ async function waitForChatGptImageGenerationDoneBeforeExtract(
         activeGeneration,
       };
     }
+
+    const hasUrls = (imageState?.urls || []).length > 0;
+    const isGrayPlaceholder = Boolean(
+      imageState?.preparingImage &&
+      !hasUrls &&
+      !imageState?.stopButtonVisible
+    );
+
+    if (isGrayPlaceholder) {
+      if (grayPlaceholderStartAt === 0) {
+        grayPlaceholderStartAt = Date.now();
+      } else if (Date.now() - grayPlaceholderStartAt >= 30000) {
+        if (!hasReloadedForGrayPlaceholder) {
+          hasReloadedForGrayPlaceholder = true;
+          grayPlaceholderStartAt = 0;
+          await appendAppLog(null, {
+            source: "main",
+            kind: "warning",
+            text: `Scene ${sceneId}: ChatGPT stuck on gray loading placeholder for over 30s. Triggering safety page reload.`,
+            details: { imageState: sanitizeChatGptImageSnapshot(imageState) },
+          }).catch(() => null);
+          await refreshChatGptPageBeforeImageExtract(client, { sceneId, stage: "gray-placeholder-stale" });
+        } else {
+          await appendAppLog(null, {
+            source: "main",
+            kind: "warning",
+            text: `Scene ${sceneId}: ChatGPT STILL stuck on gray loading placeholder after reload. Triggering full NV1 recovery retry.`,
+            details: { imageState: sanitizeChatGptImageSnapshot(imageState) },
+          }).catch(() => null);
+          return {
+            ok: false,
+            retryReason: "chatgpt-gray-placeholder-stuck-after-reload",
+            imageState: sanitizeChatGptImageSnapshot(imageState),
+            activeGeneration,
+          };
+        }
+      }
+    } else {
+      grayPlaceholderStartAt = 0;
+    }
+
     const latestAssistantText = String(
       imageState?.latestAssistantText || "",
     ).trim();
@@ -1242,7 +1285,7 @@ async function waitForChatGptImageGenerationDoneBeforeExtract(
 
     const busy = Boolean(
       imageState?.generating ||
-      imageState?.preparingImage ||
+      (imageState?.preparingImage && !hasUrls) ||
       imageState?.stopButtonVisible ||
       imageState?.stopVisible ||
       imageState?.composerBusy ||
