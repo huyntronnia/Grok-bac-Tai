@@ -34,8 +34,11 @@ const {
 } = require("../chatgpt");
 const {
   executeVeoUpAutomation,
-  scanProjectAndRunVeoUp
+  scanProjectAndRunVeoUp,
+  buildVeoUpPromptsReadyFile,
+  isVeoUpStageError,
 } = require("../veoup");
+
 
 const {
   CHATGPT_STAGES,
@@ -343,105 +346,6 @@ async function checkIfAllScenesComplete(projectDir) {
   return { complete: validSceneDirs.length > 0, sceneDirs: validSceneDirs };
 }
 
-async function buildVeoUpPromptsReadyFile({
-  projectDir,
-  sceneDirs,
-  expectedSceneCount,
-}) {
-  const flattenedPrompts = [];
-
-  for (const sceneDir of sceneDirs) {
-    const motionPromptPath = path.join(sceneDir, "motion_prompt.txt");
-    let rawPrompt = "";
-    try {
-      rawPrompt = await fs.readFile(motionPromptPath, "utf8");
-    } catch (err) {
-      throw new Error(
-        `Scene folder ${path.basename(sceneDir)} is missing motion_prompt.txt.`,
-      );
-    }
-
-    const flattened = rawPrompt
-      .replace(/\r\n/g, "\n")
-      .replace(/\r/g, "\n")
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean)
-      .join(" ")
-      .replace(/\s+/g, " ")
-      .trim();
-
-    if (!flattened) {
-      throw new Error(
-        `Scene folder ${path.basename(sceneDir)} has an empty motion prompt.`,
-      );
-    }
-
-    flattenedPrompts.push(flattened);
-  }
-
-  if (
-    expectedSceneCount !== undefined &&
-    expectedSceneCount > 0 &&
-    flattenedPrompts.length !== expectedSceneCount
-  ) {
-    throw new Error(
-      `Prompt line count mismatch: collected ${flattenedPrompts.length} prompts, expected ${expectedSceneCount}.`,
-    );
-  }
-
-  const batchText = flattenedPrompts.join("\n");
-  const promptsReadyPath = path.join(projectDir, "veoup_prompts_ready.txt");
-  await fs.writeFile(promptsReadyPath, batchText, "utf8");
-
-  // Verify file exists and is not empty
-  try {
-    const stat = await fs.stat(promptsReadyPath);
-    if (stat.size <= 0) {
-      throw new Error("veoup_prompts_ready.txt is empty.");
-    }
-  } catch (err) {
-    throw new Error(
-      `Failed to write or verify veoup_prompts_ready.txt: ${err.message}`,
-    );
-  }
-
-  return promptsReadyPath;
-}
-
-function isVeoUpStageError(error) {
-  const parts = [
-    error?.status,
-    error?.code,
-    error?.message,
-    error?.videoError,
-    error?.videoStatus,
-    error?.details?.status,
-    error?.details?.error,
-    error?.details?.videoError,
-    error?.details?.result?.videoError,
-    error?.details?.result?.videoStatus,
-    error?.details?.result?.videoProvider,
-    error?.details?.result?.provider,
-    error?.details?.result?.status,
-    error?.details?.result?.error,
-    error,
-  ];
-  const message = parts
-    .map((item) => {
-      if (!item) return "";
-      if (typeof item === "string") return item;
-      try {
-        return JSON.stringify(item);
-      } catch (_error) {
-        return String(item);
-      }
-    })
-    .join(" ");
-  return /veoup-launcher-not-found|veoup-pre-submission-cleanup-failed|veoup-window-not-found|output timeout|generate acknowledgement|veoup-generate-click-not-acknowledged|veoup-generate-submission-not-acknowledged|veoup-video-missing-after-submission/i.test(
-    message,
-  );
-}
 
 async function readPipelineSceneState(projectDir = "", sceneId = 0) {
   const stateFile = getPipelineStateFile(projectDir);
