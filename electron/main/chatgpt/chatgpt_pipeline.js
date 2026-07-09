@@ -4286,7 +4286,12 @@ async function hydrateFreshChatGptContextAfterRotation(
   globalThis.__vidoraChatGptNewChatMode = false;
 }
 
+function clearAllChatGptPipelineLocks() {
+  motionPromptSendLocks.clear();
+}
+
 module.exports = {
+  clearAllChatGptPipelineLocks,
   initChatGptPipeline,
   generateImageAndMotionWithChatGPT,
   generateMotionPromptWithChatGPT,
