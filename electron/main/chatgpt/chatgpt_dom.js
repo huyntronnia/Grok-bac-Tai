@@ -1543,19 +1543,23 @@ function readChatGptImageStateScript() {
 
   const completedVisibleImage =
     hasVisibleMedia && !composerBusy && !thinking;
+  const waitingForAssistantMessage = !activeMessageNode;
   const generating =
-    stoppedCreatingImage || completedVisibleImage
-      ? false
-      : sendReady
+    waitingForAssistantMessage
+      ? true
+      : stoppedCreatingImage || completedVisibleImage
         ? false
-        : stopButtonVisible ||
-          streamingIndicator ||
-          composerBusy ||
-          (preparingImage && !hasVisibleMedia) ||
-          (thinking && !hasVisibleMedia);
+        : sendReady
+          ? false
+          : stopButtonVisible ||
+            streamingIndicator ||
+            composerBusy ||
+            (preparingImage && !hasVisibleMedia) ||
+            (thinking && !hasVisibleMedia);
 
   return {
     generating,
+    waitingForAssistantMessage,
     stopButton: stopButtonVisible,
     preparingImage: stoppedCreatingImage ? false : preparingImage,
     stoppedCreatingImage,
