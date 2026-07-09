@@ -133,8 +133,10 @@ async function generateImageAndMotionWithChatGPT({
     `scene_${String(sceneId).padStart(3, "0")}_keyframe.png`,
   );
   const currentSceneId = Number(sceneId);
+  const runId = String(options.runId || options.originalOptions?.runId || "").trim();
   const projectDir = options.originalOptions?.outputFolder || path.dirname(sceneDir);
 
+  assertPipelineRunActive(runId);
   let snapshot = await readSceneSnapshot(sceneDir);
 
   if (getChatGptContextFresh()) {
@@ -315,9 +317,10 @@ async function generateImageAndMotionWithChatGPT({
             }
           }
           return { ok: true, clickedCount };
-        })()`
-      ).catch(() => null);
+        })()
+      `).catch(() => null);
       await sleep(400);
+      assertPipelineRunActive(runId);
 
       const finalPrompt = [
         "Create exactly one image from the prompt below. Do not answer with long text. If possible, render or generate the image directly.",
@@ -326,9 +329,10 @@ async function generateImageAndMotionWithChatGPT({
 
       await evaluateOnCdpPage(
         page,
-        `(${prepareChatGptCreateImageScript.toString()})()`,
+        `(${prepareChatGptCreateImageScript.toString()})()`
       ).catch(() => null);
       await sleep(800);
+      assertPipelineRunActive(runId);
 
       const filesToUpload = [];
       if (filesToUpload.length > 0 && !snapshot.hydration?.characterUploadDone) {
@@ -351,6 +355,7 @@ async function generateImageAndMotionWithChatGPT({
         text: 'Scene ${sceneId}: Sending NV1.',
       }).catch(() => null);
 
+      assertPipelineRunActive(runId);
       const sentImage = await sendPromptViaCdpInput(page, finalPrompt);
       if (!sentImage?.ok) {
         throw new Error(sentImage?.error || "IMAGE_STAGE NV1 send failed.");
@@ -368,6 +373,7 @@ async function generateImageAndMotionWithChatGPT({
     snapshot.pipelineStage = "WAIT_IMAGE";
     await writeSceneSnapshot(sceneDir, snapshot);
     
+    assertPipelineRunActive(runId);
     await saveChatGPTGeneratedImageAsset(page, {
       existingUrls: [],
       minAssistantRootIndex: Number(options.beforeAssistantCount || 0),
@@ -1185,6 +1191,7 @@ async function waitForChatGptImageGenerationDoneBeforeExtract(
     (typeof options !== "undefined" && options?.sceneId) ||
     (typeof context !== "undefined" && context?.sceneId) ||
     "";
+  const runId = String(options.runId || options.originalOptions?.runId || "").trim();
   const startedAt = Date.now();
   let lastBusyLogAt = 0;
   let firstIdleAt = 0;
@@ -1195,15 +1202,23 @@ async function waitForChatGptImageGenerationDoneBeforeExtract(
   let hasReloadedForGrayPlaceholder = false;
 
   while (Date.now() - startedAt < 900000) {
+    assertPipelineRunActive(runId);
     const imageState = await evaluateOnCdpPage(
       client,
       `(${readChatGptImageStateScript.toString()})()`,
-    ).catch((error) => ({ ok: false, generating: true, error: error.message }));
+    ).catch((error) => {
+      if (isPipelineCancelledError(error)) throw error;
+      return { ok: false, generating: true, error: error.message };
+    });
 
+    assertPipelineRunActive(runId);
     const activeGeneration = await evaluateOnCdpPage(
       client,
       `(${detectChatGptActiveGenerationScriptStrict.toString()})()`,
-    ).catch((error) => ({ ok: false, generating: true, error: error.message }));
+    ).catch((error) => {
+      if (isPipelineCancelledError(error)) throw error;
+      return { ok: false, generating: true, error: error.message };
+    });
     if (imageState?.stoppedCreatingImage) {
       await appendAppLog(null, {
         source: "main",
@@ -1398,6 +1413,7 @@ async function waitForLatestChatGPTGeneratedImage(client, options = {}) {
     (typeof options !== "undefined" && options?.sceneId) ||
     (typeof context !== "undefined" && context?.sceneId) ||
     "";
+  const runId = String(options.originalOptions?.runId || "").trim();
   const known = new Set(options.existingUrls || []);
   const realStallMs = 300000;
   const minAssistantRootIndex = Number(options.minAssistantRootIndex || 0);
@@ -1419,7 +1435,7 @@ async function waitForLatestChatGPTGeneratedImage(client, options = {}) {
     details: { minAssistantRootIndex, existingUrlCount: known.size },
   });
   for (let attempt = 1; ; attempt += 1) {
-    assertPipelineRunActive();
+    assertPipelineRunActive(runId);
     const attemptStartedAt = Date.now();
     let sawGenerating = false;
     let readyTicks = 0;
@@ -1427,7 +1443,7 @@ async function waitForLatestChatGPTGeneratedImage(client, options = {}) {
     let refreshedForVisibleOutput = false;
     let textOnlyAnswer = false;
     const resendImagePrompt = async (reason, snapshot) => {
-      assertPipelineRunActive();
+      assertPipelineRunActive(runId);
       const projectDir = options.originalOptions?.outputFolder || path.dirname(options.sceneDir);
 
       if (options.outputPath && (await pathExists(options.outputPath))) {
@@ -1508,8 +1524,10 @@ async function waitForLatestChatGPTGeneratedImage(client, options = {}) {
           "utf8",
         )
         .catch(() => null);
+      assertPipelineRunActive(runId);
       assertPipelineRunActive();
       await notifyRenderer('chatgpt-image-retry', `Scene ${sceneId}: ChatGPT image not ready (${reason}); retrying NV1 attempt ${attempt + 1}/3.`, { sceneId, attempt, reason });
+      assertPipelineRunActive(runId);
       assertPipelineRunActive();
       const stopped = await evaluateOnCdpPage(client, `(${clickChatGptStopGeneratingScript.toString()})()`).catch((error) => ({ ok: false, error: error.message }));
       await appendAppLog(null, {
@@ -1520,7 +1538,7 @@ async function waitForLatestChatGPTGeneratedImage(client, options = {}) {
       });
 
       if (stopped?.error === "stop-button-not-found") {
-        assertPipelineRunActive();
+        assertPipelineRunActive(runId);
         await appendAppLog(null, {
           source: "main",
           kind: "warning",
@@ -1531,14 +1549,14 @@ async function waitForLatestChatGPTGeneratedImage(client, options = {}) {
           await waitForCdpLoad(client).catch(() => null);
           await sleep(4000);
         }
-        assertPipelineRunActive();
+        assertPipelineRunActive(runId);
 
         if (
           options.referenceImagePaths &&
           options.referenceImagePaths.length > 0
         ) {
           for (const refPath of options.referenceImagePaths) {
-            assertPipelineRunActive();
+            assertPipelineRunActive(runId);
             await uploadFileToChatGptDirectly(client, refPath, sceneId).catch(
               () => null,
             );
@@ -1551,7 +1569,7 @@ async function waitForLatestChatGPTGeneratedImage(client, options = {}) {
           `(${prepareChatGptCreateImageScript.toString()})()`,
         ).catch(() => null);
         await sleep(800);
-        assertPipelineRunActive();
+        assertPipelineRunActive(runId);
         const resent = await sendPromptViaCdpInput(client, retryPrompt);
         if (!resent.ok)
           throw new Error(
@@ -1567,14 +1585,14 @@ async function waitForLatestChatGPTGeneratedImage(client, options = {}) {
       }
 
       await sleep(1200);
-      assertPipelineRunActive();
+      assertPipelineRunActive(runId);
       const retryPrompt = `${options.prompt}\n\nRETRY ${attempt + 1}: Previous response did not produce a complete usable image asset. Generate exactly one image in this chat now. Do not answer with text only.`;
       await evaluateOnCdpPage(
         client,
         `(${prepareChatGptCreateImageScript.toString()})()`,
       ).catch(() => null);
       await sleep(800);
-      assertPipelineRunActive();
+      assertPipelineRunActive(runId);
       const resent = await sendPromptViaCdpInput(client, retryPrompt);
       if (!resent.ok)
         throw new Error(
@@ -1590,15 +1608,19 @@ async function waitForLatestChatGPTGeneratedImage(client, options = {}) {
     };
 
     while (Date.now() - attemptStartedAt < 900000) {
+      assertPipelineRunActive(runId);
       const preExtractWait =
         await waitForChatGptImageGenerationDoneBeforeExtract(
           client,
           options,
-        ).catch((error) => ({
-          ok: false,
-          retryReason: "pre-extract-wait-timeout",
-          error: error.message,
-        }));
+        ).catch((error) => {
+          if (isPipelineCancelledError(error)) throw error;
+          return {
+            ok: false,
+            retryReason: "pre-extract-wait-timeout",
+            error: error.message,
+          };
+        });
       if (!preExtractWait?.ok) {
         await resendImagePrompt(
           preExtractWait?.retryReason || "pre-extract-wait-failed",
@@ -1611,7 +1633,9 @@ async function waitForLatestChatGPTGeneratedImage(client, options = {}) {
         loggedAfterResponse = true;
         await logMemoryMilestone(sceneId, "After response").catch(() => null);
       }
+      assertPipelineRunActive(runId);
       await sleep(3000);
+      assertPipelineRunActive(runId);
       await recoverCdpPageIfCrashed(
         client,
         "chatgpt",
@@ -1642,10 +1666,14 @@ async function waitForLatestChatGPTGeneratedImage(client, options = {}) {
       );
 
       // Ensure the image is fully loaded and hydrated using the scroll-and-verify loop
+      assertPipelineRunActive(runId);
       const hydration = await evaluateOnCdpPage(
         client,
         `(${ensureChatGptImageLoadedAndHydratedScript.toString()})(${minAssistantRootIndex})`,
-      ).catch((err) => ({ ok: false, error: err.message }));
+      ).catch((err) => {
+        if (isPipelineCancelledError(err)) throw err;
+        return { ok: false, error: err.message };
+      });
       
       const hydrationMsg = hydration?.ok
         ? `ChatGPT image hydration success: tick=${hydration.tick || 0}, elapsed=${hydration.elapsedMs || 0}ms, mode=${hydration.mode || "unknown"}, placeholderDisappeared=${hydration.placeholderDisappeared}`
@@ -1658,21 +1686,29 @@ async function waitForLatestChatGPTGeneratedImage(client, options = {}) {
         details: hydration,
       }).catch(() => null);
 
+      assertPipelineRunActive(runId);
       const extracted = await extractLatestChatGPTGeneratedImageBytes(client, {
         existingUrls: [...known],
         minAssistantRootIndex,
-      }).catch((error) => ({
-        ok: false,
-        error: error.message,
-        mode: "extract-error",
-      }));
+      }).catch((error) => {
+        if (isPipelineCancelledError(error)) throw error;
+        return {
+          ok: false,
+          error: error.message,
+          mode: "extract-error",
+        };
+      });
       lastExtract = extracted;
       if (extracted?.diagnostics) lastDiagnostic = extracted.diagnostics;
 
+      assertPipelineRunActive(runId);
       const snapshot = await evaluateOnCdpPage(
         client,
         `(${readChatGptImageStateScript.toString()})()`,
-      );
+      ).catch((error) => {
+        if (isPipelineCancelledError(error)) throw error;
+        throw error;
+      });
       lastSnapshot = snapshot;
 
       // false-generating-empty-chat-break
