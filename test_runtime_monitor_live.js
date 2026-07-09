@@ -96,6 +96,12 @@ async function run() {
     console.log(`- Tổng số lượng ảnh: ${event.metrics.dom.imageElementCount}`);
     console.log(`- Ảnh đã tải hoàn tất: ${event.metrics.dom.imageCompleteCount}`);
     console.log("-----------------------------------------");
+    console.log("Runtime Errors/Exceptions:");
+    const lastErr = chatGptRuntimeMonitor.metrics.runtime.lastConsoleError;
+    const lastExc = chatGptRuntimeMonitor.metrics.runtime.lastException;
+    console.log(`- Lỗi Console mới nhất: ${lastErr ? lastErr.slice(0, 100) : "Không có"}`);
+    console.log(`- Ngoại lệ JS mới nhất: ${lastExc ? lastExc.slice(0, 100) : "Không có"}`);
+    console.log("-----------------------------------------");
     console.log("Network Metrics:");
     console.log(`- Các luồng tải ảnh đang chạy: ${event.metrics.network.activeMediaRequests}`);
     console.log(`- URL ảnh dalle bắt được: ${event.metrics.network.dalleUrlsCaptured.length}`);

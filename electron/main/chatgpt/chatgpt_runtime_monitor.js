@@ -756,7 +756,7 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
     // Strict state prioritization
     
     // 1. Crash/Refusal -> ERROR
-    if (exception || dom.policyRefusalDetected) {
+    if (dom.policyRefusalDetected) {
       this.state = "ERROR";
       return;
     }
