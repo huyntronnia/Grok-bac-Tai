@@ -700,26 +700,21 @@ async function waitForPromptSendAcknowledged(
 
     const composerCleared = (dom.composerText || "").trim().length < 5;
     const assistantAdvanced = dom.assistantMessageCount > (beforeCount || 0);
-    const isStreaming = [
-      "STREAMING_TEXT",
-      "STREAMING_IMAGE",
-      "IMAGE_PLACEHOLDER",
-      "NETWORK_IMAGE",
-      "IMAGE_DECODE"
-    ].includes(lastSnap.state);
+    const stateAdvanced = !["WAITING_SEND", "UPLOADING"].includes(lastSnap.state);
 
-    if (composerCleared || assistantAdvanced || isStreaming) {
+    // 2-signal verification: (composerCleared OR assistantAdvanced) AND stateAdvanced
+    if ((composerCleared || assistantAdvanced) && stateAdvanced) {
       await appendAppLog(null, {
         source: "main",
         kind: "ok",
-        text: `Prompt send verified by Monitor (Composer empty: ${composerCleared}, Advanced: ${assistantAdvanced}, Streaming: ${isStreaming})`
+        text: `Prompt send verified by Monitor (Composer empty: ${composerCleared}, Advanced: ${assistantAdvanced}, State advanced to: ${lastSnap.state})`
       }).catch(() => null);
       
       return {
         ok: true,
         composerCleared,
         assistantAdvanced,
-        generating: isStreaming,
+        generating: stateAdvanced,
       };
     }
   }

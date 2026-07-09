@@ -2202,12 +2202,7 @@ function inspectAndClickChatGptSendButtonSafely() {
     );
   };
   const isStrictSendButton = (button) => {
-    if (
-      !visible(button) ||
-      button.disabled ||
-      button.getAttribute("aria-disabled") === "true"
-    )
-      return false;
+    if (!visible(button)) return false;
     if (isStopButton(button) || isRejectedToolButton(button)) return false;
     const label = labelOf(button);
     return (
@@ -2247,7 +2242,7 @@ function inspectAndClickChatGptSendButtonSafely() {
 
   const button =
     document.querySelector(
-      'button[data-testid="send-button"]:not([disabled]), button[data-testid="composer-submit-button"]:not([disabled]), button[aria-label="Send prompt"]:not([disabled]), button[aria-label="Send message"]:not([disabled])',
+      'button[data-testid="send-button"], button[data-testid="composer-submit-button"], button[aria-label="Send prompt"], button[aria-label="Send message"]',
     ) ||
     buttons.filter(isStrictSendButton).sort((a, b) => {
       const ar = a.getBoundingClientRect();
@@ -2261,12 +2256,26 @@ function inspectAndClickChatGptSendButtonSafely() {
       error: "no-send-button-found",
       buttonCount: buttons.length,
     };
-  if (!isStrictSendButton(button))
+
+  const disabled = button.disabled || button.getAttribute("aria-disabled") === "true";
+  const style = window.getComputedStyle(button);
+  const pointerEvents = style.pointerEvents;
+  const opacity = style.opacity;
+  const rect = button.getBoundingClientRect();
+  const rectData = { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+
+  if (disabled || pointerEvents === "none") {
     return {
       ok: false,
-      error: "button-is-not-send-action",
-      label: labelOf(button).slice(0, 240),
+      error: "button-is-disabled-or-non-clickable",
+      status: "disabled",
+      disabled,
+      ariaDisabled: button.getAttribute("aria-disabled") || "",
+      pointerEvents,
+      opacity,
+      rect: rectData,
     };
+  }
 
   button.dispatchEvent(
     new PointerEvent("pointerdown", {
@@ -2286,6 +2295,11 @@ function inspectAndClickChatGptSendButtonSafely() {
       button.getAttribute("data-testid") ||
       button.getAttribute("aria-label") ||
       "submit-button",
+    disabled,
+    ariaDisabled: button.getAttribute("aria-disabled") || "",
+    pointerEvents,
+    opacity,
+    rect: rectData,
   };
 }
 
