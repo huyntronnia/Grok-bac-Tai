@@ -1037,25 +1037,15 @@ function inspectNv2ComposerSubmitStateScript(prompt, beforeCount = 0) {
 }
 
 function countChatGptAssistantRootsScript() {
-  const roleNodes = [
-    ...document.querySelectorAll('[data-message-author-role="assistant"]'),
-  ];
-  if (roleNodes.length)
-    return { count: roleNodes.length, mode: "assistant-role" };
-  const fallbackNodes = [
-    ...document.querySelectorAll(
-      '[data-testid*="conversation-turn"], [data-message-id], article, .message, [class*="response"], [class*="markdown"]',
-    ),
-  ].filter((node) => {
-    if (node.closest?.('[data-message-author-role="user"]')) return false;
-    if (node.querySelector?.('[data-message-author-role="user"]')) return false;
-    const text = (node.innerText || "").trim();
-    return (
-      text.length > 20 ||
-      node.querySelector?.("img, picture source, canvas, a[href], button")
-    );
+  const assistants = Array.from(document.querySelectorAll("[data-message-author-role='assistant'], article")).filter(el => {
+    const r = el.getBoundingClientRect();
+    const txt = (el.innerText || el.textContent || "").trim();
+    if (el.getAttribute?.('data-message-author-role') === 'user' || el.querySelector?.('[data-message-author-role="user"]')) {
+      return false;
+    }
+    return r.width > 50 && r.height > 20 && txt.length > 0;
   });
-  return { count: fallbackNodes.length, mode: "fallback-non-user" };
+  return { count: assistants.length, mode: "unified-assistant-roots" };
 }
 
 /**
@@ -2981,10 +2971,17 @@ function readLatestAssistantScript() {
     ? false
     : stopButton || (thinkingText && !voiceReady);
 
+  const assistants = Array.from(document.querySelectorAll("[data-message-author-role='assistant'], article")).filter(el => {
+    const r = el.getBoundingClientRect();
+    const txt = (el.innerText || el.textContent || "").trim();
+    if (el.getAttribute?.('data-message-author-role') === 'user' || el.querySelector?.('[data-message-author-role="user"]')) {
+      return false;
+    }
+    return r.width > 50 && r.height > 20 && txt.length > 0;
+  });
+
   return {
-    count:
-      document.querySelectorAll('[data-message-author-role="assistant"]')
-        .length || 1,
+    count: assistants.length,
     text,
     textLength: text.length,
     source,
