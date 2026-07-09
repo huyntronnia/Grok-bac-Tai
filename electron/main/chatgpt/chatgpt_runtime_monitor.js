@@ -613,10 +613,13 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
       return;
     }
     
-    if (this.stabilityTimeout) return;
+    const ts = this.metrics.dom.lastMutationTimestamp;
+    if (!ts) return;
     
-    const idlePeriod = Date.now() - this.metrics.dom.lastMutationTimestamp;
+    const idlePeriod = Date.now() - ts;
     const remainingMs = Math.max(100, targetIdleMs - idlePeriod);
+    
+    this.clearStabilityTimer();
     
     this.stabilityTimeout = setTimeout(() => {
       this.stabilityTimeout = null;
