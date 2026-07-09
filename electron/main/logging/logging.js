@@ -290,10 +290,11 @@ function vidoraShouldThrottleLog(key, intervalMs = 12000) {
 
 async function appendAppLog(first, second, third, fourth) {
   let entry = {};
+  const isNumberScene = typeof first === "number" || (typeof first === "string" && /^\d+$/.test(first));
   if (first && typeof first === "object" && second === undefined) {
     entry = first;
   } else if (
-    first === null &&
+    (first === null || isNumberScene) &&
     second &&
     typeof second === "object" &&
     third === undefined

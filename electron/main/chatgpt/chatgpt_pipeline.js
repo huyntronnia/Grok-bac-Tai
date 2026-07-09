@@ -3747,6 +3747,12 @@ async function waitForChatGptHydrationResponse(
     const text = String(snapshot?.text || "").trim();
     const hasNewMessage =
       Number(snapshot?.count || 0) > Number(beforeCount || 0);
+
+    await appendAppLog(sceneId, {
+      source: "main",
+      kind: "running",
+      text: `ChatGPT hydration request ${request}: waiting for response (assistant count: ${snapshot?.count || 0}/${beforeCount}, generating: ${snapshot?.generating || false})`,
+    }).catch(() => null);
     if (hasNewMessage && text.length > 10) {
       if (text === lastText) {
         stableTicks += 1;
