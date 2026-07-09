@@ -92,6 +92,7 @@ const {
   getConversationState,
   waitForCdpLoad,
   evaluateOnCdpPage,
+  getChatGptSendState,
 } = require("./main/chatgpt/chatgpt_core");
 
 const {
@@ -104,7 +105,6 @@ const {
 } = require("./main/chatgpt/chatgpt_upload");
 
 const {
-  getChatGptSendState,
   initChatGptSend,
   focusPromptInputScript,
   setPromptInputValueScript,

@@ -4,6 +4,7 @@ const {
   getConversationState,
   waitForCdpLoad,
   evaluateOnCdpPage,
+  getChatGptSendState,
 } = require("./chatgpt_core");
 const {
   detectLoginScript,
@@ -15,7 +16,6 @@ const {
 } = require("./chatgpt_dom");
 const { verifyAttachmentsReady } = require("./chatgpt_upload");
 const {
-  getChatGptSendState,
   clickSendButtonViaCdp,
 } = require("./chatgpt_send");
 const {
