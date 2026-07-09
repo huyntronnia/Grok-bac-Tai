@@ -105,6 +105,30 @@ async function run() {
     console.log("Network Metrics:");
     console.log(`- Các luồng tải ảnh đang chạy: ${event.metrics.network.activeMediaRequests}`);
     console.log(`- URL ảnh dalle bắt được: ${event.metrics.network.dalleUrlsCaptured.length}`);
+    console.log("-----------------------------------------");
+    console.log("ChatGPT Output Results:");
+    const dom = event.metrics.dom;
+    const imgCount = dom.imageElementCount;
+    const imgDone = dom.imageCompleteCount;
+    const txtLen = dom.latestAssistantTextLength;
+    const txtContent = dom.latestAssistantText || "";
+
+    if (imgCount > 0) {
+      console.log(`-> ĐÃ PHÁT HIỆN ẢNH (Tổng: ${imgCount}, Hoàn thành: ${imgDone})`);
+      if (imgDone > 0) {
+        console.log(`   [BÁO CÁO] Đã nhận được ảnh thành công!`);
+      }
+    } else if (event.metrics.network.dalleUrlsCaptured.length > 0) {
+      console.log(`-> [BÁO CÁO] Đã nhận được ảnh qua link tải network!`);
+    }
+
+    if (txtLen > 0) {
+      console.log(`-> ĐÃ PHÁT HIỆN TEXT: ${txtLen} ký tự.`);
+      console.log("   Nội dung text phản hồi:");
+      console.log("   " + txtContent.replace(/\n/g, "\n   ").slice(0, 500) + (txtLen > 500 ? "..." : ""));
+    } else {
+      console.log("-> Chưa có nội dung phản hồi hoặc chưa quét được text.");
+    }
     console.log("=========================================");
   });
 
