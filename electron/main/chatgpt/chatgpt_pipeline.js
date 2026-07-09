@@ -1,6 +1,10 @@
 "use strict";
 
 const { nativeImage, app } = require("electron");
+
+function isPipelineCancelledError(error) {
+  return error && (error.message === "PIPELINE_CANCELLED" || error.code === "PIPELINE_CANCELLED");
+}
 const fs = require("fs/promises");
 const path = require("path");
 const chatGptRuntimeMonitor = require("./chatgpt_runtime_monitor");
@@ -367,6 +371,29 @@ async function generateImageAndMotionWithChatGPT({
       snapshot.hydration.promptUploadDone = true;
       snapshot.pipelineStage = "NV1_SENT";
       await writeSceneSnapshot(sceneDir, snapshot);
+
+      const isKeyframeMotionPromptOnly = Boolean(
+        options.keyframeMotionPromptOnly ||
+        options.originalOptions?.keyframeMotionPromptOnly
+      );
+
+      if (isKeyframeMotionPromptOnly) {
+        await appendAppLog(sceneId, {
+          source: "main",
+          kind: "running",
+          text: `Scene ${sceneId}: NV1 sent. Sleeping 45 seconds before refresh (Keyframe + Motion Only Mode).`,
+        });
+        await sleep(45000);
+        
+        await appendAppLog(sceneId, {
+          source: "main",
+          kind: "running",
+          text: `Scene ${sceneId}: Refreshing page after 45s sleep.`,
+        });
+        await requestReloadWithReason(page, "keyframe_motion_only_nv1_refresh", sceneId);
+        await waitForCdpLoad(page).catch(() => null);
+        await sleep(4000);
+      }
     }
   }
 
@@ -407,6 +434,7 @@ async function generateMotionPromptWithChatGPT({
   sceneText = "",
   chatContextTitle = "",
   chatGptStability = {},
+  keyframeMotionPromptOnly = false,
 }) {
   const lockKey = `scene:${sceneId}:motion_prompt`;
   const existing = motionPromptSendLocks.get(lockKey);
@@ -439,6 +467,7 @@ async function generateMotionPromptWithChatGPT({
       sceneText,
       chatContextTitle,
       chatGptStability,
+      keyframeMotionPromptOnly,
     },
     { lockKey, attemptId },
   );
@@ -470,6 +499,7 @@ async function generateMotionPromptWithChatGPTOnce(
     sceneText = "",
     chatContextTitle = "",
     chatGptStability = {},
+    keyframeMotionPromptOnly = false,
   },
   lockInfo = {},
 ) {
@@ -645,6 +675,24 @@ async function generateMotionPromptWithChatGPTOnce(
           snapshot.hydration.promptUploadDone = true;
           snapshot.pipelineStage = "NV2_SENT";
           await writeSceneSnapshot(sceneDir, snapshot);
+
+          if (keyframeMotionPromptOnly) {
+            await appendAppLog(sceneId, {
+              source: "main",
+              kind: "running",
+              text: `Scene ${sceneId}: NV2 sent. Sleeping 45 seconds before refresh (Keyframe + Motion Only Mode).`,
+            });
+            await sleep(45000);
+            
+            await appendAppLog(sceneId, {
+              source: "main",
+              kind: "running",
+              text: `Scene ${sceneId}: Refreshing page after 45s sleep.`,
+            });
+            await requestReloadWithReason(page, "keyframe_motion_only_nv2_refresh", sceneId);
+            await waitForCdpLoad(page).catch(() => null);
+            await sleep(4000);
+          }
         }
       }
     }

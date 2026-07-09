@@ -1286,6 +1286,7 @@ async function runScenePipelineLockedInternal(_event, options) {
       sceneId,
       sceneText,
       chatContextTitle: "",
+      keyframeMotionPromptOnly,
     });
     assertPipelineRunActive(runId);
     await fs.writeFile(
