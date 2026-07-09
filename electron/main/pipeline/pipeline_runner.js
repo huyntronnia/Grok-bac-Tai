@@ -41,6 +41,7 @@ const {
   adoptExistingSceneImage,
   decodeImageBufferToPng,
   validateSavedImageFile,
+  clearAllChatGptPipelineLocks,
 } = require("../chatgpt");
 const {
   executeVeoUpAutomation,
@@ -202,6 +203,14 @@ function cancelPipelineRun(runId = "") {
       } catch (_error) {}
     }
   }
+  scenePipelineLocks.clear();
+  chatGptScenePrefetchLocks.clear();
+  clearAllChatGptPipelineLocks();
+  appendAppLog(null, {
+    source: "main",
+    kind: "info",
+    text: "Cleared scene locks\nCleared pipeline locks\nCleared active generation state\nCleared running pipeline cache",
+  }).catch(() => null);
   return targets;
 }
 
@@ -533,6 +542,19 @@ async function runScenePipelineLocked(_event, options) {
   if (!options) options = {};
   await prepareSceneContext(options);
   const runId = String(options.runId || getScopedPipelineRunId() || "").trim();
+
+  if (runId && runId !== globalThis.__vidoraLastRunId) {
+    globalThis.__vidoraLastRunId = runId;
+    setChatGptContextFresh(true);
+    sessionSceneCounter = 0;
+    globalThis.__vidoraDisableSidebarSelection = false;
+    await appendAppLog(null, {
+      source: "main",
+      kind: "running",
+      text: `New pipeline run detected\nContext marked fresh`,
+    }).catch(() => null);
+  }
+
   assertPipelineRunActive(runId);
 
   // Strict Normalization: Unify all possible directory keys immediately at entry gate
@@ -1105,7 +1127,7 @@ async function runScenePipelineLockedInternal(_event, options) {
     }
 
     // Try adopting existing scene image from chat history before starting NV1 requests
-    if (imageProvider?.method !== "api") {
+    if (imageProvider?.method !== "api" && !getChatGptContextFresh()) {
       const page = await getCdpPage("chatgpt", true).catch(() => null);
       if (page) {
         const adoptRes = await adoptExistingSceneImage(page, beforeAssistantCount, sceneId).catch(() => null);
