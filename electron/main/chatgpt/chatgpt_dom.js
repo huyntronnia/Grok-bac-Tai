@@ -1327,6 +1327,70 @@ function readChatGptImageStateScript() {
         Number(style.opacity || 1) === 0)
     );
   };
+
+  const roleAssistantNodes = [
+    ...document.querySelectorAll('[data-message-author-role="assistant"]'),
+  ].filter((node) => (node.innerText || "").trim().length > 20);
+  const fallbackAssistantNodes = [
+    ...document.querySelectorAll(
+      'article, .message, [class*="response"], [class*="markdown"]',
+    ),
+  ].filter((node) => {
+    if (node.closest?.('[data-message-author-role="user"]')) return false;
+    if (node.querySelector?.('[data-message-author-role="user"]')) return false;
+    const text = (node.innerText || "").trim();
+    if (text.length <= 20) return false;
+    if (
+      /^NHIỆM\s*VỤ\s*1\s*:|^NHIỆM\s*VỤ\s*2\s*:|^---\s*SCENE|^Dựa trên ảnh keyframe|Show more|Show less/i.test(
+        text,
+      )
+    )
+      return false;
+    return true;
+  });
+  const assistantNodes = roleAssistantNodes.length
+    ? roleAssistantNodes
+    : fallbackAssistantNodes;
+  const latestAssistantText = assistantNodes.at(-1)?.innerText?.trim() || "";
+
+  const mediaRoots = [
+    ...document.querySelectorAll(
+      '[data-message-author-role="assistant"], article, .message, [class*="response"]',
+    ),
+  ].filter(
+    (node) =>
+      node.querySelector?.("img, picture source, canvas") ||
+      /Generated image/i.test(node.innerText || ""),
+  );
+  const mediaRoot = mediaRoots.at(-1);
+  const urls = [];
+  if (mediaRoot) {
+    const foundUrls = [...mediaRoot.querySelectorAll("img, picture source")]
+      .filter((node) => {
+        const label = `${node.alt || ""} ${node.getAttribute?.("aria-label") || ""} ${node.className || ""}`;
+        if (/avatar|profile|logo|icon|emoji/i.test(label)) return false;
+        if (node.tagName === "IMG") {
+          if (!node.complete || !node.naturalWidth || node.naturalWidth < 120) return false;
+        } else {
+          const rect = node.getBoundingClientRect?.();
+          if (!rect || rect.width < 120 || rect.height < 80) return false;
+        }
+        return true;
+      })
+      .map(
+        (node) =>
+          node.currentSrc ||
+          node.src ||
+          node.getAttribute("srcset") ||
+          node.getAttribute("src") ||
+          "",
+      )
+      .filter((url) => /^https?:|^blob:|^data:image\//i.test(url));
+    urls.push(...foundUrls);
+  }
+
+  const hasVisibleMedia = urls.length > 0;
+
   const buttons = [...document.querySelectorAll('button, [role="button"]')]
     .map((button) => {
       const rect = button.getBoundingClientRect?.();
@@ -1367,16 +1431,17 @@ function readChatGptImageStateScript() {
   const sendReady = Boolean(sendButton && !stopButtonVisible);
   const stoppedActivity =
     /stopped thinking|stopped creating image|image generation stopped|creation stopped|stopped generating/i.test(
-      bodyText,
+      latestAssistantText,
     );
   const streamingIndicator =
     !stoppedActivity &&
     (stopButtonVisible ||
-      [
-        ...document.querySelectorAll(
-          '[aria-busy="true"], [role="progressbar"], [data-testid*="loading"], [data-testid*="spinner"], [class*="result-streaming"]',
-        ),
-      ].some(visible));
+      (!hasVisibleMedia &&
+        [
+          ...document.querySelectorAll(
+            '[aria-busy="true"], [role="progressbar"], [data-testid*="loading"], [data-testid*="spinner"], [class*="result-streaming"]',
+          ),
+        ].some(visible)));
   const composerNodes = [
     ...document.querySelectorAll(
       '#prompt-textarea, textarea, [contenteditable="true"], [role="textbox"], [data-testid="composer"]',
@@ -1391,16 +1456,16 @@ function readChatGptImageStateScript() {
   const thinking =
     !stoppedActivity &&
     /Thinking|Thinking about your request|Đang suy nghĩ|Generating|Creating/i.test(
-      bodyTail,
+      latestAssistantText || bodyTail,
     );
   const stoppedCreatingImage =
     /stopped creating image|image generation stopped|creation stopped|stopped generating/i.test(
-      bodyText,
+      latestAssistantText,
     );
   const preparingImage =
     !stoppedCreatingImage &&
-    /preparing image|creating image|generating image|đang tạo ảnh|đang chuẩn bị ảnh/i.test(
-      bodyText,
+    /preparing image|creating image|generating image|đang tạo ảnh|đang chuẩn bị ảnh|hoàn thiện.*nét cuối|polishing.*touches/i.test(
+      latestAssistantText,
     );
   const voiceReady = /voice|mic|microphone|record|dictate/i.test(buttonText);
   const loggedOut =
@@ -1410,73 +1475,49 @@ function readChatGptImageStateScript() {
     !/ChatGPT can make mistakes|Share|Ask anything/i.test(
       bodyText.slice(-3000),
     );
-  const mediaRoots = [
-    ...document.querySelectorAll(
-      '[data-message-author-role="assistant"], article, .message, [class*="response"]',
-    ),
-  ].filter(
-    (node) =>
-      node.querySelector?.("img, picture source, canvas") ||
-      /Generated image/i.test(node.innerText || ""),
-  );
-  const mediaRoot = mediaRoots.at(-1) || document;
-  const urls = [...mediaRoot.querySelectorAll("img, picture source")]
-    .filter((node) => {
-      const rect = node.getBoundingClientRect?.();
-      if (!rect || rect.width < 180 || rect.height < 120) return false;
-      const label = `${node.alt || ""} ${node.getAttribute?.("aria-label") || ""} ${node.className || ""}`;
-      return !/avatar|profile|logo|icon|emoji/i.test(label);
-    })
-    .map(
-      (node) =>
-        node.currentSrc ||
-        node.src ||
-        node.getAttribute("srcset") ||
-        node.getAttribute("src") ||
-        "",
-    )
-    .filter((url) => /^https?:|^blob:|^data:image\//i.test(url));
 
   const loadingMediaText =
     !stoppedCreatingImage &&
-    /defining scene for image generation|preparing image|creating image|generating image|đang tạo ảnh|đang chuẩn bị ảnh/i.test(
-      bodyText,
+    /defining scene for image generation|preparing image|creating image|generating image|đang tạo ảnh|đang chuẩn bị ảnh|hoàn thiện.*nét cuối|polishing.*touches/i.test(
+      latestAssistantText,
     );
   const renderedImageHint =
     /Generated image|Edit image|Download|Tải xuống|Open image|Image created|Ảnh đã được tạo/i.test(
-      bodyText,
+      latestAssistantText,
     );
-  const visibleImageBoxes = [
-    ...mediaRoot.querySelectorAll("img, canvas, button, div"),
-  ]
-    .map((node) => {
-      const rect = node.getBoundingClientRect?.();
-      const style = window.getComputedStyle?.(node);
-      const text = node.innerText || "";
-      const label = `${node.alt || ""} ${node.getAttribute?.("aria-label") || ""} ${node.className || ""}`;
-      const isMedia =
-        node.tagName === "IMG" ||
-        node.tagName === "CANVAS" ||
-        (/Edit|Generated image/i.test(text) &&
-          node.querySelector?.("button")) ||
-        (style?.backgroundImage &&
-          style.backgroundImage !== "none" &&
-          !style.backgroundImage.includes("gradient"));
-      return rect &&
-        isMedia &&
-        rect.width >= 180 &&
-        rect.height >= 120 &&
-        !/avatar|profile|logo|icon|emoji/i.test(label)
-        ? {
+  const visibleImageBoxes = mediaRoot
+    ? [
+        ...mediaRoot.querySelectorAll("img, canvas, button, div"),
+      ]
+        .map((node) => {
+          const rect = node.getBoundingClientRect?.();
+          const style = window.getComputedStyle?.(node);
+          const text = node.innerText || "";
+          const label = `${node.alt || ""} ${node.getAttribute?.("aria-label") || ""} ${node.className || ""}`;
+          const isMedia =
+            node.tagName === "IMG" ||
+            node.tagName === "CANVAS" ||
+            (/Edit|Generated image/i.test(text) &&
+              node.querySelector?.("button")) ||
+            (style?.backgroundImage &&
+              style.backgroundImage !== "none" &&
+              !style.backgroundImage.includes("gradient"));
+          if (!rect || !isMedia || /avatar|profile|logo|icon|emoji/i.test(label)) return null;
+          if (node.tagName === "IMG") {
+            if (!node.complete || !node.naturalWidth || node.naturalWidth < 120) return null;
+          } else {
+            if (rect.width < 120 || rect.height < 80) return null;
+          }
+          return {
             y: Math.round(rect.y + window.scrollY),
             w: Math.round(rect.width),
             h: Math.round(rect.height),
             tag: node.tagName,
-          }
-        : null;
-    })
-    .filter(Boolean)
-    .sort((a, b) => b.y - a.y);
+          };
+        })
+        .filter(Boolean)
+        .sort((a, b) => b.y - a.y)
+    : [];
   if (
     !urls.length &&
     visibleImageBoxes.length &&
@@ -1485,9 +1526,8 @@ function readChatGptImageStateScript() {
   )
     urls.push(`chatgpt-custom-box-y${visibleImageBoxes[0].y}`);
 
-  const hasVisibleMedia = urls.length > 0;
   const completedVisibleImage =
-    hasVisibleMedia && !preparingImage && !composerBusy && !thinking;
+    hasVisibleMedia && !composerBusy && !thinking;
   const generating =
     stoppedCreatingImage || completedVisibleImage
       ? false
@@ -1498,30 +1538,7 @@ function readChatGptImageStateScript() {
           composerBusy ||
           (preparingImage && !hasVisibleMedia) ||
           (thinking && !hasVisibleMedia);
-  const roleAssistantNodes = [
-    ...document.querySelectorAll('[data-message-author-role="assistant"]'),
-  ].filter((node) => (node.innerText || "").trim().length > 20);
-  const fallbackAssistantNodes = [
-    ...document.querySelectorAll(
-      'article, .message, [class*="response"], [class*="markdown"]',
-    ),
-  ].filter((node) => {
-    if (node.closest?.('[data-message-author-role="user"]')) return false;
-    if (node.querySelector?.('[data-message-author-role="user"]')) return false;
-    const text = (node.innerText || "").trim();
-    if (text.length <= 20) return false;
-    if (
-      /^NHIỆM\s*VỤ\s*1\s*:|^NHIỆM\s*VỤ\s*2\s*:|^---\s*SCENE|^Dựa trên ảnh keyframe|Show more|Show less/i.test(
-        text,
-      )
-    )
-      return false;
-    return true;
-  });
-  const assistantNodes = roleAssistantNodes.length
-    ? roleAssistantNodes
-    : fallbackAssistantNodes;
-  const latestAssistantText = assistantNodes.at(-1)?.innerText?.trim() || "";
+
   return {
     generating,
     stopButton: stopButtonVisible,

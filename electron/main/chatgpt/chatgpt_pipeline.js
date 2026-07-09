@@ -1161,6 +1161,8 @@ async function refreshChatGptPageBeforeImageExtract(client, context = {}) {
   return state;
 }
 
+const CHATGPT_GRAY_PLACEHOLDER_TIMEOUT_MS = 30000;
+
 async function waitForChatGptImageGenerationDoneBeforeExtract(
   client,
   options = {},
@@ -1175,6 +1177,8 @@ async function waitForChatGptImageGenerationDoneBeforeExtract(
   let retryableImageTextTicks = 0;
   let lastRetryableImageText = "";
   let refreshedForStaleOutput = false;
+  let grayPlaceholderStartAt = 0;
+  let hasReloadedForGrayPlaceholder = false;
 
   while (Date.now() - startedAt < 900000) {
     const imageState = await evaluateOnCdpPage(
@@ -1203,6 +1207,48 @@ async function waitForChatGptImageGenerationDoneBeforeExtract(
         activeGeneration,
       };
     }
+
+    const hasUrls = (imageState?.urls || []).length > 0;
+    const isGrayPlaceholder = Boolean(
+      imageState?.preparingImage &&
+      !activeGeneration?.generating &&
+      !hasUrls &&
+      !imageState?.stopButtonVisible
+    );
+
+    if (isGrayPlaceholder) {
+      if (grayPlaceholderStartAt === 0) {
+        grayPlaceholderStartAt = Date.now();
+      } else if (Date.now() - grayPlaceholderStartAt >= CHATGPT_GRAY_PLACEHOLDER_TIMEOUT_MS) {
+        if (!hasReloadedForGrayPlaceholder) {
+          hasReloadedForGrayPlaceholder = true;
+          grayPlaceholderStartAt = 0;
+          await appendAppLog(null, {
+            source: "main",
+            kind: "warning",
+            text: `Scene ${sceneId}: ChatGPT stuck on gray loading placeholder for over ${CHATGPT_GRAY_PLACEHOLDER_TIMEOUT_MS}ms. Triggering safety page reload.`,
+            details: { imageState: sanitizeChatGptImageSnapshot(imageState) },
+          }).catch(() => null);
+          await refreshChatGptPageBeforeImageExtract(client, { sceneId, stage: "gray-placeholder-stale" });
+        } else {
+          await appendAppLog(null, {
+            source: "main",
+            kind: "warning",
+            text: `Scene ${sceneId}: ChatGPT STILL stuck on gray loading placeholder after reload. Triggering full NV1 recovery retry.`,
+            details: { imageState: sanitizeChatGptImageSnapshot(imageState) },
+          }).catch(() => null);
+          return {
+            ok: false,
+            retryReason: "chatgpt-gray-placeholder-stuck-after-reload",
+            imageState: sanitizeChatGptImageSnapshot(imageState),
+            activeGeneration,
+          };
+        }
+      }
+    } else {
+      grayPlaceholderStartAt = 0;
+    }
+
     const latestAssistantText = String(
       imageState?.latestAssistantText || "",
     ).trim();
@@ -1242,7 +1288,7 @@ async function waitForChatGptImageGenerationDoneBeforeExtract(
 
     const busy = Boolean(
       imageState?.generating ||
-      imageState?.preparingImage ||
+      (imageState?.preparingImage && !hasUrls) ||
       imageState?.stopButtonVisible ||
       imageState?.stopVisible ||
       imageState?.composerBusy ||
@@ -1280,6 +1326,14 @@ async function waitForChatGptImageGenerationDoneBeforeExtract(
       }
 
       if (Date.now() - firstIdleAt >= 4000) {
+        if (hasReloadedForGrayPlaceholder) {
+          await appendAppLog(null, {
+            source: "main",
+            kind: "ok",
+            text: `Scene ${sceneId}: Recovered by gray-placeholder reload. No NV1 retry required.`,
+            details: { imageState: sanitizeChatGptImageSnapshot(imageState) },
+          }).catch(() => null);
+        }
         return {
           ok: true,
           idleMs: Date.now() - firstIdleAt,
