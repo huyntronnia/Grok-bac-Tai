@@ -1452,6 +1452,21 @@ function readChatGptImageStateScript() {
     return true;
   });
   const activeMessageNode = allAssistantNodes.at(-1);
+  const rawUserCount = document.querySelectorAll('[data-message-author-role="user"]').length;
+  const rawAssistantCount = document.querySelectorAll('[data-message-author-role="assistant"]').length;
+  let waitingForAssistantMessage = false;
+  if (rawUserCount > 0) {
+    waitingForAssistantMessage = rawAssistantCount < rawUserCount;
+  } else {
+    const allArticles = [...document.querySelectorAll('article, .message')];
+    if (allArticles.length > 0) {
+      const lastArticle = allArticles.at(-1);
+      const isUser = lastArticle.querySelector?.('[data-message-author-role="user"]') ||
+                     lastArticle.className.includes("user") ||
+                     /NHIỆM\s*VỤ/i.test(lastArticle.innerText || "");
+      waitingForAssistantMessage = !!isUser;
+    }
+  }
   const loaderContainers = [];
   if (activeMessageNode) {
     loaderContainers.push(activeMessageNode);
@@ -1543,7 +1558,6 @@ function readChatGptImageStateScript() {
 
   const completedVisibleImage =
     hasVisibleMedia && !composerBusy && !thinking;
-  const waitingForAssistantMessage = !activeMessageNode;
   const generating =
     waitingForAssistantMessage
       ? true
