@@ -1200,7 +1200,8 @@ async function waitForChatGptImageGenerationDoneBeforeExtract(
   const adapter = new ChatGptPipelineAdapter(chatGptRuntimeMonitor);
 
   try {
-    const result = await adapter.waitForImageReady(900000, 4000);
+    // 5-second short timeout to prevent blocking wait loop if monitor stalls
+    const result = await adapter.waitForImageReady(5000, 2000);
     const snapshot = chatGptRuntimeMonitor.captureSnapshot();
     return {
       ok: true,
@@ -1226,11 +1227,12 @@ async function waitForChatGptImageGenerationDoneBeforeExtract(
       };
     }
     
+    // Fallback/Bypass: Return ok: true on timeout so the pipeline can proceed to scan/poll DOM
     return {
-      ok: false,
-      retryReason: "pre-extract-wait-timeout",
-      error: error.message,
+      ok: true,
       imageState: snapshot,
+      bypassed: true,
+      error: error.message,
     };
   }
 }
