@@ -977,7 +977,8 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
 
         // 4. Image Placeholders & Canvas Nodes
         const placeholders = Array.from(document.querySelectorAll("[class*='placeholder'], [class*='loading-image'], .aspect-square div div"));
-        const placeholderVisible = placeholders.some(node => node.getBoundingClientRect().width > 10);
+        const hasLoadingCanvas = Array.from(document.querySelectorAll("canvas")).some(c => c.className.includes("dot") || c.className.includes("loading") || c.closest("[class*='loading']") || c.closest("[class*='preparing']"));
+        const placeholderVisible = placeholders.some(node => node.getBoundingClientRect().width > 10) || hasLoadingCanvas;
         
         const images = latestAssistant ? Array.from(latestAssistant.querySelectorAll("img, canvas")) : [];
         const completeImages = images.filter(img => img.tagName === "CANVAS" || img.complete);

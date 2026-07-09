@@ -1253,6 +1253,7 @@ async function waitForLatestChatGPTGeneratedImage(client, options = {}) {
   let stableTicks = 0;
   let lastDiagnostic = null;
   let lastReadiness = { state: "no_candidate_yet" };
+  let hasWaitedOnce = false;
   await captureAndLogChatGptDiagnostics(client, sceneId, options.beforeCount || 0, "image-extract-init").catch(() => null);
 
   await chatGptRuntimeMonitor.startMonitoring(client);
@@ -1435,22 +1436,31 @@ async function waitForLatestChatGPTGeneratedImage(client, options = {}) {
         text: `Scene ${sceneId}: resent image prompt continuous attempt ${attempt + 1}.`,
         details: { resent },
       });
+      hasWaitedOnce = false;
     };
 
     while (Date.now() - attemptStartedAt < 900000) {
       assertPipelineRunActive(runId);
-      const preExtractWait =
-        await waitForChatGptImageGenerationDoneBeforeExtract(
-          client,
-          options,
-        ).catch((error) => {
-          if (isPipelineCancelledError(error)) throw error;
-          return {
-            ok: false,
-            retryReason: "pre-extract-wait-timeout",
-            error: error.message,
-          };
-        });
+      let preExtractWait = { ok: true };
+      if (!hasWaitedOnce) {
+        preExtractWait =
+          await waitForChatGptImageGenerationDoneBeforeExtract(
+            client,
+            options,
+          ).catch((error) => {
+            if (isPipelineCancelledError(error)) throw error;
+            return {
+              ok: false,
+              retryReason: "pre-extract-wait-timeout",
+              error: error.message,
+            };
+          });
+        if (preExtractWait?.ok) {
+          hasWaitedOnce = true;
+        }
+      } else {
+        await sleep(2000);
+      }
       if (!preExtractWait?.ok) {
         await resendImagePrompt(
           preExtractWait?.retryReason || "pre-extract-wait-failed",
@@ -1641,13 +1651,24 @@ async function waitForLatestChatGPTGeneratedImage(client, options = {}) {
               error: error.message,
             }))
           : null;
-      const chosen = extracted?.ok
+      let chosen = extracted?.ok
         ? extracted
         : networkExtract?.ok
           ? networkExtract
           : screenshotExtract?.ok
             ? screenshotExtract
             : null;
+
+      if (chosen?.ok) {
+        if (isChatGptDotLoadingCanvasAsset(chosen)) {
+          await appendAppLog(sceneId, {
+            source: "main",
+            kind: "running",
+            text: `chatgptImageExtract: extracted candidate is still a dot-loading canvas (${chosen.width}x${chosen.height}, ${chosen.byteLength} bytes). Continuing wait...`,
+          });
+          chosen = null;
+        }
+      }
       const readiness = classifyChatGptImageReadiness({
         chosen,
         extracted,
