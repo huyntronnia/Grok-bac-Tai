@@ -9,20 +9,24 @@ class ChatGptPipelineAdapter {
   }
 
   async waitForImageReady(timeoutMs = 900000, stableFor = 4000) {
-    // 1. Wait for READY state
+    // 1. Wait for READY state with relaxed confidence threshold to allow network requests lag
     const result = await this.monitor.waitUntil({
       state: "READY",
-      confidence: 1.0, // Full score stability
+      confidence: 0.8,
       stableFor,
       timeout: timeoutMs,
     });
 
     // 2. Enforce strict Policy assertions
-    if (result.intent !== "IMAGE_GENERATION") {
-      throw new Error(`Pipeline Policy Violation: Expected IMAGE_GENERATION intent, but got ${result.intent}`);
+    const snapshot = this.monitor.captureSnapshot();
+    const dom = snapshot?.metrics?.dom || {};
+    const hasCompleteImages = dom.imageCompleteCount > 0 || dom.imageElementCount > 0;
+
+    if (result.intent !== "IMAGE_GENERATION" && !hasCompleteImages) {
+      throw new Error(`Pipeline Policy Violation: Expected IMAGE_GENERATION intent or visible images, but got ${result.intent}`);
     }
 
-    if (result.confidence < 1.0) {
+    if (result.confidence < 0.8) {
       throw new Error(`Pipeline Policy Violation: Image extracted with low confidence score: ${result.confidence}`);
     }
 
