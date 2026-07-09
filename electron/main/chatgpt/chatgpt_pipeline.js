@@ -3991,6 +3991,18 @@ async function hydrateFreshChatGptContextAfterRotation(
   );
 
   let snapshot = await readSceneSnapshot(sceneDir);
+  if (getChatGptContextFresh()) {
+    snapshot.hydration = {};
+    snapshot.pipelineStage = "";
+    snapshot.imageValidated = false;
+    await writeSceneSnapshot(sceneDir, snapshot);
+    await appendAppLog(sceneId, {
+      source: "main",
+      kind: "running",
+      text: `Scene ${sceneId}: Resetting scene snapshot hydration state for fresh ChatGPT context.`,
+    }).catch(() => null);
+  }
+
   if (!snapshot.hydration) {
     snapshot.hydration = {};
   }
