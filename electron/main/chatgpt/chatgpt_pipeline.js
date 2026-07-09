@@ -781,14 +781,14 @@ function validateMotionPromptResponse(
     isTextMode &&
     generation === false &&
     streamingIndicator === false &&
-    value.length > 100
+    value.length > 15
   ) {
     return { ok: true };
   }
 
   return {
     ok: false,
-    error: value.length <= 100 ? "too-short" : "still-generating-or-streaming",
+    error: value.length <= 15 ? "too-short" : "still-generating-or-streaming",
   };
 }
 

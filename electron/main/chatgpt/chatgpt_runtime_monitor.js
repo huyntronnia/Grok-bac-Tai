@@ -70,6 +70,7 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
         latestUserMessageHash: "",
         latestAssistantHash: "",
         assistantMessageCount: 0,
+        latestAssistantText: "",
         latestAssistantTextLength: 0,
         textStreamingActive: false,
         dalleActive: false,
@@ -476,6 +477,7 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
           const latestAssistantText = raw.latestAssistantText || "";
           const rawAttachments = raw.attachments || [];
 
+          this.metrics.dom.latestAssistantText = latestAssistantText;
           this.metrics.dom.composerPromptHash = hashText(composerText);
           this.metrics.dom.latestUserMessageHash = hashText(latestUserText);
           this.metrics.dom.latestAssistantHash = hashText(latestAssistantText);
@@ -562,6 +564,7 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
         this.metrics.dom.latestUserMessageHash = hashText(record.payload.latestUserText);
       }
       if (record.payload.latestAssistantText !== undefined) {
+        this.metrics.dom.latestAssistantText = record.payload.latestAssistantText;
         this.metrics.dom.latestAssistantHash = hashText(record.payload.latestAssistantText);
       }
       if (record.payload.loggedOut !== undefined) {
