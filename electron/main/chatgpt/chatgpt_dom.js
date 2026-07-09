@@ -2144,7 +2144,7 @@ function inspectAndClickChatGptSendButton() {
   };
 }
 
-function inspectAndClickChatGptSendButtonSafely() {
+async function inspectAndClickChatGptSendButtonSafely() {
   const norm = (value) =>
     String(value || "")
       .trim()
@@ -2257,25 +2257,24 @@ function inspectAndClickChatGptSendButtonSafely() {
       buttonCount: buttons.length,
     };
 
-  const disabled = button.disabled || button.getAttribute("aria-disabled") === "true";
-  const style = window.getComputedStyle(button);
-  const pointerEvents = style.pointerEvents;
-  const opacity = style.opacity;
-  const rect = button.getBoundingClientRect();
-  const rectData = { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
-
-  if (disabled || pointerEvents === "none") {
+  const extractNodeInfo = (node) => {
+    if (!node) return null;
+    const rect = node.getBoundingClientRect();
+    const style = window.getComputedStyle(node);
     return {
-      ok: false,
-      error: "button-is-disabled-or-non-clickable",
-      status: "disabled",
-      disabled,
-      ariaDisabled: button.getAttribute("aria-disabled") || "",
-      pointerEvents,
-      opacity,
-      rect: rectData,
+      outerHTML: node.outerHTML.slice(0, 300),
+      ariaLabel: node.getAttribute("aria-label") || "",
+      dataTestId: node.getAttribute("data-testid") || "",
+      textContent: (node.textContent || "").trim().slice(0, 100),
+      disabled: node.disabled || node.getAttribute("aria-disabled") === "true",
+      pointerEvents: style.pointerEvents,
+      opacity: style.opacity,
+      rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+      isStop: isStopButton(node),
     };
-  }
+  };
+
+  const beforeClick = extractNodeInfo(button);
 
   button.dispatchEvent(
     new PointerEvent("pointerdown", {
@@ -2288,18 +2287,44 @@ function inspectAndClickChatGptSendButtonSafely() {
   button.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
   button.click();
   button.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+
+  const sleepMs = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  await sleepMs(100);
+  const getActiveButton = () => {
+    const currentButtons = Array.from(root.querySelectorAll("button"));
+    const currentStop = currentButtons.find(b => visible(b) && isStopButton(b));
+    if (currentStop) return { button: currentStop, type: "stop" };
+    const currentSend = document.querySelector(
+      'button[data-testid="send-button"], button[data-testid="composer-submit-button"], button[aria-label="Send prompt"], button[aria-label="Send message"]'
+    ) || currentButtons.filter(isStrictSendButton)[0];
+    return { button: currentSend || button, type: "send" };
+  };
+
+  const active100 = getActiveButton();
+  const immediatelyAfter = extractNodeInfo(active100.button);
+
+  await sleepMs(200);
+  const active300 = getActiveButton();
+  const after300 = extractNodeInfo(active300.button);
+
+  await sleepMs(200);
+  const active500 = getActiveButton();
+  const after500 = extractNodeInfo(active500.button);
+
+  const isStopActiveNow = active100.type === "stop" || active300.type === "stop" || active500.type === "stop";
+
   return {
     ok: true,
     status: "clicked",
-    selector:
-      button.getAttribute("data-testid") ||
-      button.getAttribute("aria-label") ||
-      "submit-button",
-    disabled,
-    ariaDisabled: button.getAttribute("aria-disabled") || "",
-    pointerEvents,
-    opacity,
-    rect: rectData,
+    selector: button.getAttribute("data-testid") || button.getAttribute("aria-label") || "submit-button",
+    isStopActiveNow,
+    timeline: {
+      beforeClick,
+      immediatelyAfter,
+      after300,
+      after500,
+    }
   };
 }
 

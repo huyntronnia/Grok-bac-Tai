@@ -266,17 +266,24 @@ async function runChatGptRobustSendLadder(
   if (clickedResult?.ok) {
     if (
       clickedResult.status === "already-sent-safely" ||
-      clickedResult.isStop
+      clickedResult.isStop ||
+      clickedResult.isStopActiveNow
     ) {
       await appendAppLog(null, {
         source: "main",
         kind: "running",
-        text: `runChatGptRobustSendLadder: detected Stop button (already sent safely); skipping click.`,
+        text: `runChatGptRobustSendLadder: detected Stop button/isStopActiveNow (already sent safely); skipping click.`,
       });
+      const ack = await waitForPromptSendAcknowledged(
+        client,
+        beforeCount || 0,
+        10000,
+      );
       return {
-        ok: true,
+        ok: ack.ok,
         status: "already-sent-safely",
         send: "already-sent-safely",
+        acknowledged: ack,
       };
     }
 
@@ -324,11 +331,11 @@ async function runChatGptRobustSendLadder(
     text: `runChatGptRobustSendLadder (First Click Post-check): Runtime state: ${postClickState}. Composer length: ${composerTextLength}`,
   });
 
-  if (composerTextLength === 0) {
+  if (composerTextLength === 0 || clickedResult?.isStopActiveNow) {
     await appendAppLog(null, {
       source: "main",
       kind: "ok",
-      text: `runChatGptRobustSendLadder: Composer is empty after single click. Prompt sent successfully.`,
+      text: `runChatGptRobustSendLadder: Composer is empty or Stop button appeared. Prompt sent successfully.`,
     });
     const ack = await waitForPromptSendAcknowledged(
       client,
@@ -343,7 +350,7 @@ async function runChatGptRobustSendLadder(
   }
 
   // Fallback / retry click (only if composer still has text)
-  if (composerTextLength > 0) {
+  if (composerTextLength > 0 && !clickedResult?.isStopActiveNow) {
     const preRetrySnap = monitor.captureSnapshot();
     const preRetryState = preRetrySnap.state;
     const preRetryComposerLength = (preRetrySnap.metrics?.dom?.composerText || "").length;
@@ -372,17 +379,24 @@ async function runChatGptRobustSendLadder(
     if (clickedResult?.ok) {
       if (
         clickedResult.status === "already-sent-safely" ||
-        clickedResult.isStop
+        clickedResult.isStop ||
+        clickedResult.isStopActiveNow
       ) {
         await appendAppLog(null, {
           source: "main",
           kind: "running",
           text: `runChatGptRobustSendLadder: retry detected Stop button (already sent safely); skipping click.`,
         });
+        const ack = await waitForPromptSendAcknowledged(
+          client,
+          beforeCount || 0,
+          10000,
+        );
         return {
-          ok: true,
+          ok: ack.ok,
           status: "already-sent-safely",
           send: "already-sent-safely",
+          acknowledged: ack,
         };
       }
 
