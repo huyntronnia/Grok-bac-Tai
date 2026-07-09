@@ -179,10 +179,7 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
     this.health.runtimeBinding = false;
     this.health.networkEnabled = false;
 
-    if (this.stabilityTimeout) {
-      clearTimeout(this.stabilityTimeout);
-      this.stabilityTimeout = null;
-    }
+    this.clearStabilityTimer();
 
     this.logEvent("SYSTEM", "Monitoring stopped");
   }
@@ -592,6 +589,41 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
   }
 
   // --- Core Processing Loop ---
+  clearStabilityTimer() {
+    if (!this.stabilityTimeout) return;
+    clearTimeout(this.stabilityTimeout);
+    this.stabilityTimeout = null;
+  }
+
+  scheduleStateReevaluation(reason, targetIdleMs = 3100) {
+    if (!this.page) return;
+    
+    const STABILIZABLE_STATES = new Set([
+      "STREAMING_TEXT",
+      "STREAMING_IMAGE",
+      "IMAGE_PLACEHOLDER",
+      "NETWORK_IMAGE",
+      "IMAGE_DECODE",
+      "WAITING_ASSISTANT",
+      "IDLE"
+    ]);
+
+    if (!STABILIZABLE_STATES.has(this.state)) {
+      this.clearStabilityTimer();
+      return;
+    }
+    
+    if (this.stabilityTimeout) return;
+    
+    const idlePeriod = Date.now() - this.metrics.dom.lastMutationTimestamp;
+    const remainingMs = Math.max(100, targetIdleMs - idlePeriod);
+    
+    this.stabilityTimeout = setTimeout(() => {
+      this.stabilityTimeout = null;
+      this.triggerStateUpdate(`State re-evaluation: ${reason}`);
+    }, remainingMs);
+  }
+
   triggerStateUpdate(reason) {
     const oldState = this.state;
     const oldIntent = this.intent;
@@ -602,20 +634,7 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
 
     this.manageWatchdogs();
 
-    // Schedule stability settle timer if we are not READY yet, but only if monitoring is active
-    if (this.page && this.state !== "READY" && this.state !== "ERROR") {
-      if (this.stabilityTimeout) {
-        clearTimeout(this.stabilityTimeout);
-      }
-      this.stabilityTimeout = setTimeout(() => {
-        this.triggerStateUpdate("Stability settle timer");
-      }, 3100);
-    } else {
-      if (this.stabilityTimeout) {
-        clearTimeout(this.stabilityTimeout);
-        this.stabilityTimeout = null;
-      }
-    }
+    this.scheduleStateReevaluation("DOM idle");
 
     const stateChanged = oldState !== this.state || oldIntent !== this.intent;
     
