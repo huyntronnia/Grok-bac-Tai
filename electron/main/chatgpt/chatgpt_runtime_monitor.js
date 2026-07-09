@@ -179,6 +179,11 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
     this.health.runtimeBinding = false;
     this.health.networkEnabled = false;
 
+    if (this.stabilityTimeout) {
+      clearTimeout(this.stabilityTimeout);
+      this.stabilityTimeout = null;
+    }
+
     this.logEvent("SYSTEM", "Monitoring stopped");
   }
 
@@ -596,6 +601,21 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
     this.computeConfidence();
 
     this.manageWatchdogs();
+
+    // Schedule stability settle timer if we are not READY yet, but only if monitoring is active
+    if (this.page && this.state !== "READY" && this.state !== "ERROR") {
+      if (this.stabilityTimeout) {
+        clearTimeout(this.stabilityTimeout);
+      }
+      this.stabilityTimeout = setTimeout(() => {
+        this.triggerStateUpdate("Stability settle timer");
+      }, 3100);
+    } else {
+      if (this.stabilityTimeout) {
+        clearTimeout(this.stabilityTimeout);
+        this.stabilityTimeout = null;
+      }
+    }
 
     const stateChanged = oldState !== this.state || oldIntent !== this.intent;
     
