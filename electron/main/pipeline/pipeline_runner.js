@@ -206,6 +206,11 @@ function cancelPipelineRun(runId = "") {
   scenePipelineLocks.clear();
   chatGptScenePrefetchLocks.clear();
   clearAllChatGptPipelineLocks();
+  appendAppLog(null, {
+    source: "main",
+    kind: "info",
+    text: "Cleared scene locks\nCleared pipeline locks\nCleared active generation state\nCleared running pipeline cache",
+  }).catch(() => null);
   return targets;
 }
 
@@ -546,7 +551,7 @@ async function runScenePipelineLocked(_event, options) {
     await appendAppLog(null, {
       source: "main",
       kind: "running",
-      text: `New pipeline run detected (runId: ${runId}). Resetting session state and marking context as fresh.`,
+      text: `New pipeline run detected\nContext marked fresh`,
     }).catch(() => null);
   }
 
@@ -1122,7 +1127,7 @@ async function runScenePipelineLockedInternal(_event, options) {
     }
 
     // Try adopting existing scene image from chat history before starting NV1 requests
-    if (imageProvider?.method !== "api") {
+    if (imageProvider?.method !== "api" && !getChatGptContextFresh()) {
       const page = await getCdpPage("chatgpt", true).catch(() => null);
       if (page) {
         const adoptRes = await adoptExistingSceneImage(page, beforeAssistantCount, sceneId).catch(() => null);

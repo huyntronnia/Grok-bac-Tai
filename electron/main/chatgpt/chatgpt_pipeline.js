@@ -136,6 +136,18 @@ async function generateImageAndMotionWithChatGPT({
   const projectDir = options.originalOptions?.outputFolder || path.dirname(sceneDir);
 
   let snapshot = await readSceneSnapshot(sceneDir);
+
+  if (getChatGptContextFresh()) {
+    snapshot.pipelineStage = "";
+    snapshot.hydration = {};
+    snapshot.imageValidated = false;
+    await writeSceneSnapshot(sceneDir, snapshot);
+    await appendAppLog(sceneId, {
+      source: "main",
+      kind: "running",
+      text: `Scene ${sceneId}: Fresh ChatGPT context detected. Cleared scene generation state before sending.`,
+    }).catch(() => null);
+  }
   
   if (snapshot.imageValidated || (await pathExists(imagePath))) {
     snapshot.pipelineStage = "IMAGE_EXTRACTED";
@@ -223,7 +235,7 @@ async function generateImageAndMotionWithChatGPT({
   
   await checkProactiveMemoryGuard(sceneId, pageState);
 
-  const isDraftMatches = verifyDraftOwnership(snapshot, pageState) && pageState.composerReady;
+  const isDraftMatches = !getChatGptContextFresh() && verifyDraftOwnership(snapshot, pageState) && pageState.composerReady;
   
   if (isDraftMatches) {
     await appendAppLog(sceneId, {
@@ -238,7 +250,9 @@ async function generateImageAndMotionWithChatGPT({
     snapshot.pipelineStage = "NV1_SENT";
     await writeSceneSnapshot(sceneDir, snapshot);
   } else {
-    const adoptResult = await adoptExistingSceneImage(page, Number(options.beforeAssistantCount || 0), sceneId).catch(() => null);
+    const adoptResult = !getChatGptContextFresh()
+      ? await adoptExistingSceneImage(page, Number(options.beforeAssistantCount || 0), sceneId).catch(() => null)
+      : null;
     if (adoptResult?.ok && adoptResult.base64) {
       const sourceBuffer = Buffer.from(adoptResult.base64, "base64");
       const decoded = decodeImageBufferToPng(sourceBuffer, adoptResult.contentType);
