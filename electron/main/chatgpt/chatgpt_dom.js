@@ -605,6 +605,9 @@ function detectChatGptResponseChoiceUiScript() {
   };
 }
 
+/**
+ * @deprecated Use chatgpt_runtime_monitor instead.
+ */
 function detectChatGptActiveGenerationScript() {
   const bodyTail = String(document.body?.innerText || "").slice(-5000);
   const stoppedText =
@@ -675,6 +678,9 @@ function detectChatGptActiveGenerationScript() {
   };
 }
 
+/**
+ * @deprecated Use chatgpt_runtime_monitor instead.
+ */
 function detectChatGptActiveGenerationScriptStrict() {
   const bodyTail = String(document.body?.innerText || "").slice(-5000);
   const stoppedText =
@@ -1052,6 +1058,9 @@ function countChatGptAssistantRootsScript() {
   return { count: fallbackNodes.length, mode: "fallback-non-user" };
 }
 
+/**
+ * @deprecated Use chatgpt_runtime_monitor instead.
+ */
 function getConversationStateScript() {
   const visible = (node) => {
     const rect = node.getBoundingClientRect?.();
@@ -1313,6 +1322,9 @@ function clickChatGptStopGeneratingScript() {
   };
 }
 
+/**
+ * @deprecated Use chatgpt_runtime_monitor instead.
+ */
 function readChatGptImageStateScript() {
   const bodyText = document.body?.innerText || "";
   const bodyTail = bodyText.slice(-4000);
@@ -2587,6 +2599,9 @@ function prepareChatGptCreateImageScript() {
   };
 }
 
+/**
+ * @deprecated Use chatgpt_runtime_monitor instead.
+ */
 function readAssistantMessageSnapshotScript() {
   const visible = (node) => {
     const rect = node.getBoundingClientRect?.();
@@ -2764,6 +2779,9 @@ function readAssistantMessageSnapshotScript() {
   };
 }
 
+/**
+ * @deprecated Use chatgpt_runtime_monitor instead.
+ */
 function readLatestAssistantScript() {
   const bodyText = document.body?.innerText || "";
   const bodyTail = bodyText.slice(-4000);

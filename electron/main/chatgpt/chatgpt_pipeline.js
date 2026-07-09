@@ -3,6 +3,8 @@
 const { nativeImage, app } = require("electron");
 const fs = require("fs/promises");
 const path = require("path");
+const chatGptRuntimeMonitor = require("./chatgpt_runtime_monitor");
+const ChatGptPipelineAdapter = require("./chatgpt_pipeline_adapter");
 const { appendAppLog, vidoraCompactLogDetails, maskRouterText } = require("../logging");
 const { pathExists, sanitizeFileName } = require("../utils");
 const { logMemoryMilestone } = require("../memory");
@@ -1192,220 +1194,45 @@ async function waitForChatGptImageGenerationDoneBeforeExtract(
     (typeof context !== "undefined" && context?.sceneId) ||
     "";
   const runId = String(options.runId || options.originalOptions?.runId || "").trim();
-  const startedAt = Date.now();
-  let lastBusyLogAt = 0;
-  let firstIdleAt = 0;
-  let retryableImageTextTicks = 0;
-  let lastRetryableImageText = "";
-  let refreshedForStaleOutput = false;
-  let grayPlaceholderStartAt = 0;
-  let hasReloadedForGrayPlaceholder = false;
 
-  while (Date.now() - startedAt < 900000) {
-    assertPipelineRunActive(runId);
-    const imageState = await evaluateOnCdpPage(
-      client,
-      `(${readChatGptImageStateScript.toString()})()`,
-    ).catch((error) => {
-      if (isPipelineCancelledError(error)) throw error;
-      return { ok: false, generating: true, error: error.message };
-    });
+  const ChatGptPipelineAdapter = require("./chatgpt_pipeline_adapter");
+  const chatGptRuntimeMonitor = require("./chatgpt_runtime_monitor");
+  const adapter = new ChatGptPipelineAdapter(chatGptRuntimeMonitor);
 
-    assertPipelineRunActive(runId);
-    const activeGeneration = await evaluateOnCdpPage(
-      client,
-      `(${detectChatGptActiveGenerationScriptStrict.toString()})()`,
-    ).catch((error) => {
-      if (isPipelineCancelledError(error)) throw error;
-      return { ok: false, generating: true, error: error.message };
-    });
-    if (imageState?.stoppedCreatingImage) {
-      await appendAppLog(null, {
-        source: "main",
-        kind: "warning",
-        text: `Scene ${sceneId}: ChatGPT stopped creating image; retrying NV1 instead of waiting forever.`,
-        details: {
-          imageState: sanitizeChatGptImageSnapshot(imageState),
-          activeGeneration,
-        },
-      }).catch(() => null);
+  try {
+    const result = await adapter.waitForImageReady(900000, 4000);
+    const snapshot = chatGptRuntimeMonitor.captureSnapshot();
+    return {
+      ok: true,
+      imageState: snapshot,
+    };
+  } catch (error) {
+    if (isPipelineCancelledError(error)) throw error;
+    
+    const snapshot = chatGptRuntimeMonitor.captureSnapshot();
+    
+    if (snapshot.metrics.dom.stoppedTextDetected) {
       return {
         ok: false,
         retryReason: "chatgpt-stopped-creating-image",
-        imageState: sanitizeChatGptImageSnapshot(imageState),
-        activeGeneration,
+        imageState: snapshot,
       };
     }
-
-    const hasUrls = (imageState?.urls || []).length > 0;
-    const isGrayPlaceholder = Boolean(
-      imageState?.preparingImage &&
-      !activeGeneration?.generating &&
-      !hasUrls &&
-      !imageState?.stopButtonVisible
-    );
-
-    if (isGrayPlaceholder) {
-      if (grayPlaceholderStartAt === 0) {
-        grayPlaceholderStartAt = Date.now();
-      } else if (Date.now() - grayPlaceholderStartAt >= CHATGPT_GRAY_PLACEHOLDER_TIMEOUT_MS) {
-        if (!hasReloadedForGrayPlaceholder) {
-          hasReloadedForGrayPlaceholder = true;
-          grayPlaceholderStartAt = 0;
-          await appendAppLog(null, {
-            source: "main",
-            kind: "warning",
-            text: `Scene ${sceneId}: ChatGPT stuck on gray loading placeholder for over ${CHATGPT_GRAY_PLACEHOLDER_TIMEOUT_MS}ms. Triggering safety page reload.`,
-            details: { imageState: sanitizeChatGptImageSnapshot(imageState) },
-          }).catch(() => null);
-          await refreshChatGptPageBeforeImageExtract(client, { sceneId, stage: "gray-placeholder-stale" });
-        } else {
-          await appendAppLog(null, {
-            source: "main",
-            kind: "warning",
-            text: `Scene ${sceneId}: ChatGPT STILL stuck on gray loading placeholder after reload. Triggering full NV1 recovery retry.`,
-            details: { imageState: sanitizeChatGptImageSnapshot(imageState) },
-          }).catch(() => null);
-          return {
-            ok: false,
-            retryReason: "chatgpt-gray-placeholder-stuck-after-reload",
-            imageState: sanitizeChatGptImageSnapshot(imageState),
-            activeGeneration,
-          };
-        }
-      }
-    } else {
-      grayPlaceholderStartAt = 0;
+    if (snapshot.metrics.dom.policyRefusalDetected) {
+      return {
+        ok: false,
+        retryReason: "chatgpt-policy-refusal",
+        imageState: snapshot,
+      };
     }
-
-    const latestAssistantText = String(
-      imageState?.latestAssistantText || "",
-    ).trim();
-    const normalizedRetryText = normalizeChatGptRetryText(latestAssistantText);
-    if (
-      latestAssistantText &&
-      isRetryableChatGptToolErrorText(latestAssistantText, "image") &&
-      !(imageState?.urls || []).length
-    ) {
-      if (normalizedRetryText && normalizedRetryText === lastRetryableImageText)
-        retryableImageTextTicks += 1;
-      else {
-        lastRetryableImageText = normalizedRetryText;
-        retryableImageTextTicks = 1;
-      }
-      await appendAppLog(null, {
-        source: "main",
-        kind: "running",
-        text: `Scene ${sceneId}: ChatGPT returned retryable image tool text; tick ${retryableImageTextTicks}/2 before NV1 retry.`,
-        details: {
-          reason: "chatgpt-image-tool-error-text-before-extract",
-          latestAssistantText: latestAssistantText.slice(0, 600),
-        },
-      }).catch(() => null);
-      if (retryableImageTextTicks >= 2) {
-        return {
-          ok: false,
-          retryReason: "chatgpt-image-tool-error-text-before-extract",
-          imageState: sanitizeChatGptImageSnapshot(imageState),
-          activeGeneration,
-        };
-      }
-    } else {
-      lastRetryableImageText = "";
-      retryableImageTextTicks = 0;
-    }
-
-    const busy = Boolean(
-      imageState?.generating ||
-      (imageState?.preparingImage && !hasUrls) ||
-      imageState?.stopButtonVisible ||
-      imageState?.stopVisible ||
-      imageState?.composerBusy ||
-      imageState?.streamingIndicator,
-    );
-
-    if (!busy) {
-      if (!firstIdleAt) {
-        firstIdleAt = Date.now();
-        // HOOK_INPUT_GATE_BEFORE_FINAL_SETTLE_REAL
-        await vidoraChatGptInputGate(
-          typeof client !== "undefined"
-            ? client
-            : typeof page !== "undefined"
-              ? page
-              : null,
-          {
-            sceneId:
-              (typeof options !== "undefined" && options?.sceneId) ||
-              (typeof context !== "undefined" && context?.sceneId) ||
-              "",
-            stage: "before-final-image-settle",
-          },
-        );
-
-        await appendAppLog(null, {
-          source: "main",
-          kind: "running",
-          text: `Scene ${(typeof options !== "undefined" && options?.sceneId) || (typeof context !== "undefined" && context?.sceneId) || ""}: ChatGPT stop button gone; waiting 4s for final image to settle before extract.`,
-          details: {
-            imageState: sanitizeChatGptImageSnapshot(imageState),
-            activeGeneration,
-          },
-        }).catch(() => null);
-      }
-
-      if (Date.now() - firstIdleAt >= 4000) {
-        if (hasReloadedForGrayPlaceholder) {
-          await appendAppLog(null, {
-            source: "main",
-            kind: "ok",
-            text: `Scene ${sceneId}: Recovered by gray-placeholder reload. No NV1 retry required.`,
-            details: { imageState: sanitizeChatGptImageSnapshot(imageState) },
-          }).catch(() => null);
-        }
-        return {
-          ok: true,
-          idleMs: Date.now() - firstIdleAt,
-          waitedMs: Date.now() - startedAt,
-          imageState: sanitizeChatGptImageSnapshot(imageState),
-          activeGeneration,
-        };
-      }
-    } else {
-      firstIdleAt = 0;
-      if (!refreshedForStaleOutput && Date.now() - startedAt >= 480000) {
-        refreshedForStaleOutput = true;
-        await refreshChatGptPageBeforeImageExtract(client, {
-          sceneId,
-          stage: "pre-extract-stale-refresh",
-          waitedMs: Date.now() - startedAt,
-          imageState: sanitizeChatGptImageSnapshot(imageState),
-          activeGeneration,
-        });
-        firstIdleAt = 0;
-        lastBusyLogAt = 0;
-        continue;
-      }
-      if (Date.now() - lastBusyLogAt > 10000) {
-        lastBusyLogAt = Date.now();
-        await appendAppLog(null, {
-          source: "main",
-          kind: "running",
-          text: `Scene ${sceneId}: ChatGPT còn dấu hiệu đang tạo ảnh; chưa extract keyframe.`,
-          details: {
-            imageState: sanitizeChatGptImageSnapshot(imageState),
-            activeGeneration,
-          },
-        }).catch(() => null);
-      }
-    }
-
-    await sleep(1500);
+    
+    return {
+      ok: false,
+      retryReason: "pre-extract-wait-timeout",
+      error: error.message,
+      imageState: snapshot,
+    };
   }
-
-  throw new Error(
-    `Scene ${sceneId}: Hết thời gian chờ ChatGPT hoàn tất ảnh trước khi extract.`,
-  );
 }
 
 async function waitForLatestChatGPTGeneratedImage(client, options = {}) {
@@ -1428,13 +1255,16 @@ async function waitForLatestChatGPTGeneratedImage(client, options = {}) {
   let lastReadiness = { state: "no_candidate_yet" };
   await captureAndLogChatGptDiagnostics(client, sceneId, options.beforeCount || 0, "image-extract-init").catch(() => null);
 
-  await appendAppLog(null, {
-    source: "main",
-    kind: "running",
-    text: `chatgptImageExtract: waiting for latest assistant image for scene ${sceneId}`,
-    details: { minAssistantRootIndex, existingUrlCount: known.size },
-  });
-  for (let attempt = 1; ; attempt += 1) {
+  await chatGptRuntimeMonitor.startMonitoring(client);
+
+  try {
+    await appendAppLog(null, {
+      source: "main",
+      kind: "running",
+      text: `chatgptImageExtract: waiting for latest assistant image for scene ${sceneId}`,
+      details: { minAssistantRootIndex, existingUrlCount: known.size },
+    });
+    for (let attempt = 1; ; attempt += 1) {
     assertPipelineRunActive(runId);
     const attemptStartedAt = Date.now();
     let sawGenerating = false;
@@ -1702,13 +1532,15 @@ async function waitForLatestChatGPTGeneratedImage(client, options = {}) {
       if (extracted?.diagnostics) lastDiagnostic = extracted.diagnostics;
 
       assertPipelineRunActive(runId);
-      const snapshot = await evaluateOnCdpPage(
-        client,
-        `(${readChatGptImageStateScript.toString()})()`,
-      ).catch((error) => {
-        if (isPipelineCancelledError(error)) throw error;
-        throw error;
-      });
+      const monitorSnap = chatGptRuntimeMonitor.captureSnapshot();
+      const snapshot = {
+        assistantCount: monitorSnap.metrics.dom.assistantMessageCount,
+        preparingImage: monitorSnap.state === "IMAGE_PLACEHOLDER" || monitorSnap.state === "NETWORK_IMAGE",
+        voiceReady: monitorSnap.metrics.dom.composerReady,
+        latestAssistantText: monitorSnap.metrics.dom.latestAssistantText,
+        loggedOut: monitorSnap.metrics.dom.loggedOut,
+        urls: monitorSnap.metrics.network.dalleUrlsCaptured.map(u => u.url),
+      };
       lastSnapshot = snapshot;
 
       // false-generating-empty-chat-break
@@ -2118,6 +1950,9 @@ async function waitForLatestChatGPTGeneratedImage(client, options = {}) {
   throw new Error(
     "Timed out waiting for a complete ChatGPT generated image asset. Screenshot crop was not saved as keyframe.",
   );
+  } finally {
+    await chatGptRuntimeMonitor.stopMonitoring();
+  }
 }
 
 async function extractLatestChatGPTGeneratedImageBytes(client, options = {}) {
@@ -3368,6 +3203,7 @@ async function waitForChatGptResponse(page, before, options = {}) {
     chatGptStability = {},
     sceneDir,
   } = options;
+  const runId = String(options.runId || options.originalOptions?.runId || "").trim();
 
   const startedAt = Date.now();
   let latest = '';
@@ -3394,6 +3230,10 @@ async function waitForChatGptResponse(page, before, options = {}) {
       kind: 'running',
       text: `Scene ${sceneId}: NV2 bị kẹt (${reason}), retry ${recoveredOnce}/3: F5 → Stop → F5 → upload lại ảnh → gửi lại NV2.`
     });
+    
+    // Stop monitoring before reload
+    await chatGptRuntimeMonitor.stopMonitoring();
+    
     await page.Page.reload({ ignoreCache: true }).catch(() => null);
     await waitForCdpLoad(page).catch(() => null);
     await sleep(1800);
@@ -3421,6 +3261,10 @@ async function waitForChatGptResponse(page, before, options = {}) {
     await page.Page.reload({ ignoreCache: true }).catch(() => null);
     await waitForCdpLoad(page).catch(() => null);
     await sleep(2200);
+    
+    // Restart monitoring
+    await chatGptRuntimeMonitor.startMonitoring(page);
+
     const imagePath = sceneDir ? path.join(sceneDir, `scene_${String(sceneId).padStart(3, '0')}_keyframe.png`) : '';
     const uploadAgain = imagePath ? await uploadFileViaCdp(page, imagePath, 'chatgpt').catch((error) => ({ ok: false, error: error.message })) : { ok: false };
 
@@ -3447,247 +3291,105 @@ async function waitForChatGptResponse(page, before, options = {}) {
     return true;
   };
 
-  const NV2_STALLED_NO_PROGRESS_TIMEOUT_MS = 45000;
-  const NV2_ACTIVE_POLL_INTERVAL_MS = 3500;
-  const NV2_FORCE_VALIDATE_NO_PROGRESS_MS = 15000;
+  const adapter = new ChatGptPipelineAdapter(chatGptRuntimeMonitor);
+  await chatGptRuntimeMonitor.startMonitoring(page);
 
-  let lastEffectiveTextLength = 0;
-  let lastProgressAt = Date.now();
-  let peakAssistantText = '';
-  let peakAssistantTextLength = 0;
-  let previousIsStillGenerating = false;
+  try {
+    const NV2_STALLED_NO_PROGRESS_TIMEOUT_MS = 45000;
 
-  while (true) {
-    await sleep(NV2_ACTIVE_POLL_INTERVAL_MS);
-    const state = await evaluateOnCdpPage(page, `(${readLatestAssistantScript.toString()})()`).catch(() => null);
-    lastState = state;
+    while (true) {
+      assertPipelineRunActive(runId);
+      let waitError = null;
+      let resolvedState = null;
 
-    const currentText = state?.text ? state.text.trim() : '';
-    const isStillGenerating = Boolean(
-      state?.generating === true ||
-      state?.generation === true ||
-      state?.streamingIndicator === true ||
-      state?.stopButton === true
-    );
-
-    if (currentText.length > peakAssistantTextLength) {
-      peakAssistantText = currentText;
-      peakAssistantTextLength = currentText.length;
-    }
-
-    const effectiveText = currentText.length > 0 ? currentText : peakAssistantText;
-    const effectiveTextLength = effectiveText.length;
-
-    if (effectiveTextLength > lastEffectiveTextLength) {
-      lastEffectiveTextLength = effectiveTextLength;
-      lastProgressAt = Date.now();
-    }
-
-    const noProgressForMs = Date.now() - lastProgressAt;
-    const finishedNow = (previousIsStillGenerating === true && isStillGenerating === false);
-    previousIsStillGenerating = isStillGenerating;
-
-    const MIN_MOTION_PROMPT_TEXT_LENGTH = 100;
-    const shouldForceValidateBecauseTextStalled =
-      isStillGenerating === true &&
-      effectiveTextLength > MIN_MOTION_PROMPT_TEXT_LENGTH &&
-      noProgressForMs >= NV2_FORCE_VALIDATE_NO_PROGRESS_MS;
-
-    await appendAppLog(null, {
-      source: 'main',
-      kind: 'running',
-      text: `[NV2] Polling: textLength=${currentText.length}, peakLength=${peakAssistantTextLength}, effectiveLength=${effectiveTextLength}, noProgressForMs=${noProgressForMs}ms, isStillGenerating=${isStillGenerating}, finishedNow=${finishedNow}, forceValidate=${shouldForceValidateBecauseTextStalled}, source=${state?.source || 'unknown'}`,
-      details: {
-        currentTextLength: currentText.length,
-        peakAssistantTextLength,
-        effectiveTextLength,
-        noProgressForMs,
-        isStillGenerating,
-        finishedNow,
-        shouldForceValidateBecauseTextStalled,
-        generating: state?.generating,
-        generation: state?.generation,
-        streamingIndicator: state?.streamingIndicator,
-        stopButton: state?.stopButton,
-        source: state?.source
+      try {
+        resolvedState = await adapter.waitForResponseReady(NV2_STALLED_NO_PROGRESS_TIMEOUT_MS, 3000);
+      } catch (error) {
+        if (isPipelineCancelledError(error)) throw error;
+        waitError = error;
       }
-    }).catch(() => null);
 
-    if (effectiveText) {
-      if (isChatGptPolicyRefusalText(effectiveText)) {
-        await notifyChatGptPolicyRefusal(sceneId, 'NV2/motion-prompt', effectiveText);
+      const currentText = (chatGptRuntimeMonitor.metrics.dom.latestAssistantText || "").trim();
+      const currentTextLength = currentText.length;
+
+      await appendAppLog(null, {
+        source: 'main',
+        kind: 'running',
+        text: `[NV2] Polling via Monitor: textLength=${currentTextLength}, state=${chatGptRuntimeMonitor.state}, intent=${chatGptRuntimeMonitor.intent}`,
+        details: {
+          currentTextLength,
+          state: chatGptRuntimeMonitor.state,
+          intent: chatGptRuntimeMonitor.intent,
+          confidence: chatGptRuntimeMonitor.confidence,
+          waitError: waitError ? waitError.message : null
+        }
+      }).catch(() => null);
+
+      if (currentText) {
+        if (isChatGptPolicyRefusalText(currentText)) {
+          await notifyChatGptPolicyRefusal(sceneId, 'NV2/motion-prompt', currentText);
+        }
       }
-    }
 
-    const shouldValidateNow =
-      (finishedNow === true && effectiveTextLength > MIN_MOTION_PROMPT_TEXT_LENGTH) ||
-      shouldForceValidateBecauseTextStalled;
+      if (resolvedState && !waitError) {
+        const validation = validateMotionPromptResponse(currentText, { beforeText: before?.text || '', instruction, taskPrompt: '', state: resolvedState });
+        if (validation.ok) {
+          latest = currentText;
+          break;
+        } else {
+          waitError = new Error(validation.error || "invalid-response");
+        }
+      }
 
-    if (shouldValidateNow) {
-      if (shouldForceValidateBecauseTextStalled) {
-        await appendAppLog(null, {
-          source: 'main',
-          kind: 'warning',
-          text: `Scene ${sceneId}: [NV2] Text progress stalled for 15s with valid content. Executing force-validation bypass.`,
-          details: {
-            effectiveTextLength,
-            noProgressForMs,
-            isStillGenerating
+      if (!currentText) {
+        if (waitError) {
+          if (recoveredOnce >= 3) {
+            throw new Error(`Timeout waiting for NV2 response after multiple recoveries: ${waitError.message}`);
           }
-        }).catch(() => null);
+          const mockState = { generating: false, text: "", count: chatGptRuntimeMonitor.metrics.dom.assistantMessageCount };
+          if (await retryMotionPrompt('no-assistant-after-send', mockState)) {
+            continue;
+          }
+        }
+        await sleep(1500);
+        continue;
       }
 
-      const validation = validateMotionPromptResponse(effectiveText, { beforeText: before?.text || '', instruction, taskPrompt: '', state });
-      if (validation.ok) {
-        latest = effectiveText;
-        break;
+      latest = currentText;
+      const freshAssistant = chatGptRuntimeMonitor.metrics.dom.assistantMessageCount > (before?.count || 0) || latest !== before?.text;
+      const quality = validateMotionPromptResponse(latest, { beforeText: before?.text || '', instruction, taskPrompt: '', state: resolvedState });
+      
+      const retryableBadMotionText = freshAssistant && !quality.ok && isRetryableChatGptToolErrorText(latest, 'motion');
+      const normalizedBadMotionText = normalizeChatGptRetryText(latest);
+      if (freshAssistant && !quality.ok && (retryableBadMotionText || quality.error === 'too-short')) {
+        if (normalizedBadMotionText && normalizedBadMotionText === lastBadMotionText) {
+          badMotionTextTicks += 1;
+        } else {
+          lastBadMotionText = normalizedBadMotionText;
+          badMotionTextTicks = 1;
+        }
+      } else if (quality.ok) {
+        lastBadMotionText = '';
+        badMotionTextTicks = 0;
       }
-    }
 
-    if (!effectiveText) {
-      if (noProgressForMs >= NV2_STALLED_NO_PROGRESS_TIMEOUT_MS && !isStillGenerating) {
-        if (await retryMotionPrompt('no-assistant-after-send', state)) {
-          lastEffectiveTextLength = 0;
-          lastProgressAt = Date.now();
-          peakAssistantText = '';
-          peakAssistantTextLength = 0;
-          lastBadMotionText = '';
-          badMotionTextTicks = 0;
-          previousIsStillGenerating = false;
+      if (waitError) {
+        if (recoveredOnce >= 3) {
+          throw new Error(`Timeout waiting for NV2 response: ${waitError.message}`);
+        }
+        const mockState = { generating: false, text: latest, count: chatGptRuntimeMonitor.metrics.dom.assistantMessageCount };
+        if (await retryMotionPrompt(retryableBadMotionText ? 'retryable-bad-motion-text' : (quality.error || 'bad-response-idle'), mockState)) {
           continue;
         }
       }
-      continue;
+
+      await sleep(1500);
     }
 
-    latest = effectiveText;
-    const freshAssistant = state.count > (before?.count || 0) || latest !== before?.text;
-    const quality = validateMotionPromptResponse(latest, { beforeText: before?.text || '', instruction, taskPrompt: '', state });
-    const composerIdle = !isStillGenerating;
-    const composerDone = composerIdle && quality.ok;
-
-    if (freshAssistant && composerDone && quality.ok) break;
-
-    const retryableBadMotionText = freshAssistant && !quality.ok && isRetryableChatGptToolErrorText(latest, 'motion');
-    const normalizedBadMotionText = normalizeChatGptRetryText(latest);
-    if (freshAssistant && !quality.ok && (retryableBadMotionText || quality.error === 'too-short')) {
-      if (normalizedBadMotionText && normalizedBadMotionText === lastBadMotionText) {
-        badMotionTextTicks += 1;
-      } else {
-        lastBadMotionText = normalizedBadMotionText;
-        badMotionTextTicks = 1;
-      }
-    } else if (quality.ok) {
-      lastBadMotionText = '';
-      badMotionTextTicks = 0;
-    }
-
-    if (noProgressForMs >= NV2_STALLED_NO_PROGRESS_TIMEOUT_MS && !isStillGenerating) {
-      if (await retryMotionPrompt('no-progress-during-generation', state)) {
-        lastEffectiveTextLength = 0;
-        lastProgressAt = Date.now();
-        peakAssistantText = '';
-        peakAssistantTextLength = 0;
-        lastBadMotionText = '';
-        badMotionTextTicks = 0;
-        previousIsStillGenerating = false;
-        continue;
-      }
-    }
-
-    if (freshAssistant && !quality.ok && (composerIdle || retryableBadMotionText || badMotionTextTicks >= 3)) {
-      if (await retryMotionPrompt(retryableBadMotionText ? 'retryable-bad-motion-text' : (quality.error || 'bad-response-idle'), state)) {
-        lastEffectiveTextLength = 0;
-        lastProgressAt = Date.now();
-        peakAssistantText = '';
-        peakAssistantTextLength = 0;
-        lastBadMotionText = '';
-        badMotionTextTicks = 0;
-        previousIsStillGenerating = false;
-        continue;
-      }
-    }
-
-    if (composerIdle && noProgressForMs >= NV2_STALLED_NO_PROGRESS_TIMEOUT_MS) {
-      if (await retryMotionPrompt('stuck-after-user-message', state)) {
-        lastEffectiveTextLength = 0;
-        lastProgressAt = Date.now();
-        peakAssistantText = '';
-        peakAssistantTextLength = 0;
-        lastBadMotionText = '';
-        badMotionTextTicks = 0;
-        previousIsStillGenerating = false;
-        continue;
-      }
-    }
-
-    {
-      await vidoraChatGptInputGate(page, {
-        sceneId,
-        stage: 'before-nv2-wait',
-      });
-
-      {
-        let nv2InputState = await vidoraReadChatGptComposerStateReal(page, {
-          sceneId,
-          stage: 'nv2-force-send-before-wait-check',
-        }).catch((error) => ({ ok: false, error: error.message }));
-
-        await appendAppLog(null, {
-          source: 'main',
-          kind: 'running',
-          text: 'NV2 SEND GATE: kiểm tra input trước khi chờ ChatGPT trả motion prompt.',
-          details: { nv2InputState },
-        }).catch(() => null);
-
-        if (nv2InputState?.ok && nv2InputState.composerHasText) {
-          await appendAppLog(null, {
-            source: 'main',
-            kind: 'error',
-            text: 'NV2 SEND GATE: input còn prompt NV2 => chưa gửi thật, ép bấm nút gửi.',
-            details: {
-              textLength: nv2InputState.composerTextLength,
-              textHead: nv2InputState.composerTextHead,
-              sendButton: nv2InputState.sendButton,
-              sendCandidates: nv2InputState.sendCandidates,
-            },
-          }).catch(() => null);
-
-          for (let attempt = 1; attempt <= 5; attempt++) {
-            const click = await vidoraClickChatGptRealSendButton(page, nv2InputState)
-              .catch((error) => ({ ok: false, error: error.message }));
-
-            await sleep(1200);
-
-            const after = await vidoraReadChatGptComposerStateReal(page, {
-              sceneId,
-              stage: 'nv2-force-send-after-click',
-              attempt,
-            }).catch((error) => ({ ok: false, error: error.message }));
-
-            await appendAppLog(null, {
-              source: 'main',
-              kind: (!after?.composerHasText || after?.stopVisible) ? 'ok' : 'running',
-              text: (!after?.composerHasText || after?.stopVisible)
-                ? `NV2 SEND GATE: attempt ${attempt} gửi OK, input đã trống hoặc ChatGPT đang chạy.`
-                : `NV2 SEND GATE: attempt ${attempt} chưa gửi, input vẫn còn nội dung.`,
-              details: { attempt, click, after },
-            }).catch(() => null);
-
-            nv2InputState = after;
-
-            if (!after?.composerHasText || after?.stopVisible) break;
-          }
-
-          if (nv2InputState?.composerHasText && !nv2InputState?.stopVisible) {
-            throw new Error('nv2-send-gate-failed-input-still-has-prompt');
-          }
-        }
-      }
-    }
+    return { ok: true, text: latest };
+  } finally {
+    await chatGptRuntimeMonitor.stopMonitoring();
   }
-
-  return { ok: true, text: latest };
 }
 
 async function maybeRenameChatGptCurrentConversationUntilTitle(page, title = '', options = {}) {

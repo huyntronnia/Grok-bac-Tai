@@ -3,6 +3,16 @@
 const EventEmitter = require("events");
 const { appendAppLog } = require("../logging");
 
+function hashText(value = "") {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  let hash = 2166136261;
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16);
+}
+
 class ChatGPTRuntimeMonitor extends EventEmitter {
   constructor() {
     super();
@@ -53,9 +63,14 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
         hasUploadedFiles: false,
         attachmentsCount: 0,
         attachmentsCompleted: 0,
+        composerPromptHash: "",
+        attachmentNames: [],
+        attachmentHashes: [],
+        composerState: "READY",
+        latestUserMessageHash: "",
+        latestAssistantHash: "",
         assistantMessageCount: 0,
         latestAssistantTextLength: 0,
-        latestAssistantHash: "",
         textStreamingActive: false,
         dalleActive: false,
         searchBadgeVisible: false,
@@ -67,6 +82,7 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
         imageCompleteCount: 0,
         stoppedTextDetected: false,
         policyRefusalDetected: false,
+        loggedOut: false,
         lastMutationTimestamp: Date.now(),
       },
       network: {
@@ -168,34 +184,34 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
 
   // --- API Methods ---
   getCurrentState() {
-    return {
+    return Object.freeze({
       state: this.state,
       intent: this.intent,
       confidence: this.confidence,
-      identity: { ...this.identity },
+      identity: Object.freeze({ ...this.identity }),
       timestamp: Date.now(),
-    };
+    });
   }
 
   getHealth() {
-    return { ...this.health };
+    return Object.freeze({ ...this.health });
   }
 
   getDiagnostics() {
-    return [...this.timeline];
+    return Object.freeze([...this.timeline]);
   }
 
   captureSnapshot() {
-    return {
+    return Object.freeze({
       metricsVersion: this.metricsVersion,
       state: this.state,
       intent: this.intent,
       confidence: this.confidence,
-      identity: { ...this.identity },
-      metrics: JSON.parse(JSON.stringify(this.metrics)),
-      health: { ...this.health },
+      identity: Object.freeze({ ...this.identity }),
+      metrics: Object.freeze(JSON.parse(JSON.stringify(this.metrics))),
+      health: Object.freeze({ ...this.health }),
       timestamp: Date.now(),
-    };
+    });
   }
 
   // --- State Replay Engine ---
@@ -428,17 +444,51 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
       try {
         const payload = JSON.parse(event.payload);
         if (payload.type === "DOM_METRICS") {
-          // Merge DOM metrics
-          Object.assign(this.metrics.dom, payload.data);
+          const raw = payload.data || {};
+          
+          // Merge flat metrics
+          this.metrics.dom.composerReady = Boolean(raw.composerReady);
+          this.metrics.dom.composerBusy = Boolean(raw.composerBusy);
+          this.metrics.dom.hasUploadedFiles = Boolean(raw.hasUploadedFiles);
+          this.metrics.dom.attachmentsCount = Number(raw.attachmentsCount || 0);
+          this.metrics.dom.attachmentsCompleted = Number(raw.attachmentsCompleted || 0);
+          this.metrics.dom.assistantMessageCount = Number(raw.assistantMessageCount || 0);
+          this.metrics.dom.latestAssistantTextLength = Number(raw.latestAssistantTextLength || 0);
+          this.metrics.dom.textStreamingActive = Boolean(raw.textStreamingActive);
+          this.metrics.dom.dalleActive = Boolean(raw.dalleActive);
+          this.metrics.dom.searchBadgeVisible = Boolean(raw.searchBadgeVisible);
+          this.metrics.dom.reasoningActive = Boolean(raw.reasoningActive);
+          this.metrics.dom.pythonCodeInterpreterActive = Boolean(raw.pythonCodeInterpreterActive);
+          this.metrics.dom.canvasActive = Boolean(raw.canvasActive);
+          this.metrics.dom.placeholderVisible = Boolean(raw.placeholderVisible);
+          this.metrics.dom.imageElementCount = Number(raw.imageElementCount || 0);
+          this.metrics.dom.imageCompleteCount = Number(raw.imageCompleteCount || 0);
+          this.metrics.dom.stoppedTextDetected = Boolean(raw.stoppedTextDetected);
+          this.metrics.dom.policyRefusalDetected = Boolean(raw.policyRefusalDetected);
+          this.metrics.dom.loggedOut = Boolean(raw.loggedOut);
+          this.metrics.dom.lastMutationTimestamp = Number(raw.lastMutationTimestamp || Date.now());
+
+          // Compute FNV-1a hashes in Main process
+          const composerText = raw.composerText || "";
+          const latestUserText = raw.latestUserText || "";
+          const latestAssistantText = raw.latestAssistantText || "";
+          const rawAttachments = raw.attachments || [];
+
+          this.metrics.dom.composerPromptHash = hashText(composerText);
+          this.metrics.dom.latestUserMessageHash = hashText(latestUserText);
+          this.metrics.dom.latestAssistantHash = hashText(latestAssistantText);
+          this.metrics.dom.attachmentNames = rawAttachments.map(a => a.text);
+          this.metrics.dom.attachmentHashes = rawAttachments.map(a => hashText(a.text + ":" + a.imgSrc));
+          this.metrics.dom.composerState = (raw.progressBarsCount > 0) ? "ATTACHING_FILES" : "READY";
           
           // Sync navigation state
-          if (payload.data.url) {
-            this.metrics.navigation.url = payload.data.url;
-            this.identity.chatUrl = payload.data.url;
+          if (raw.url) {
+            this.metrics.navigation.url = raw.url;
+            this.identity.chatUrl = raw.url;
             
             // Extract conversationId from url path: e.g. /c/xxxxx
             try {
-              const urlObj = new URL(payload.data.url);
+              const urlObj = new URL(raw.url);
               const pathParts = urlObj.pathname.split("/");
               const cIndex = pathParts.indexOf("c");
               if (cIndex !== -1 && pathParts[cIndex + 1]) {
@@ -451,11 +501,11 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
 
           // Sync identity variables
           this.identity.assistantRootIndex = this.metrics.dom.assistantMessageCount;
-          if (payload.data.latestImageUrl) {
-            this.identity.latestImageUrl = payload.data.latestImageUrl;
+          if (raw.latestImageUrl) {
+            this.identity.latestImageUrl = raw.latestImageUrl;
           }
 
-          this.logEvent("DOM_EVENT", "DOM mutations updated metrics", payload.data);
+          this.logEvent("DOM_EVENT", "DOM mutations updated metrics", raw);
           this.triggerStateUpdate("DOM mutation update");
         } else if (payload.type === "NAVIGATION") {
           this.metrics.navigation.url = payload.url;
@@ -501,6 +551,26 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
   processIncomingEvent(record) {
     if (record.type === "DOM_EVENT") {
       Object.assign(this.metrics.dom, record.payload);
+      
+      // Compute FNV-1a hashes in Main process during simulation
+      if (record.payload.composerText !== undefined) {
+        this.metrics.dom.composerPromptHash = hashText(record.payload.composerText);
+      }
+      if (record.payload.latestUserText !== undefined) {
+        this.metrics.dom.latestUserMessageHash = hashText(record.payload.latestUserText);
+      }
+      if (record.payload.latestAssistantText !== undefined) {
+        this.metrics.dom.latestAssistantHash = hashText(record.payload.latestAssistantText);
+      }
+      if (record.payload.loggedOut !== undefined) {
+        this.metrics.dom.loggedOut = Boolean(record.payload.loggedOut);
+      }
+      if (record.payload.attachments !== undefined) {
+        const rawAttachments = record.payload.attachments || [];
+        this.metrics.dom.attachmentNames = rawAttachments.map(a => a.text);
+        this.metrics.dom.attachmentHashes = rawAttachments.map(a => hashText(a.text + ":" + a.imgSrc));
+        this.metrics.dom.composerState = (record.payload.progressBarsCount > 0) ? "ATTACHING_FILES" : "READY";
+      }
     } else if (record.type === "NETWORK_EVENT") {
       if (record.payload && record.payload.dalleCaptured) {
         this.metrics.network.dalleUrlsCaptured.push(record.payload.dalleCaptured);
@@ -637,17 +707,11 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
       }
     }
 
-    // 8. Silent stabilization window
+    // 8. READY state (combines finished streaming, complete images, and DOM stability)
     const idlePeriod = Date.now() - dom.lastMutationTimestamp;
-    if (idlePeriod > 800 && idlePeriod < 3000 && (this.state === "STREAMING_TEXT" || this.state === "IMAGE_DECODE")) {
-      this.state = "DOM_STABLE";
-      return;
-    }
-
-    // 9. READY_FOR_EXTRACTION
     const isCompletedAndStable = !dom.textStreamingActive && !dom.placeholderVisible && (idlePeriod >= 3000 || dom.stoppedTextDetected);
-    if (isCompletedAndStable && (this.state === "DOM_STABLE" || this.state === "STREAMING_TEXT" || this.state === "IMAGE_DECODE" || this.state === "NETWORK_IMAGE" || this.state === "IMAGE_PLACEHOLDER")) {
-      this.state = "READY_FOR_EXTRACTION";
+    if (isCompletedAndStable && (this.state === "READY" || this.state === "STREAMING_TEXT" || this.state === "STREAMING_IMAGE" || this.state === "IMAGE_DECODE" || this.state === "NETWORK_IMAGE" || this.state === "IMAGE_PLACEHOLDER" || this.state === "IDLE")) {
+      this.state = "READY";
       return;
     }
 
@@ -830,16 +894,31 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
 
         // 1. Composer & Upload Elements
         const composer = document.querySelector("#prompt-textarea, textarea, [contenteditable='true']");
+        const composerText = composer ? (composer.value || composer.textContent || '').trim() : '';
         const sendBtn = document.querySelector("button[data-testid*='send'], button[aria-label*='Send'], button[aria-label*='Gửi']");
         const stopBtn = document.querySelector("button[data-testid*='stop'], button[aria-label*='Stop'], button[aria-label*='Dừng']");
         
-        const attachments = Array.from(document.querySelectorAll("[class*='file-preview'], [class*='attachment']"));
+        const attachments = Array.from(document.querySelectorAll("main form [data-testid*='attachment'], main form [class*='attachment'], main form [class*='file-preview'], main form [data-testid*='file-preview']")).filter(el => {
+          const r = el.getBoundingClientRect();
+          return r.width > 0 && r.height > 0 && el.tagName !== 'INPUT';
+        });
         const progressBars = Array.from(document.querySelectorAll("[role='progressbar'], [class*='progress']"));
+        const attachmentsData = attachments.map(el => {
+          const text = (el.innerText || el.textContent || el.getAttribute('aria-label') || '').trim();
+          const img = el.querySelector('img');
+          const imgSrc = img ? (img.currentSrc || img.src || '') : '';
+          return { text, imgSrc };
+        });
 
         // 2. Assistant Message Nodes
         const assistants = Array.from(document.querySelectorAll("[data-message-author-role='assistant']"));
         const latestAssistant = assistants.at(-1);
         const latestText = latestAssistant ? (latestAssistant.innerText || "").trim() : "";
+
+        // Latest user message
+        const users = Array.from(document.querySelectorAll('[data-message-author-role="user"]'));
+        const latestUser = users[users.length - 1] || null;
+        const latestUserText = latestUser ? latestUser.innerText.trim() : '';
 
         // 3. Streaming and Generating Clues
         const isStreaming = Boolean(stopBtn || document.querySelector(".result-streaming, [class*='result-streaming']"));
@@ -863,6 +942,7 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
 
         const stoppedTextDetected = /stopped creating image|image generation stopped|creation stopped/i.test(bodyTail);
         const policyRefusalDetected = /policy|refusal|violate|tiêu chuẩn cộng đồng|chính sách/i.test(bodyTail);
+        const loggedOut = /Sign in|Log in|Đăng nhập|Sign up|Đăng ký/i.test(document.title || "") || !!document.querySelector('input[type="password"]');
 
         const metricsPayload = {
           composerReady: Boolean(composer),
@@ -870,9 +950,13 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
           hasUploadedFiles: attachments.length > 0,
           attachmentsCount: attachments.length,
           attachmentsCompleted: attachments.length - progressBars.length,
+          progressBarsCount: progressBars.length,
           assistantMessageCount: assistants.length,
           latestAssistantTextLength: latestText.length,
-          latestAssistantHash: latestText.slice(0, 100),
+          latestAssistantText: latestText,
+          composerText: composerText,
+          latestUserText: latestUserText,
+          attachments: attachmentsData,
           textStreamingActive: isStreaming,
           dalleActive: isDalleActive,
           searchBadgeVisible: hasSearchBadge,
@@ -884,6 +968,7 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
           imageCompleteCount: completeImages.length,
           stoppedTextDetected,
           policyRefusalDetected,
+          loggedOut,
           lastMutationTimestamp: Date.now(),
           url: window.location.href,
         };

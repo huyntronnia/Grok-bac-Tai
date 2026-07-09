@@ -238,7 +238,7 @@ async function runTests() {
         lastMutationTimestamp: Date.now() - 4000, // 4 seconds ago
       }
     });
-    assert.strictEqual(monitor.state, "READY_FOR_EXTRACTION", "State should be READY_FOR_EXTRACTION");
+    assert.strictEqual(monitor.state, "READY", "State should be READY");
     assert.strictEqual(monitor.confidence, 1, "Confidence should be 1.0 since image is complete and DOM stable");
 
     await monitor.stopMonitoring();
@@ -273,7 +273,7 @@ async function runTests() {
     const mockPage = createMockPage();
     await monitor.startMonitoring(mockPage);
 
-    // Simulate active streaming first so it can transition to READY_FOR_EXTRACTION
+    // Simulate active streaming first so it can transition to READY
     monitor.processIncomingEvent({
       type: "DOM_EVENT",
       payload: {
@@ -283,13 +283,13 @@ async function runTests() {
     assert.strictEqual(monitor.state, "STREAMING_TEXT", "State should start at STREAMING_TEXT");
 
     const waitPromise = monitor.waitUntil({
-      state: "READY_FOR_EXTRACTION",
+      state: "READY",
       stableFor: 100,
       timeout: 1000,
     });
 
 
-    // Simulate transitioning to READY_FOR_EXTRACTION
+    // Simulate transitioning to READY
     setTimeout(() => {
       monitor.processIncomingEvent({
         type: "DOM_EVENT",
@@ -301,7 +301,7 @@ async function runTests() {
     }, 50);
 
     const resultState = await waitPromise;
-    assert.strictEqual(resultState.state, "READY_FOR_EXTRACTION", "Wait should resolve to target state");
+    assert.strictEqual(resultState.state, "READY", "Wait should resolve to target state");
     await monitor.stopMonitoring();
   }
 
@@ -342,6 +342,8 @@ async function runTests() {
 
     const snapshot = monitor.captureSnapshot();
     assert.strictEqual(snapshot.metricsVersion, 1, "Snapshot metricsVersion should be 1");
+    assert.strictEqual(Object.isFrozen(snapshot), true, "Snapshot object should be frozen (immutable)");
+    assert.strictEqual(Object.isFrozen(monitor.getCurrentState()), true, "getCurrentState object should be frozen (immutable)");
 
     // test waitForIntent
     const intentPromise = monitor.waitForIntent("IMAGE_GENERATION", 1000);
@@ -450,6 +452,62 @@ async function runTests() {
     delete global.window;
     delete global.document;
     delete global.MutationObserver;
+    await monitor.stopMonitoring();
+  }
+
+  // Test 9: Pipeline Adapter Policy Gates and FNV-1a Hashing
+  {
+    resetMonitorState(monitor);
+    const mockPage = createMockPage();
+    await monitor.startMonitoring(mockPage);
+
+    const ChatGptPipelineAdapter = require("../electron/main/chatgpt/chatgpt_pipeline_adapter");
+    const adapter = new ChatGptPipelineAdapter(monitor);
+
+    // Verify hash generation in Electron Main on processing DOM_METRICS event
+    monitor.processIncomingEvent({
+      type: "DOM_EVENT",
+      payload: {
+        composerText: "Hello Grok",
+        latestUserText: "Write a story",
+        attachments: [{ text: "scene.png", imgSrc: "data:image/png" }]
+      }
+    });
+
+    assert.ok(monitor.metrics.dom.composerPromptHash, "Main process should compute composerPromptHash");
+    assert.strictEqual(monitor.metrics.dom.attachmentNames[0], "scene.png", "Attachment names mapped");
+    assert.ok(monitor.metrics.dom.attachmentHashes[0], "Attachment hashes computed");
+
+    // Test adapter policy wait transition (correct intent)
+    const imageWaitPromise = adapter.waitForImageReady(1000, 10);
+    // Transition monitor to IMAGE_GENERATION intent and READY state
+    monitor.processIncomingEvent({
+      type: "DOM_EVENT",
+      payload: { dalleActive: true, textStreamingActive: true }
+    });
+    monitor.processIncomingEvent({
+      type: "DOM_EVENT",
+      payload: { textStreamingActive: false, imageElementCount: 1, imageCompleteCount: 1, lastMutationTimestamp: Date.now() - 5000 }
+    });
+
+    const finalImageState = await imageWaitPromise;
+    assert.strictEqual(finalImageState.state, "READY", "Resolved to READY");
+    assert.strictEqual(finalImageState.intent, "IMAGE_GENERATION", "Validated intent");
+
+    // Test adapter policy failure (wrong intent throws violation)
+    resetMonitorState(monitor);
+    const wrongIntentPromise = adapter.waitForImageReady(1000, 10);
+    monitor.processIncomingEvent({
+      type: "DOM_EVENT",
+      payload: { textStreamingActive: true } // TEXT_RESPONSE intent
+    });
+    monitor.processIncomingEvent({
+      type: "DOM_EVENT",
+      payload: { textStreamingActive: false, lastMutationTimestamp: Date.now() - 5000 }
+    });
+
+    await assert.rejects(wrongIntentPromise, /Pipeline Policy Violation: Expected IMAGE_GENERATION intent/, "Should throw policy violation on wrong intent");
+
     await monitor.stopMonitoring();
   }
 

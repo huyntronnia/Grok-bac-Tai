@@ -6,5 +6,6 @@ module.exports = {
   ...require("./chatgpt_recovery"),
   ...require("./chatgpt_pipeline"),
   chatGptRuntimeMonitor: require("./chatgpt_runtime_monitor"),
+  ChatGptPipelineAdapter: require("./chatgpt_pipeline_adapter"),
 };
 
