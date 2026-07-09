@@ -2274,56 +2274,83 @@ async function inspectAndClickChatGptSendButtonSafely() {
     };
   };
 
-  const beforeClick = extractNodeInfo(button);
-
-  button.dispatchEvent(
-    new PointerEvent("pointerdown", {
-      bubbles: true,
-      pointerId: 1,
-      pointerType: "mouse",
-      isPrimary: true,
-    }),
-  );
-  button.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
-  button.click();
-  button.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
-
-  const sleepMs = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-  await sleepMs(100);
-  const getActiveButton = () => {
+  const getActiveButtonType = () => {
     const currentButtons = Array.from(root.querySelectorAll("button"));
     const currentStop = currentButtons.find(b => visible(b) && isStopButton(b));
-    if (currentStop) return { button: currentStop, type: "stop" };
+    if (currentStop) return "stop";
     const currentSend = document.querySelector(
       'button[data-testid="send-button"], button[data-testid="composer-submit-button"], button[aria-label="Send prompt"], button[aria-label="Send message"]'
     ) || currentButtons.filter(isStrictSendButton)[0];
-    return { button: currentSend || button, type: "send" };
+    if (currentSend) return "send";
+    return "unknown";
   };
 
-  const active100 = getActiveButton();
-  const immediatelyAfter = extractNodeInfo(active100.button);
+  const beforeClick = extractNodeInfo(button);
+  const timeline = {};
 
-  await sleepMs(200);
-  const active300 = getActiveButton();
-  const after300 = extractNodeInfo(active300.button);
+  // T0
+  button.click();
+  const t0 = Date.now();
 
-  await sleepMs(200);
-  const active500 = getActiveButton();
-  const after500 = extractNodeInfo(active500.button);
+  const sleepMs = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-  const isStopActiveNow = active100.type === "stop" || active300.type === "stop" || active500.type === "stop";
+  // T0+20ms
+  await sleepMs(20);
+  timeline.t20 = getActiveButtonType();
+
+  // T0+50ms
+  await sleepMs(30);
+  timeline.t50 = getActiveButtonType();
+
+  // T0+100ms
+  await sleepMs(50);
+  timeline.t100 = getActiveButtonType();
+
+  // T0+150ms
+  await sleepMs(50);
+  const typeAt150 = getActiveButtonType();
+  timeline.t150 = typeAt150;
+
+  let dispatchedFallback = false;
+  if (typeAt150 === "send") {
+    button.dispatchEvent(
+      new PointerEvent("pointerdown", {
+        bubbles: true,
+        pointerId: 1,
+        pointerType: "mouse",
+        isPrimary: true,
+      }),
+    );
+    button.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    button.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+    dispatchedFallback = true;
+  }
+
+  // T0+170ms
+  await sleepMs(20);
+  timeline.t170 = getActiveButtonType();
+
+  // T0+250ms
+  await sleepMs(80);
+  timeline.t250 = getActiveButtonType();
+
+  const isStopActiveNow =
+    timeline.t20 === "stop" ||
+    timeline.t50 === "stop" ||
+    timeline.t100 === "stop" ||
+    timeline.t150 === "stop" ||
+    timeline.t170 === "stop" ||
+    timeline.t250 === "stop";
 
   return {
     ok: true,
     status: "clicked",
     selector: button.getAttribute("data-testid") || button.getAttribute("aria-label") || "submit-button",
     isStopActiveNow,
+    dispatchedFallback,
     timeline: {
       beforeClick,
-      immediatelyAfter,
-      after300,
-      after500,
+      ...timeline,
     }
   };
 }
