@@ -2518,13 +2518,13 @@ function extractConversationSnapshot(options = {}) {
 
 function createOptimizedWrapper(bodyCode) {
   const fn = function() {};
-  fn.toString = () => `(() => {
+  fn.toString = () => `function() {
     if (typeof window.__extractConversationSnapshot !== 'function') {
       window.__extractConversationSnapshot = ${extractConversationSnapshot.toString()};
     }
     const snap = window.__extractConversationSnapshot();
     ${bodyCode}
-  })()`;
+  }`;
   return fn;
 }
 
