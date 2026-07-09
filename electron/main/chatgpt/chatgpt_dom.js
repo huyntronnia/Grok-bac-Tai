@@ -1433,15 +1433,6 @@ function readChatGptImageStateScript() {
     /stopped thinking|stopped creating image|image generation stopped|creation stopped|stopped generating/i.test(
       latestAssistantText,
     );
-  const streamingIndicator =
-    !stoppedActivity &&
-    (stopButtonVisible ||
-      (!hasVisibleMedia &&
-        [
-          ...document.querySelectorAll(
-            '[aria-busy="true"], [role="progressbar"], [data-testid*="loading"], [data-testid*="spinner"], [class*="result-streaming"]',
-          ),
-        ].some(visible)));
   const composerNodes = [
     ...document.querySelectorAll(
       '#prompt-textarea, textarea, [contenteditable="true"], [role="textbox"], [data-testid="composer"]',
@@ -1453,6 +1444,33 @@ function readChatGptImageStateScript() {
       node.getAttribute("aria-disabled") === "true" ||
       node.getAttribute("aria-busy") === "true",
   );
+  const allAssistantNodes = [
+    ...document.querySelectorAll('[data-message-author-role="assistant"], article, .message, [class*="response"]'),
+  ].filter((node) => {
+    if (node.closest?.('[data-message-author-role="user"]')) return false;
+    if (node.querySelector?.('[data-message-author-role="user"]')) return false;
+    return true;
+  });
+  const activeMessageNode = allAssistantNodes.at(-1);
+  const loaderContainers = [];
+  if (activeMessageNode) {
+    loaderContainers.push(activeMessageNode);
+  } else {
+    const mainChat = document.querySelector('main, #conversation-responses, [class*="react-scroll-to-bottom"]');
+    if (mainChat) loaderContainers.push(mainChat);
+  }
+  if (composerNodes.length) {
+    loaderContainers.push(...composerNodes);
+  }
+  const streamingIndicator =
+    !stoppedActivity &&
+    (stopButtonVisible ||
+      (!hasVisibleMedia &&
+        loaderContainers.flatMap((container) => [
+          ...container.querySelectorAll(
+            '[aria-busy="true"], [role="progressbar"], [data-testid*="loading"], [data-testid*="spinner"], [class*="result-streaming"]',
+          ),
+        ]).some(visible)));
   const thinking =
     !stoppedActivity &&
     /Thinking|Thinking about your request|Đang suy nghĩ|Generating|Creating/i.test(
