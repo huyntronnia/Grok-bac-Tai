@@ -1161,6 +1161,8 @@ async function refreshChatGptPageBeforeImageExtract(client, context = {}) {
   return state;
 }
 
+const CHATGPT_GRAY_PLACEHOLDER_TIMEOUT_MS = 30000;
+
 async function waitForChatGptImageGenerationDoneBeforeExtract(
   client,
   options = {},
@@ -1209,6 +1211,7 @@ async function waitForChatGptImageGenerationDoneBeforeExtract(
     const hasUrls = (imageState?.urls || []).length > 0;
     const isGrayPlaceholder = Boolean(
       imageState?.preparingImage &&
+      !activeGeneration?.generating &&
       !hasUrls &&
       !imageState?.stopButtonVisible
     );
@@ -1216,14 +1219,14 @@ async function waitForChatGptImageGenerationDoneBeforeExtract(
     if (isGrayPlaceholder) {
       if (grayPlaceholderStartAt === 0) {
         grayPlaceholderStartAt = Date.now();
-      } else if (Date.now() - grayPlaceholderStartAt >= 30000) {
+      } else if (Date.now() - grayPlaceholderStartAt >= CHATGPT_GRAY_PLACEHOLDER_TIMEOUT_MS) {
         if (!hasReloadedForGrayPlaceholder) {
           hasReloadedForGrayPlaceholder = true;
           grayPlaceholderStartAt = 0;
           await appendAppLog(null, {
             source: "main",
             kind: "warning",
-            text: `Scene ${sceneId}: ChatGPT stuck on gray loading placeholder for over 30s. Triggering safety page reload.`,
+            text: `Scene ${sceneId}: ChatGPT stuck on gray loading placeholder for over ${CHATGPT_GRAY_PLACEHOLDER_TIMEOUT_MS}ms. Triggering safety page reload.`,
             details: { imageState: sanitizeChatGptImageSnapshot(imageState) },
           }).catch(() => null);
           await refreshChatGptPageBeforeImageExtract(client, { sceneId, stage: "gray-placeholder-stale" });
@@ -1323,6 +1326,14 @@ async function waitForChatGptImageGenerationDoneBeforeExtract(
       }
 
       if (Date.now() - firstIdleAt >= 4000) {
+        if (hasReloadedForGrayPlaceholder) {
+          await appendAppLog(null, {
+            source: "main",
+            kind: "ok",
+            text: `Scene ${sceneId}: Recovered by gray-placeholder reload. No NV1 retry required.`,
+            details: { imageState: sanitizeChatGptImageSnapshot(imageState) },
+          }).catch(() => null);
+        }
         return {
           ok: true,
           idleMs: Date.now() - firstIdleAt,
