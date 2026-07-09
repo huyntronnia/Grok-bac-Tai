@@ -1455,22 +1455,19 @@ function readChatGptImageStateScript() {
   const loaderContainers = [];
   if (activeMessageNode) {
     loaderContainers.push(activeMessageNode);
-  } else {
-    const mainChat = document.querySelector('main, #conversation-responses, [class*="react-scroll-to-bottom"]');
-    if (mainChat) loaderContainers.push(mainChat);
   }
   if (composerNodes.length) {
     loaderContainers.push(...composerNodes);
   }
-  const streamingIndicator =
-    !stoppedActivity &&
-    (stopButtonVisible ||
-      (!hasVisibleMedia &&
-        loaderContainers.flatMap((container) => [
+  const matchedLoaders =
+    !stoppedActivity && !hasVisibleMedia
+      ? loaderContainers.flatMap((container) => [
           ...container.querySelectorAll(
             '[aria-busy="true"], [role="progressbar"], [data-testid*="loading"], [data-testid*="spinner"], [class*="result-streaming"]',
           ),
-        ]).some(visible)));
+        ]).filter(visible)
+      : [];
+  const streamingIndicator = stopButtonVisible || matchedLoaders.length > 0;
   const thinking =
     !stoppedActivity &&
     /Thinking|Thinking about your request|Đang suy nghĩ|Generating|Creating/i.test(
@@ -1567,6 +1564,12 @@ function readChatGptImageStateScript() {
     sendText: sendButton?.text || "",
     composerBusy,
     streamingIndicator,
+    matchedStreamingIndicators: matchedLoaders.map((node) => ({
+      tag: node.tagName,
+      class: node.className,
+      id: node.id,
+      outerHTML: node.outerHTML.slice(0, 160)
+    })),
     loggedOut,
     logoutReason: loggedOut
       ? "ChatGPT page is showing sign-in/sign-up while waiting for image."
