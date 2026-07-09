@@ -977,119 +977,61 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
 
   // --- Injected Browser Observers Script ---
   getBrowserScriptCode() {
-    if (window.__chatgptUiMonitorInjected) return;
-    window.__chatgptUiMonitorInjected = true;
+    const { extractConversationSnapshot } = require("./chatgpt_dom");
+    return `
+      if (window.__chatgptUiMonitorInjected) return;
+      window.__chatgptUiMonitorInjected = true;
 
-    let debounceTimer = null;
-    let observer = null;
-    let resizeObserver = null;
-    let intersectionObserver = null;
+      const extractConversationSnapshot = ${extractConversationSnapshot.toString()};
 
-    const emitEvent = (type, data) => {
-      if (typeof window.chatgptUiMonitorBinding === "function") {
-        window.chatgptUiMonitorBinding(JSON.stringify({ type, data }));
-      }
-    };
+      let debounceTimer = null;
+      let observer = null;
+      let resizeObserver = null;
+      let intersectionObserver = null;
 
-    const collectMetrics = () => {
-      try {
-        const bodyText = document.body?.innerText || "";
-        const bodyTail = bodyText.slice(-3000);
+      const emitEvent = (type, data) => {
+        if (typeof window.chatgptUiMonitorBinding === "function") {
+          window.chatgptUiMonitorBinding(JSON.stringify({ type, data }));
+        }
+      };
 
-        // 1. Composer & Upload Elements
-        const composer = document.querySelector("#prompt-textarea, textarea, [contenteditable='true']");
-        const composerText = composer ? (composer.value || composer.textContent || '').trim() : '';
-        const sendBtn = document.querySelector("button[data-testid*='send'], button[aria-label*='Send'], button[aria-label*='Gửi']");
-        const stopBtn = document.querySelector("button[data-testid*='stop'], button[aria-label*='Stop'], button[aria-label*='Dừng']");
-        
-        const attachments = Array.from(document.querySelectorAll("main form [data-testid*='attachment'], main form [class*='attachment'], main form [class*='file-preview'], main form [data-testid*='file-preview']")).filter(el => {
-          const r = el.getBoundingClientRect();
-          return r.width > 0 && r.height > 0 && el.tagName !== 'INPUT';
-        });
-        const progressBars = Array.from(document.querySelectorAll("[role='progressbar'], [class*='progress']"));
-        const attachmentsData = attachments.map(el => {
-          const text = (el.innerText || el.textContent || el.getAttribute('aria-label') || '').trim();
-          const img = el.querySelector('img');
-          const imgSrc = img ? (img.currentSrc || img.src || '') : '';
-          return { text, imgSrc };
-        });
+      const collectMetrics = () => {
+        try {
+          const snap = extractConversationSnapshot();
+          const metricsPayload = {
+            composerReady: snap.composerReady,
+            composerBusy: snap.composerBusy,
+            hasUploadedFiles: snap.hasUploadedFiles,
+            attachmentsCount: snap.attachmentsCount,
+            attachmentsCompleted: snap.attachmentsCompleted,
+            progressBarsCount: snap.progressBarsCount,
+            assistantMessageCount: snap.assistantMessageCount,
+            latestAssistantTextLength: snap.latestAssistantTextLength,
+            latestAssistantText: snap.latestAssistantText,
+            composerText: snap.composerText,
+            latestUserText: snap.latestUserText,
+            attachments: snap.attachments,
+            textStreamingActive: snap.textStreamingActive,
+            dalleActive: snap.dalleActive,
+            searchBadgeVisible: snap.searchBadgeVisible,
+            reasoningActive: snap.reasoningActive,
+            pythonCodeInterpreterActive: snap.pythonCodeInterpreterActive,
+            canvasActive: snap.canvasActive,
+            placeholderVisible: snap.placeholderVisible,
+            imageElementCount: snap.imageElementCount,
+            imageCompleteCount: snap.imageCompleteCount,
+            stoppedTextDetected: snap.stoppedTextDetected,
+            policyRefusalDetected: snap.policyRefusalDetected,
+            loggedOut: snap.loggedOut,
+            lastMutationTimestamp: Date.now(),
+            url: snap.url,
+          };
 
-        // 2. Assistant Message Nodes (aligned with vidoraReadChatGptComposerStateReal)
-        const assistants = Array.from(document.querySelectorAll("[data-message-author-role='assistant'], article")).filter(el => {
-          const r = el.getBoundingClientRect();
-          const txt = (el.innerText || el.textContent || "").trim();
-          if (el.getAttribute('data-message-author-role') === 'user' || el.querySelector('[data-message-author-role="user"]')) {
-            return false;
-          }
-          return r.width > 50 && r.height > 20 && txt.length > 0;
-        });
-        const latestAssistant = assistants.at(-1);
-        const latestText = latestAssistant ? (latestAssistant.innerText || "").trim() : "";
-
-        // Latest user message
-        const users = Array.from(document.querySelectorAll('[data-message-author-role="user"]'));
-        const latestUser = users[users.length - 1] || null;
-        const latestUserText = latestUser ? latestUser.innerText.trim() : '';
-
-        // 3. Streaming and Generating Clues
-        const isStreaming = Boolean(stopBtn || document.querySelector(".result-streaming, [class*='result-streaming']"));
-        
-        // No regex text matching: Detect DALL-E by looking for Dall-e tool buttons, badges or widget blocks
-        const toolBlocks = Array.from(document.querySelectorAll("[data-message-author-role='assistant'] [class*='tool'], [data-message-author-role='assistant'] [class*='dalle'], .dalle-tool, [data-testid*='dalle']"));
-        const hasDalleTool = toolBlocks.some(block => /dall-e|dalle|image/i.test(block.innerText || block.textContent || block.className || ""));
-        const isDalleActive = hasDalleTool && (isStreaming || progressBars.length > 0 || stopBtn);
-
-        const hasSearchBadge = Boolean(document.querySelector("[class*='search'], [class*='web-search'], .search-badge"));
-        const isReasoning = /\bThinking\b|Đang suy nghĩ/i.test(bodyTail);
-        const isPythonActive = Boolean(document.querySelector("[class*='code-interpreter'], [class*='python']"));
-        const isCanvasActive = Boolean(document.querySelector("[class*='canvas'], #canvas-panel"));
-
-        // 4. Image Placeholders & Canvas Nodes
-        const placeholders = Array.from(document.querySelectorAll("[class*='placeholder'], [class*='loading-image'], .aspect-square div div"));
-        const hasLoadingCanvas = Array.from(document.querySelectorAll("canvas")).some(c => c.className.includes("dot") || c.className.includes("loading") || c.closest("[class*='loading']") || c.closest("[class*='preparing']"));
-        const placeholderVisible = placeholders.some(node => node.getBoundingClientRect().width > 10) || hasLoadingCanvas;
-        
-        const images = latestAssistant ? Array.from(latestAssistant.querySelectorAll("img, canvas")) : [];
-        const completeImages = images.filter(img => img.tagName === "CANVAS" || img.complete);
-
-        const stoppedTextDetected = /stopped creating image|image generation stopped|creation stopped/i.test(bodyTail);
-        const policyRefusalDetected = /policy|refusal|violate|tiêu chuẩn cộng đồng|chính sách/i.test(bodyTail);
-        const loggedOut = /Sign in|Log in|Đăng nhập|Sign up|Đăng ký/i.test(document.title || "") || !!document.querySelector('input[type="password"]');
-
-        const metricsPayload = {
-          composerReady: Boolean(composer),
-          composerBusy: Boolean(progressBars.length > 0 || stopBtn),
-          hasUploadedFiles: attachments.length > 0,
-          attachmentsCount: attachments.length,
-          attachmentsCompleted: attachments.length - progressBars.length,
-          progressBarsCount: progressBars.length,
-          assistantMessageCount: assistants.length,
-          latestAssistantTextLength: latestText.length,
-          latestAssistantText: latestText,
-          composerText: composerText,
-          latestUserText: latestUserText,
-          attachments: attachmentsData,
-          textStreamingActive: isStreaming,
-          dalleActive: isDalleActive,
-          searchBadgeVisible: hasSearchBadge,
-          reasoningActive: isReasoning,
-          pythonCodeInterpreterActive: isPythonActive,
-          canvasActive: isCanvasActive,
-          placeholderVisible: placeholderVisible,
-          imageElementCount: images.length,
-          imageCompleteCount: completeImages.length,
-          stoppedTextDetected,
-          policyRefusalDetected,
-          loggedOut,
-          lastMutationTimestamp: Date.now(),
-          url: window.location.href,
-        };
-
-        emitEvent("DOM_METRICS", metricsPayload);
-      } catch (err) {
-        // Fail silently
-      }
-    };
+          emitEvent("DOM_METRICS", metricsPayload);
+        } catch (err) {
+          // Fail silently
+        }
+      };`;
 
     const triggerDebounce = () => {
       if (debounceTimer) clearTimeout(debounceTimer);

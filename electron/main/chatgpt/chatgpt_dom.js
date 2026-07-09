@@ -126,13 +126,7 @@ function detectLoginScript(provider) {
   };
 }
 
-function countAssistantMessagesScript() {
-  return [
-    ...document.querySelectorAll(
-      '[data-message-author-role="assistant"], article, .message, [class*="response"], [class*="markdown"]',
-    ),
-  ].filter((node) => (node.innerText || "").trim().length > 20).length;
-}
+// countAssistantMessagesScript replaced by dynamic wrapper
 
 function detectBrowserCrashPageScript() {
   const text = String(document.body?.innerText || "")
@@ -1036,215 +1030,12 @@ function inspectNv2ComposerSubmitStateScript(prompt, beforeCount = 0) {
   };
 }
 
-function countChatGptAssistantRootsScript() {
-  const assistants = Array.from(document.querySelectorAll("[data-message-author-role='assistant'], article")).filter(el => {
-    const r = el.getBoundingClientRect();
-    const txt = (el.innerText || el.textContent || "").trim();
-    if (el.getAttribute?.('data-message-author-role') === 'user' || el.querySelector?.('[data-message-author-role="user"]')) {
-      return false;
-    }
-    return r.width > 50 && r.height > 20 && txt.length > 0;
-  });
-  return { count: assistants.length, mode: "unified-assistant-roots" };
-}
+// countChatGptAssistantRootsScript replaced by dynamic wrapper
 
 /**
  * @deprecated Use chatgpt_runtime_monitor instead.
  */
-function getConversationStateScript() {
-  const visible = (node) => {
-    const rect = node.getBoundingClientRect?.();
-    if (!rect || rect.width < 4 || rect.height < 4) return false;
-    const style = window.getComputedStyle?.(node);
-    return !(
-      style &&
-      (style.visibility === "hidden" ||
-        style.display === "none" ||
-        Number(style.opacity || 1) === 0)
-    );
-  };
-
-  const hashText = (value = "") => {
-    const text = String(value || "").replace(/\s+/g, " ").trim();
-    let hash = 2166136261;
-    for (let index = 0; index < text.length; index += 1) {
-      hash ^= text.charCodeAt(index);
-      hash = Math.imul(hash, 16777619);
-    }
-    return (hash >>> 0).toString(16);
-  };
-
-  const composer = document.querySelector('#prompt-textarea') || document.querySelector('textarea') || document.querySelector('[contenteditable="true"]');
-  const composerText = composer ? (composer.value || composer.textContent || '').trim() : '';
-  const composerHasPrompt = composerText.length > 0;
-  const composerPromptHash = hashText(composerText);
-
-  // Attachment elements
-  const attachments = Array.from(document.querySelectorAll('main form [data-testid*="attachment"], main form [class*="attachment"], main form [class*="file-preview"], main form [data-testid*="file-preview"]')).filter(el => {
-    const r = el.getBoundingClientRect();
-    return r.width > 0 && r.height > 0 && el.tagName !== 'INPUT';
-  });
-  
-  const attachmentNames = attachments.map(el => {
-    return (el.innerText || el.textContent || el.getAttribute('aria-label') || '').trim();
-  });
-  const attachmentHashes = attachments.map(el => {
-    const text = el.innerText || el.textContent || el.getAttribute('aria-label') || '';
-    const img = el.querySelector('img');
-    const imgSrc = img ? (img.currentSrc || img.src || '') : '';
-    return hashText(text + ':' + imgSrc);
-  });
-  const attachmentCount = attachments.length;
-
-  // Buttons
-  const buttons = Array.from(document.querySelectorAll('main form button, main form [role="button"]'))
-    .map((node) => {
-      const rect = node.getBoundingClientRect?.();
-      const text = `${node.textContent || ""} ${node.getAttribute?.("aria-label") || ""} ${node.title || ""} ${node.getAttribute?.("data-testid") || ""}`.trim();
-      const html = String(node.innerHTML || "").slice(0, 1000);
-      const disabled = node.disabled || node.getAttribute('aria-disabled') === 'true';
-      return { rect, text, html, disabled, node };
-    })
-    .filter((item) => item.rect && item.rect.width > 4 && item.rect.height > 4);
-
-  const stopButton = buttons.find(
-    (item) =>
-      /stop generating|stop responding|stop|cancel|dừng/i.test(item.text) ||
-      /<rect|data-icon=["']stop|stop-circle|square/i.test(item.html),
-  );
-  const stopButtonVisible = !!stopButton;
-
-  const sendBtn = buttons.find(
-    (item) =>
-      !/stop generating|stop responding|stop|cancel|dừng/i.test(item.text) &&
-      /send|submit|gửi|arrow-up|paper-plane|composer-submit/i.test(
-        `${item.text} ${item.html}`,
-      ),
-  );
-  const sendButtonVisible = !!(sendBtn && !sendBtn.disabled);
-
-  const streaming = stopButtonVisible || [
-    ...document.querySelectorAll(
-      '[aria-busy="true"], [role="progressbar"], [data-testid*="loading"], [data-testid*="spinner"], [class*="result-streaming"]',
-    ),
-  ].some(visible);
-
-  const assistantGenerating = streaming;
-
-  // Placeholder / spinner for active assistant bubble
-  const placeholderVisible = Array.from(document.querySelectorAll('[data-message-author-role="assistant"]')).some(node => {
-    return node.querySelector('[aria-busy="true"], [role="progressbar"], [data-testid*="loading"], [data-testid*="spinner"], .aspect-square:not(:has(img)):not(:has(canvas)), .aspect-video:not(:has(img)):not(:has(canvas))');
-  });
-
-  const progressVisible = placeholderVisible || streaming;
-
-  // Latest assistant message
-  const assistants = Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'));
-  const latestAssistant = assistants[assistants.length - 1] || null;
-  const latestAssistantHasImage = !!(latestAssistant && latestAssistant.querySelector('img'));
-  const latestAssistantHasCanvas = !!(latestAssistant && latestAssistant.querySelector('canvas'));
-  const latestAssistantHasText = !!(latestAssistant && latestAssistant.innerText.trim().length > 10);
-
-  // Latest user message
-  const users = Array.from(document.querySelectorAll('[data-message-author-role="user"]'));
-  const latestUser = users[users.length - 1] || null;
-  const latestUserText = latestUser ? latestUser.innerText.trim() : '';
-  const latestUserMessageHash = hashText(latestUserText);
-
-  // Composer ready: prompt is entered and send button is visible & enabled
-  const composerReady = composerHasPrompt && sendButtonVisible;
-
-  // Resource / OOM / crash
-  const text = String(document.body?.innerText || "").replace(/\s+/g, " ").trim();
-  const title = document.title || "";
-  const url = location.href || "";
-  const rendererOOM = /Aw, Snap|Something went wrong|Out of Memory|Page crashed|Error code:\s*Out of Memory/i.test(title + "\n" + text) || /^chrome-error:\/\//i.test(url);
-  const rendererAlive = !rendererOOM;
-
-  const loggedOut = /Sign in|Log in|Đăng nhập|Sign up|Đăng ký/i.test(title) || !!document.querySelector('input[type="password"]');
-  const disconnected = /disconnected|reconnect|mất kết nối/i.test(text);
-  const pageReloaded = false; // We can set this Node-side based on navigation/page loads
-
-  const conversationAvailable = url.includes('/c/') || url.includes('/chats/');
-  let currentChatId = "";
-  const match = url.match(/\/c\/([a-f0-9-]+)/i) || url.match(/\/chats\/([a-f0-9-]+)/i);
-  if (match) currentChatId = match[1];
-
-  // DOM node count, canvas count, attachment previews
-  const domNodeCount = document.getElementsByTagName('*').length;
-  const canvasCount = document.querySelectorAll('canvas').length;
-  const attachmentPreviewCount = attachments.length;
-
-  const roleNodes = Array.from(document.querySelectorAll("[data-message-author-role]")).filter(visible);
-  const conversationLength = roleNodes.length;
-  const latestAssistantText = assistants.length ? assistants[assistants.length - 1].innerText.trim() : '';
-  const latestAssistantHash = hashText(latestAssistantText);
-  const conversationFingerprint = hashText(currentChatId + ":" + latestAssistantHash + ":" + latestUserMessageHash + ":" + conversationLength);
-
-  let composerState = "EMPTY";
-  const hasFiles = attachmentCount > 0;
-  const hasText = composerHasPrompt;
-  const isUploadingFiles = attachments.some(el => {
-    return !!el.querySelector('[role="progressbar"], [class*="progress"], [class*="uploading"], [class*="loading"], [class*="spinner"]');
-  });
-
-  if (streaming) {
-    if (placeholderVisible) {
-      composerState = "WAIT_ACCEPT";
-    } else {
-      composerState = "WAIT_RESPONSE";
-    }
-  } else if (isUploadingFiles) {
-    composerState = "ATTACHING_FILES";
-  } else if (hasFiles && !hasText) {
-    composerState = "FILES_READY";
-  } else if (hasText && !hasFiles) {
-    composerState = "PROMPT_READY";
-  } else if (hasFiles && hasText) {
-    if (sendButtonVisible) {
-      composerState = "READY_TO_SEND";
-    } else {
-      composerState = "PROMPT_READY";
-    }
-  } else {
-    composerState = "EMPTY";
-  }
-
-  return {
-    ok: true,
-    composerState,
-    latestAssistantHash,
-    conversationLength,
-    conversationFingerprint,
-    composerHasPrompt,
-    composerPromptHash,
-    attachmentCount,
-    attachmentNames,
-    attachmentHashes,
-    composerReady,
-    sendButtonVisible,
-    stopButtonVisible,
-    streaming,
-    placeholderVisible,
-    progressVisible,
-    assistantGenerating,
-    latestAssistantHasImage,
-    latestAssistantHasCanvas,
-    latestAssistantHasText,
-    latestUserMessageHash,
-    rendererAlive,
-    rendererOOM,
-    loggedOut,
-    disconnected,
-    pageReloaded,
-    conversationAvailable,
-    currentChatId,
-    domNodeCount,
-    canvasCount,
-    attachmentPreviewCount
-  };
-}
-
+// getConversationStateScript replaced by dynamic wrapper
 function clickChatGptStopGeneratingScript() {
   const buttons = [...document.querySelectorAll('button, [role="button"]')]
     .map((node) => {
@@ -1315,299 +1106,7 @@ function clickChatGptStopGeneratingScript() {
 /**
  * @deprecated Use chatgpt_runtime_monitor instead.
  */
-function readChatGptImageStateScript() {
-  const bodyText = document.body?.innerText || "";
-  const bodyTail = bodyText.slice(-4000);
-  const visible = (node) => {
-    const rect = node.getBoundingClientRect?.();
-    if (!rect || rect.width < 4 || rect.height < 4) return false;
-    const style = window.getComputedStyle?.(node);
-    return !(
-      style &&
-      (style.visibility === "hidden" ||
-        style.display === "none" ||
-        Number(style.opacity || 1) === 0)
-    );
-  };
-
-  const roleAssistantNodes = [
-    ...document.querySelectorAll('[data-message-author-role="assistant"]'),
-  ].filter((node) => (node.innerText || "").trim().length > 20);
-  const fallbackAssistantNodes = [
-    ...document.querySelectorAll(
-      'article, .message, [class*="response"], [class*="markdown"]',
-    ),
-  ].filter((node) => {
-    if (node.closest?.('[data-message-author-role="user"]')) return false;
-    if (node.querySelector?.('[data-message-author-role="user"]')) return false;
-    const text = (node.innerText || "").trim();
-    if (text.length <= 20) return false;
-    if (
-      /^NHIỆM\s*VỤ\s*1\s*:|^NHIỆM\s*VỤ\s*2\s*:|^---\s*SCENE|^Dựa trên ảnh keyframe|Show more|Show less/i.test(
-        text,
-      )
-    )
-      return false;
-    return true;
-  });
-  const assistantNodes = roleAssistantNodes.length
-    ? roleAssistantNodes
-    : fallbackAssistantNodes;
-  const latestAssistantText = assistantNodes.at(-1)?.innerText?.trim() || "";
-
-  const mediaRoots = [
-    ...document.querySelectorAll(
-      '[data-message-author-role="assistant"], article, .message, [class*="response"]',
-    ),
-  ].filter(
-    (node) =>
-      node.querySelector?.("img, picture source, canvas") ||
-      /Generated image/i.test(node.innerText || ""),
-  );
-  const mediaRoot = mediaRoots.at(-1);
-  const urls = [];
-  if (mediaRoot) {
-    const foundUrls = [...mediaRoot.querySelectorAll("img, picture source")]
-      .filter((node) => {
-        const label = `${node.alt || ""} ${node.getAttribute?.("aria-label") || ""} ${node.className || ""}`;
-        if (/avatar|profile|logo|icon|emoji/i.test(label)) return false;
-        if (node.tagName === "IMG") {
-          if (!node.complete || !node.naturalWidth || node.naturalWidth < 120) return false;
-        } else {
-          const rect = node.getBoundingClientRect?.();
-          if (!rect || rect.width < 120 || rect.height < 80) return false;
-        }
-        return true;
-      })
-      .map(
-        (node) =>
-          node.currentSrc ||
-          node.src ||
-          node.getAttribute("srcset") ||
-          node.getAttribute("src") ||
-          "",
-      )
-      .filter((url) => /^https?:|^blob:|^data:image\//i.test(url));
-    urls.push(...foundUrls);
-  }
-
-  const hasVisibleMedia = urls.length > 0;
-
-  const buttons = [...document.querySelectorAll('button, [role="button"]')]
-    .map((button) => {
-      const rect = button.getBoundingClientRect?.();
-      return {
-        rect: rect
-          ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
-          : null,
-        text: `${button.textContent || ""} ${button.getAttribute("aria-label") || ""} ${button.title || ""} ${button.getAttribute("data-testid") || ""}`.trim(),
-        html: String(button.innerHTML || "").slice(0, 500),
-      };
-    })
-    .filter((item) => item.rect && item.rect.width > 4 && item.rect.height > 4);
-  const buttonText = buttons
-    .map((item) => item.text)
-    .filter(Boolean)
-    .join(" | ");
-  const nearComposerButton = (item) =>
-    item.rect.left > window.innerWidth * 0.45 &&
-    item.rect.top > window.innerHeight * 0.58;
-  const stopButton = buttons.find((item) => {
-    if (!nearComposerButton(item)) return false;
-    const text = String(item.text || "").trim();
-    const html = String(item.html || "");
-    return (
-      /^(stop generating|stop responding|stop|cancel|dừng)$/i.test(text) ||
-      /data-testid=["']stop|data-icon=["']stop|stop-circle/i.test(html)
-    );
-  });
-  const stopButtonVisible = Boolean(stopButton);
-  const sendButton = buttons.find(
-    (item) =>
-      nearComposerButton(item) &&
-      !/stop generating|stop responding|stop|cancel|dung/i.test(item.text) &&
-      /send|submit|gui|arrow-up|paper-plane|composer-submit/i.test(
-        `${item.text} ${item.html}`,
-      ),
-  );
-  const sendReady = Boolean(sendButton && !stopButtonVisible);
-  const stoppedActivity =
-    /stopped thinking|stopped creating image|image generation stopped|creation stopped|stopped generating/i.test(
-      latestAssistantText,
-    );
-  const composerNodes = [
-    ...document.querySelectorAll(
-      '#prompt-textarea, textarea, [contenteditable="true"], [role="textbox"], [data-testid="composer"]',
-    ),
-  ].filter(visible);
-  const composerBusy = composerNodes.some(
-    (node) =>
-      node.disabled ||
-      node.getAttribute("aria-disabled") === "true" ||
-      node.getAttribute("aria-busy") === "true",
-  );
-  const allAssistantNodes = [
-    ...document.querySelectorAll('[data-message-author-role="assistant"], article, .message, [class*="response"]'),
-  ].filter((node) => {
-    if (node.closest?.('[data-message-author-role="user"]')) return false;
-    if (node.querySelector?.('[data-message-author-role="user"]')) return false;
-    return true;
-  });
-  const activeMessageNode = allAssistantNodes.at(-1);
-  const rawUserCount = document.querySelectorAll('[data-message-author-role="user"]').length;
-  const rawAssistantCount = document.querySelectorAll('[data-message-author-role="assistant"]').length;
-  let waitingForAssistantMessage = false;
-  if (rawUserCount > 0) {
-    waitingForAssistantMessage = rawAssistantCount < rawUserCount;
-  } else {
-    const allArticles = [...document.querySelectorAll('article, .message')];
-    if (allArticles.length > 0) {
-      const lastArticle = allArticles.at(-1);
-      const isUser = lastArticle.querySelector?.('[data-message-author-role="user"]') ||
-                     lastArticle.className.includes("user") ||
-                     /NHIỆM\s*VỤ/i.test(lastArticle.innerText || "");
-      waitingForAssistantMessage = !!isUser;
-    }
-  }
-  const loaderContainers = [];
-  if (activeMessageNode) {
-    loaderContainers.push(activeMessageNode);
-  }
-  if (composerNodes.length) {
-    loaderContainers.push(...composerNodes);
-  }
-  const matchedLoaders =
-    !stoppedActivity && !hasVisibleMedia
-      ? loaderContainers.flatMap((container) => [
-          ...container.querySelectorAll(
-            '[aria-busy="true"], [role="progressbar"], [data-testid*="loading"], [data-testid*="spinner"], [class*="result-streaming"]',
-          ),
-        ]).filter(visible)
-      : [];
-  const streamingIndicator = stopButtonVisible || matchedLoaders.length > 0;
-  const thinking =
-    !stoppedActivity &&
-    /Thinking|Thinking about your request|Đang suy nghĩ|Generating|Creating/i.test(
-      latestAssistantText || bodyTail,
-    );
-  const stoppedCreatingImage =
-    /stopped creating image|image generation stopped|creation stopped|stopped generating/i.test(
-      latestAssistantText,
-    );
-  const preparingImage =
-    !stoppedCreatingImage &&
-    /preparing image|creating image|generating image|đang tạo ảnh|đang chuẩn bị ảnh|hoàn thiện.*nét cuối|polishing.*touches/i.test(
-      latestAssistantText,
-    );
-  const voiceReady = /voice|mic|microphone|record|dictate/i.test(buttonText);
-  const loggedOut =
-    /(^|\n)\s*(sign in|log in|đăng nhập|sign up)\s*($|\n)|sign up to keep chatting|continue with google/i.test(
-      bodyText,
-    ) &&
-    !/ChatGPT can make mistakes|Share|Ask anything/i.test(
-      bodyText.slice(-3000),
-    );
-
-  const loadingMediaText =
-    !stoppedCreatingImage &&
-    /defining scene for image generation|preparing image|creating image|generating image|đang tạo ảnh|đang chuẩn bị ảnh|hoàn thiện.*nét cuối|polishing.*touches/i.test(
-      latestAssistantText,
-    );
-  const renderedImageHint =
-    /Generated image|Edit image|Download|Tải xuống|Open image|Image created|Ảnh đã được tạo/i.test(
-      latestAssistantText,
-    );
-  const visibleImageBoxes = mediaRoot
-    ? [
-        ...mediaRoot.querySelectorAll("img, canvas, button, div"),
-      ]
-        .map((node) => {
-          const rect = node.getBoundingClientRect?.();
-          const style = window.getComputedStyle?.(node);
-          const text = node.innerText || "";
-          const label = `${node.alt || ""} ${node.getAttribute?.("aria-label") || ""} ${node.className || ""}`;
-          const isMedia =
-            node.tagName === "IMG" ||
-            node.tagName === "CANVAS" ||
-            (/Edit|Generated image/i.test(text) &&
-              node.querySelector?.("button")) ||
-            (style?.backgroundImage &&
-              style.backgroundImage !== "none" &&
-              !style.backgroundImage.includes("gradient"));
-          if (!rect || !isMedia || /avatar|profile|logo|icon|emoji/i.test(label)) return null;
-          if (node.tagName === "IMG") {
-            if (!node.complete || !node.naturalWidth || node.naturalWidth < 120) return null;
-          } else {
-            if (rect.width < 120 || rect.height < 80) return null;
-          }
-          return {
-            y: Math.round(rect.y + window.scrollY),
-            w: Math.round(rect.width),
-            h: Math.round(rect.height),
-            tag: node.tagName,
-          };
-        })
-        .filter(Boolean)
-        .sort((a, b) => b.y - a.y)
-    : [];
-  if (
-    !urls.length &&
-    visibleImageBoxes.length &&
-    !loadingMediaText &&
-    renderedImageHint
-  )
-    urls.push(`chatgpt-custom-box-y${visibleImageBoxes[0].y}`);
-
-  const completedVisibleImage =
-    hasVisibleMedia && !composerBusy && !thinking;
-  const generating =
-    waitingForAssistantMessage
-      ? true
-      : stoppedCreatingImage || completedVisibleImage
-        ? false
-        : sendReady
-          ? false
-          : stopButtonVisible ||
-            streamingIndicator ||
-            composerBusy ||
-            (preparingImage && !hasVisibleMedia) ||
-            (thinking && !hasVisibleMedia);
-
-  return {
-    generating,
-    waitingForAssistantMessage,
-    stopButton: stopButtonVisible,
-    preparingImage: stoppedCreatingImage ? false : preparingImage,
-    stoppedCreatingImage,
-    stopButtonVisible,
-    sendReady,
-    sendText: sendButton?.text || "",
-    composerBusy,
-    streamingIndicator,
-    matchedStreamingIndicators: matchedLoaders.map((node) => ({
-      tag: node.tagName,
-      class: node.className,
-      id: node.id,
-      outerHTML: node.outerHTML.slice(0, 160)
-    })),
-    loggedOut,
-    logoutReason: loggedOut
-      ? "ChatGPT page is showing sign-in/sign-up while waiting for image."
-      : "",
-    voiceReady,
-    composerButtonCount: buttons.length,
-    buttonText,
-    urls,
-    visibleImageBoxCount: visibleImageBoxes.length,
-    completedVisibleImage,
-    assistantCount: assistantNodes.length,
-    latestAssistantText,
-    assistantMode: roleAssistantNodes.length
-      ? "assistant-role"
-      : "fallback-non-user",
-  };
-}
-
+// readChatGptImageStateScript replaced by dynamic wrapper
 function clickUploadButtonScript(provider = "grok") {
   const visible = (node) => {
     const rect = node.getBoundingClientRect?.();
@@ -2658,9 +2157,12 @@ function prepareChatGptCreateImageScript() {
 /**
  * @deprecated Use chatgpt_runtime_monitor instead.
  */
-function readAssistantMessageSnapshotScript() {
+// readAssistantMessageSnapshotScript replaced by dynamic wrapper
+// readLatestAssistantScript replaced by dynamic wrapper
+
+function extractConversationSnapshot() {
   const visible = (node) => {
-    const rect = node.getBoundingClientRect?.();
+    const rect = node?.getBoundingClientRect?.();
     if (!rect || rect.width < 4 || rect.height < 4) return false;
     const style = window.getComputedStyle?.(node);
     return !(
@@ -2670,10 +2172,9 @@ function readAssistantMessageSnapshotScript() {
         Number(style.opacity || 1) === 0)
     );
   };
+
   const hashText = (value = "") => {
-    const text = String(value || "")
-      .replace(/\s+/g, " ")
-      .trim();
+    const text = String(value || "").replace(/\s+/g, " ").trim();
     let hash = 2166136261;
     for (let index = 0; index < text.length; index += 1) {
       hash ^= text.charCodeAt(index);
@@ -2681,6 +2182,7 @@ function readAssistantMessageSnapshotScript() {
     }
     return (hash >>> 0).toString(16);
   };
+
   const readStableId = (node) => {
     const candidates = [
       node.getAttribute?.("data-message-id"),
@@ -2693,6 +2195,7 @@ function readAssistantMessageSnapshotScript() {
     ];
     return String(candidates.find(Boolean) || "").trim();
   };
+
   const readAssistantText = (node) => {
     const contentSelectors = [
       '[data-message-author-role="assistant"] [data-message-id]',
@@ -2708,9 +2211,7 @@ function readAssistantMessageSnapshotScript() {
     ];
     const pieces = [];
     for (const selector of contentSelectors) {
-      for (const child of [...(node.querySelectorAll?.(selector) || [])].filter(
-        visible,
-      )) {
+      for (const child of [...(node.querySelectorAll?.(selector) || [])].filter(visible)) {
         const text = String(child.innerText || child.textContent || "").trim();
         if (text && !pieces.includes(text)) pieces.push(text);
       }
@@ -2721,280 +2222,462 @@ function readAssistantMessageSnapshotScript() {
       String(node.innerText || node.textContent || "").trim()
     );
   };
-  const roleNodes = [...document.querySelectorAll("[data-message-author-role]")]
-    .filter(visible)
-    .map((node, turnIndex) => {
-      const role = String(
-        node.getAttribute?.("data-message-author-role") || "",
-      ).trim();
-      return { node, role, turnIndex };
-    });
-  const userMessages = roleNodes
-    .filter((entry) => entry.role === "user")
-    .map((entry, index) => {
-      const text = String(
-        entry.node.innerText || entry.node.textContent || "",
-      ).trim();
-      return {
-        index,
-        turnIndex: entry.turnIndex,
-        id: readStableId(entry.node),
-        text,
-        textLength: text.length,
-        hash: hashText(text),
-      };
-    });
-  const messages = roleNodes
-    .filter((entry) => entry.role === "assistant")
-    .map((entry, index) => {
-      const node = entry.node;
-      const text = readAssistantText(node);
-      return {
-        index,
-        turnIndex: entry.turnIndex,
-        id: readStableId(node),
-        text,
-        textLength: text.length,
-        hash: hashText(text),
-      };
-    });
-  const buttons = [...document.querySelectorAll('button, [role="button"]')]
+
+  // --- Element queries ---
+  const bodyText = document.body?.innerText || "";
+  const bodyTail = bodyText.slice(-4000);
+  const url = window.location.href;
+
+  const composer = document.querySelector("#prompt-textarea, textarea, [contenteditable='true']");
+  const composerText = composer ? (composer.value || composer.textContent || '').trim() : '';
+  const composerPromptHash = hashText(composerText);
+  const composerHasPrompt = composerText.length > 0;
+
+  const attachments = Array.from(document.querySelectorAll("main form [data-testid*='attachment'], main form [class*='attachment'], main form [class*='file-preview'], main form [data-testid*='file-preview']")).filter(el => {
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0 && el.tagName !== 'INPUT';
+  });
+  const progressBars = Array.from(document.querySelectorAll("[role='progressbar'], [class*='progress']"));
+
+  const attachmentNames = attachments.map(el => (el.innerText || el.textContent || el.getAttribute('aria-label') || '').trim());
+  const attachmentHashes = attachments.map(el => {
+    const text = el.innerText || el.textContent || el.getAttribute('aria-label') || '';
+    const img = el.querySelector('img');
+    const imgSrc = img ? (img.currentSrc || img.src || '') : '';
+    return hashText(text + ':' + imgSrc);
+  });
+  const attachmentCount = attachments.length;
+
+  const isUploadingFiles = attachments.some(el => {
+    return !!el.querySelector('[role="progressbar"], [class*="progress"], [class*="uploading"], [class*="loading"], [class*="spinner"]');
+  });
+
+  const roleNodes = [...document.querySelectorAll("[data-message-author-role], article")].filter(visible).filter(el => {
+    const rect = el.getBoundingClientRect();
+    return rect.width > 50 && rect.height > 20;
+  });
+
+  const distinctTurns = [];
+  const processedMessageIds = new Set();
+  for (const node of roleNodes) {
+    const isUser = node.getAttribute?.('data-message-author-role') === 'user' ||
+                   node.classList?.contains?.('user') ||
+                   node.querySelector?.('[data-message-author-role="user"]');
+    const role = isUser ? 'user' : 'assistant';
+    const id = readStableId(node);
+    if (id && processedMessageIds.has(id)) continue;
+    if (id) processedMessageIds.add(id);
+    distinctTurns.push({ node, role, id });
+  }
+
+  let userIndex = 0;
+  const userMessages = distinctTurns.filter(t => t.role === 'user').map(t => {
+    const text = String(t.node.innerText || t.node.textContent || "").trim();
+    return {
+      index: userIndex++,
+      turnIndex: distinctTurns.indexOf(t),
+      id: t.id,
+      text,
+      textLength: text.length,
+      hash: hashText(text),
+    };
+  });
+
+  let assistantIndex = 0;
+  const assistantMessages = distinctTurns.filter(t => t.role === 'assistant').map(t => {
+    const text = readAssistantText(t.node);
+    return {
+      index: assistantIndex++,
+      turnIndex: distinctTurns.indexOf(t),
+      id: t.id,
+      text,
+      textLength: text.length,
+      hash: hashText(text),
+    };
+  });
+
+  const latestAssistant = distinctTurns.filter(t => t.role === 'assistant').at(-1)?.node || null;
+  const latestAssistantText = latestAssistant ? (latestAssistant.innerText || "").trim() : "";
+  const latestAssistantHash = hashText(latestAssistantText);
+
+  const latestUserText = userMessages.at(-1)?.text || "";
+  const latestUserMessageHash = hashText(latestUserText);
+
+  const buttons = Array.from(document.querySelectorAll('button, [role="button"], label'))
     .map((node) => {
       const rect = node.getBoundingClientRect?.();
-      const text =
-        `${node.textContent || ""} ${node.getAttribute?.("aria-label") || ""} ${node.title || ""} ${node.getAttribute?.("data-testid") || ""}`.trim();
+      const text = `${node.textContent || ""} ${node.getAttribute?.("aria-label") || ""} ${node.title || ""} ${node.getAttribute?.("data-testid") || ""}`.trim();
       const html = String(node.innerHTML || "").slice(0, 1000);
-      return { rect, text, html };
+      const disabled = node.disabled || node.getAttribute('aria-disabled') === 'true';
+      return { rect, text, html, disabled, node };
     })
-    .filter((item) => item.rect && item.rect.width > 8 && item.rect.height > 8);
-  const composerButtons = buttons.filter(
+    .filter((item) => item.rect && item.rect.width > 4 && item.rect.height > 4);
+
+  const nearComposerButton = (item) =>
+    item.rect.left > window.innerWidth * 0.45 &&
+    item.rect.top > window.innerHeight * 0.58;
+
+  const stopButton = buttons.find((item) => {
+    if (!nearComposerButton(item)) return false;
+    const text = String(item.text || "").trim();
+    const html = String(item.html || "");
+    return (
+      /^(stop generating|stop responding|stop|cancel|dừng)$/i.test(text) ||
+      /data-testid=["']stop|data-icon=["']stop|stop-circle/i.test(html)
+    );
+  });
+  const stopButtonVisible = !!stopButton;
+
+  const sendBtn = buttons.find(
     (item) =>
-      item.rect.top > window.innerHeight * 0.58 &&
-      item.rect.left > window.innerWidth * 0.45,
+      nearComposerButton(item) &&
+      !/stop generating|stop responding|stop|cancel|dừng/i.test(item.text) &&
+      /send|submit|gửi|arrow-up|paper-plane|composer-submit/i.test(
+        `${item.text} ${item.html}`,
+      ),
   );
-  const stopVisible = composerButtons.some(
-    (item) =>
-      /stop generating|stop responding|stop|cancel|dá»«ng/i.test(item.text) ||
-      /<rect|data-icon=["']stop|stop-circle|square/i.test(item.html),
-  );
-  const sendReady =
-    composerButtons.some(
-      (item) =>
-        !/stop generating|stop responding|stop|cancel|dung/i.test(item.text) &&
-        /send|submit|gui|arrow-up|paper-plane|composer-submit/i.test(
-          `${item.text} ${item.html}`,
-        ),
-    ) && !stopVisible;
-  const streamingIndicator = [
+  const sendButtonVisible = !!(sendBtn && !sendBtn.disabled);
+
+  const streaming = stopButtonVisible || [
     ...document.querySelectorAll(
       '[aria-busy="true"], [role="progressbar"], [data-testid*="loading"], [data-testid*="spinner"], [class*="result-streaming"]',
     ),
-  ].some(visible);
-  const composerBusy = [
-    ...document.querySelectorAll(
-      'main form textarea, [contenteditable="true"], #prompt-textarea, [role="textbox"], [data-testid="composer"]',
-    ),
-  ]
-    .filter(visible)
-    .some((node) => {
-      const form = node.closest?.("form");
-      return (
-        node.disabled ||
-        node.getAttribute?.("aria-disabled") === "true" ||
-        node.getAttribute?.("aria-busy") === "true" ||
-        form?.getAttribute?.("aria-busy") === "true" ||
-        form?.className?.toString?.().match?.(/busy|disabled|loading/i)
-      );
-    });
+  ].filter(visible).length > 0;
+
+  const placeholderVisible = [
+    ...document.querySelectorAll("[class*='placeholder'], [class*='loading-image'], .aspect-square div div")
+  ].some(node => node.getBoundingClientRect().width > 10) ||
+  Array.from(document.querySelectorAll("canvas")).some(c => c.className.includes("dot") || c.className.includes("loading") || c.closest("[class*='loading']") || c.closest("[class*='preparing']"));
+
+  const progressVisible = placeholderVisible || streaming;
+
+  const images = latestAssistant ? Array.from(latestAssistant.querySelectorAll("img, canvas")) : [];
+  const completeImages = images.filter(img => img.tagName === "CANVAS" || img.complete);
+  const imageElementCount = images.length;
+  const imageCompleteCount = completeImages.length;
+
+  const latestAssistantHasImage = images.some(node => node.tagName === "IMG");
+  const latestAssistantHasCanvas = images.some(node => node.tagName === "CANVAS");
+  const latestAssistantHasText = latestAssistantText.length > 10;
+
+  const stoppedTextDetected = /stopped creating image|image generation stopped|creation stopped|stopped generating/i.test(bodyTail);
+  const policyRefusalDetected = /policy|refusal|violate|tiêu chuẩn cộng đồng|chính sách/i.test(bodyTail);
+  const loggedOut = /Sign in|Log in|Đăng nhập|Sign up|Đăng ký/i.test(document.title || "") || !!document.querySelector('input[type="password"]');
+  const disconnected = /disconnected|reconnect|mất kết nối/i.test(bodyTail);
+
+  const voiceReady = buttons.some(
+    (item) =>
+      /voice|mic|microphone|record|dictate/i.test(item.text) ||
+      /waveform|audio|voice|mic/i.test(item.html),
+  );
+
+  const composerReady = Boolean(composer);
+  const composerReadyForSend = composerHasPrompt && sendButtonVisible;
+
+  let currentChatId = "";
+  const match = url.match(/\/c\/([a-f0-9-]+)/i) || url.match(/\/chats\/([a-f0-9-]+)/i);
+  if (match) currentChatId = match[1];
+
+  const domNodeCount = document.getElementsByTagName('*').length;
+  const canvasCount = document.querySelectorAll('canvas').length;
+
+  let composerState = "EMPTY";
+  const hasFiles = attachmentCount > 0;
+  const hasText = composerHasPrompt;
+  if (streaming) {
+    if (placeholderVisible) {
+      composerState = "WAIT_ACCEPT";
+    } else {
+      composerState = "WAIT_RESPONSE";
+    }
+  } else if (isUploadingFiles) {
+    composerState = "ATTACHING_FILES";
+  } else if (hasFiles && !hasText) {
+    composerState = "FILES_READY";
+  } else if (hasText && !hasFiles) {
+    composerState = "PROMPT_READY";
+  } else if (hasFiles && hasText) {
+    if (sendButtonVisible) {
+      composerState = "READY_TO_SEND";
+    } else {
+      composerState = "PROMPT_READY";
+    }
+  } else {
+    composerState = "EMPTY";
+  }
+
+  const rawUserCount = userMessages.length;
+  const rawAssistantCount = assistantMessages.length;
+  let waitingForAssistantMessage = false;
+  if (rawUserCount > 0) {
+    waitingForAssistantMessage = rawAssistantCount < rawUserCount;
+  } else {
+    const allArticles = [...document.querySelectorAll('article, .message')];
+    if (allArticles.length > 0) {
+      const lastArticle = allArticles.at(-1);
+      const isUser = lastArticle.querySelector?.('[data-message-author-role="user"]') ||
+                     lastArticle.className.includes("user") ||
+                     /NHIỆM\s*VỤ/i.test(lastArticle.innerText || "");
+      waitingForAssistantMessage = !!isUser;
+    }
+  }
+
   const activeGenerationMarker = [
     ...document.querySelectorAll(
       '[data-testid*="composer"] [aria-busy="true"], main form [aria-busy="true"], [class*="streaming"], [data-is-streaming="true"]',
     ),
   ].some(visible);
-  return {
-    ok: true,
-    url: location.href,
-    count: messages.length,
-    userCount: userMessages.length,
-    maxTurnIndex: roleNodes.length ? roleNodes.at(-1).turnIndex : -1,
-    ids: messages.map((message) => message.id).filter(Boolean),
-    hashes: messages.map((message) => message.hash).filter(Boolean),
-    userIds: userMessages.map((message) => message.id).filter(Boolean),
-    userHashes: userMessages.map((message) => message.hash).filter(Boolean),
-    userMessages,
-    latestUserTurnIndex: userMessages.at(-1)?.turnIndex ?? -1,
-    stopVisible,
-    composerBusy,
-    streamingIndicator,
-    activeGenerationMarker,
-    generationActive: Boolean(
-      composerBusy || streamingIndicator || activeGenerationMarker,
-    ),
-    sendReady,
-    messages,
-  };
-}
 
-/**
- * @deprecated Use chatgpt_runtime_monitor instead.
- */
-function readLatestAssistantScript() {
-  const bodyText = document.body?.innerText || "";
-  const bodyTail = bodyText.slice(-4000);
+  const rendererOOM = /Aw, Snap|Something went wrong|Out of Memory|Page crashed|Error code:\s*Out of Memory/i.test((document.title || "") + "\n" + bodyText) || /^chrome-error:\/\//i.test(url);
 
-  const visible = (node) => {
-    const rect = node.getBoundingClientRect?.();
-    if (!rect || rect.width < 4 || rect.height < 4) return false;
-    const style = window.getComputedStyle?.(node);
-    return !(
-      style &&
-      (style.visibility === "hidden" ||
-        style.display === "none" ||
-        Number(style.opacity || 1) === 0)
-    );
-  };
-
-  const buttons = [...document.querySelectorAll('button, [role="button"]')]
-    .map((node) => {
-      const rect = node.getBoundingClientRect?.();
-      const text =
-        `${node.textContent || ""} ${node.getAttribute?.("aria-label") || ""} ${node.title || ""}`.trim();
-      const html = String(node.innerHTML || "").slice(0, 1000);
-      return { rect, text, html };
-    })
-    .filter((item) => item.rect && item.rect.width > 8 && item.rect.height > 8);
-
-  const composerButtons = buttons.filter(
-    (item) =>
-      item.rect.top > window.innerHeight * 0.72 &&
-      item.rect.left > window.innerWidth * 0.55,
-  );
-  const stopButton = composerButtons.some(
-    (item) =>
-      /stop|cancel|dừng/i.test(item.text) ||
-      /<rect|data-icon=["']stop|stop-circle|square/i.test(item.html),
-  );
-  const voiceReady = composerButtons.some(
-    (item) =>
-      /voice|mic|microphone|record|dictate/i.test(item.text) ||
-      /waveform|audio|voice|mic/i.test(item.html),
-  );
-  const sendReady =
-    composerButtons.some(
-      (item) =>
-        !/stop|cancel|dung/i.test(item.text) &&
-        /send|submit|gui|arrow-up|paper-plane|composer-submit/i.test(
-          `${item.text} ${item.html}`,
-        ),
-    ) && !stopButton;
-
-  const thinkingText =
-    /Thinking about your request|Đang suy nghĩ|Generating|Creating/i.test(
-      bodyTail,
-    );
-  const streamingIndicator =
-    stopButton ||
-    [
-      ...document.querySelectorAll(
-        '[aria-busy="true"], [role="progressbar"], [data-testid*="loading"], [data-testid*="spinner"], [class*="result-streaming"]',
-      ),
-    ].some(visible);
-
-  const selectors = [
-    '[data-message-author-role="assistant"] .markdown',
-    '[data-message-author-role="assistant"]',
-    ".markdown",
-    "article .markdown",
-    'main [data-message-author-role="assistant"]',
-    "article",
-    ".message",
-    '[class*="response"]',
-  ];
-
-  let text = "";
-  let source = "empty";
-
-  for (const selector of selectors) {
-    const nodes = [...document.querySelectorAll(selector)]
-      .filter(visible)
-      .filter((node) => {
-        if (node.closest?.('[data-message-author-role="user"]')) return false;
-        if (node.querySelector?.('[data-message-author-role="user"]'))
-          return false;
-
-        const t = (node.innerText || "").trim();
-        if (t.length <= 20) return false;
-        if (
-          /^NHIỆM\s*VỤ\s*1\s*:|^NHIỆM\s*VỤ\s*2\s*:|^---\s*SCENE|^Dựa trên ảnh keyframe|Show more/i.test(
-            t,
-          ) &&
-          t.length < 300
-        )
-          return false;
-        return true;
-      });
-
-    if (nodes.length > 0) {
-      const lastNode = nodes.at(-1);
-      const extractedText = (
-        lastNode.innerText ||
-        lastNode.textContent ||
-        ""
-      ).trim();
-      if (extractedText.length > 20) {
-        text = extractedText;
-        source = selector;
-        break;
-      }
-    }
-  }
-
-  if (!text) {
-    const fallbackNodes = [
-      ...document.querySelectorAll(
-        '[data-message-author-role="assistant"], article',
-      ),
-    ]
-      .filter(visible)
-      .filter((node) => {
-        if (node.closest?.('[data-message-author-role="user"]')) return false;
-        const t = (node.innerText || "").trim();
-        return t.length > 20;
-      });
-    if (fallbackNodes.length > 0) {
-      text = fallbackNodes.at(-1).innerText.trim();
-      source = "fallback-unfiltered";
-    }
-  }
-
-  const generating = sendReady
-    ? false
-    : stopButton || (thinkingText && !voiceReady);
-
-  const assistants = Array.from(document.querySelectorAll("[data-message-author-role='assistant'], article")).filter(el => {
-    const r = el.getBoundingClientRect();
-    const txt = (el.innerText || el.textContent || "").trim();
-    if (el.getAttribute?.('data-message-author-role') === 'user' || el.querySelector?.('[data-message-author-role="user"]')) {
-      return false;
-    }
-    return r.width > 50 && r.height > 20 && txt.length > 0;
+  const attachmentsData = attachments.map(el => {
+    const text = (el.innerText || el.textContent || el.getAttribute('aria-label') || '').trim();
+    const img = el.querySelector('img');
+    const imgSrc = img ? (img.currentSrc || img.src || '') : '';
+    return { text, imgSrc };
   });
 
   return {
-    count: assistants.length,
-    text,
-    textLength: text.length,
-    source,
-    generating,
-    generation: false,
-    streamingIndicator,
-    stopButton,
-    sendReady,
+    ok: true,
+    url,
+    composerReady,
+    composerReadyForSend,
+    composerBusy: Boolean(progressBars.length > 0 || stopButtonVisible || isUploadingFiles),
+    hasUploadedFiles: hasFiles,
+    attachmentsCount: attachmentCount,
+    attachmentsCompleted: attachmentCount - progressBars.length,
+    progressBarsCount: progressBars.length,
+    composerText,
+    composerPromptHash,
+    composerState,
+    assistantMessageCount: assistantMessages.length,
+    latestAssistantTextLength: latestAssistantText.length,
+    latestAssistantText,
+    latestAssistantHash,
+    latestUserText,
+    latestUserMessageHash,
+    userMessages,
+    assistantMessages,
+    attachmentNames,
+    attachmentHashes,
+    attachments: attachmentsData,
+    textStreamingActive: streaming,
+    streaming,
+    stopVisible: stopButtonVisible,
+    stopButtonVisible,
+    sendButtonVisible,
+    placeholderVisible,
+    progressVisible,
+    assistantGenerating: streaming,
+    latestAssistantHasImage,
+    latestAssistantHasCanvas,
+    latestAssistantHasText,
+    imageElementCount,
+    imageCompleteCount,
+    stoppedTextDetected,
+    policyRefusalDetected,
+    loggedOut,
+    disconnected,
+    currentChatId,
+    domNodeCount,
+    canvasCount,
+    waitingForAssistantMessage,
     voiceReady,
-    composerButtonCount: buttons.length,
-    mode: source,
+    activeGenerationMarker,
+    buttonsCount: buttons.length,
+    rendererOOM,
+    timestamp: Date.now(),
   };
 }
+
+function createWrapper(bodyCode) {
+  return new Function(`
+    const extractConversationSnapshot = ${extractConversationSnapshot.toString()};
+    ${bodyCode}
+  `);
+}
+
+const countAssistantMessagesScript = createWrapper(`
+  const snap = extractConversationSnapshot();
+  return snap.assistantMessageCount;
+`);
+
+const countChatGptAssistantRootsScript = createWrapper(`
+  const snap = extractConversationSnapshot();
+  return { count: snap.assistantMessageCount, mode: "unified-assistant-roots" };
+`);
+
+const getConversationStateScript = createWrapper(`
+  const snap = extractConversationSnapshot();
+  
+  const conversationFingerprint = snap.currentChatId + ":" + snap.latestAssistantHash + ":" + snap.latestUserMessageHash + ":" + (snap.userMessages.length + snap.assistantMessages.length);
+  let hash = 2166136261;
+  for (let index = 0; index < conversationFingerprint.length; index += 1) {
+    hash ^= conversationFingerprint.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  const fingerprintHash = (hash >>> 0).toString(16);
+
+  return {
+    ok: snap.ok,
+    composerState: snap.composerState,
+    latestAssistantHash: snap.latestAssistantHash,
+    conversationLength: snap.userMessages.length + snap.assistantMessages.length,
+    conversationFingerprint: fingerprintHash,
+    composerHasPrompt: snap.composerText.length > 0,
+    composerPromptHash: snap.composerPromptHash,
+    attachmentCount: snap.attachmentsCount,
+    attachmentNames: snap.attachmentNames,
+    attachmentHashes: snap.attachmentHashes,
+    composerReady: snap.composerReady && snap.sendButtonVisible,
+    sendButtonVisible: snap.sendButtonVisible,
+    stopButtonVisible: snap.stopButtonVisible,
+    streaming: snap.streaming,
+    placeholderVisible: snap.placeholderVisible,
+    progressVisible: snap.progressVisible,
+    assistantGenerating: snap.streaming,
+    latestAssistantHasImage: snap.latestAssistantHasImage,
+    latestAssistantHasCanvas: snap.latestAssistantHasCanvas,
+    latestAssistantHasText: snap.latestAssistantHasText,
+    latestUserMessageHash: snap.latestUserMessageHash,
+    rendererAlive: !snap.rendererOOM,
+    rendererOOM: snap.rendererOOM,
+    loggedOut: snap.loggedOut,
+    disconnected: snap.disconnected,
+    pageReloaded: false,
+    conversationAvailable: snap.url.includes('/c/') || snap.url.includes('/chats/'),
+    currentChatId: snap.currentChatId,
+    domNodeCount: snap.domNodeCount,
+    canvasCount: snap.canvasCount,
+    attachmentPreviewCount: snap.attachmentsCount,
+  };
+`);
+
+const readAssistantMessageSnapshotScript = createWrapper(`
+  const snap = extractConversationSnapshot();
+  return {
+    ok: snap.ok,
+    url: snap.url,
+    count: snap.assistantMessageCount,
+    userCount: snap.userMessages.length,
+    maxTurnIndex: snap.userMessages.length + snap.assistantMessageCount > 0 ? snap.userMessages.length + snap.assistantMessageCount - 1 : -1,
+    ids: snap.assistantMessages.map(m => m.id).filter(Boolean),
+    hashes: snap.assistantMessages.map(m => m.hash).filter(Boolean),
+    userIds: snap.userMessages.map(m => m.id).filter(Boolean),
+    userHashes: snap.userMessages.map(m => m.hash).filter(Boolean),
+    userMessages: snap.userMessages,
+    latestUserTurnIndex: snap.userMessages.at(-1)?.turnIndex ?? -1,
+    stopVisible: snap.stopVisible,
+    composerBusy: snap.composerBusy,
+    streamingIndicator: snap.streaming,
+    activeGenerationMarker: snap.activeGenerationMarker,
+    generationActive: Boolean(snap.composerBusy || snap.streaming || snap.activeGenerationMarker),
+    messages: snap.assistantMessages,
+  };
+`);
+
+const readLatestAssistantScript = createWrapper(`
+  const snap = extractConversationSnapshot();
+  const text = snap.latestAssistantText;
+  return {
+    count: snap.assistantMessageCount,
+    text,
+    textLength: text.length,
+    source: text ? "extract-conversation-snapshot" : "empty",
+    generating: snap.sendButtonVisible ? false : (snap.stopButtonVisible || (snap.streaming && !snap.voiceReady)),
+    generation: false,
+    streamingIndicator: snap.streaming,
+    stopButton: snap.stopButtonVisible,
+    sendReady: snap.sendButtonVisible,
+    voiceReady: snap.voiceReady,
+    composerButtonCount: snap.buttonsCount,
+    mode: text ? "extract-conversation-snapshot" : "empty",
+  };
+`);
+
+const readChatGptImageStateScript = createWrapper(`
+  const snap = extractConversationSnapshot();
+  
+  const stoppedCreatingImage = /stopped creating image|image generation stopped|creation stopped|stopped generating/i.test(snap.latestAssistantText);
+  const preparingImage = !stoppedCreatingImage && /preparing image|creating image|generating image|đang tạo ảnh|đang chuẩn bị ảnh|hoàn thiện.*nét cuối|polishing.*touches/i.test(snap.latestAssistantText);
+  const waitingForAssistantMessage = snap.waitingForAssistantMessage;
+  const thinking = !stoppedCreatingImage && /Thinking|Thinking about your request|Đang suy nghĩ|Generating|Creating/i.test(snap.latestAssistantText || snap.bodyTail);
+
+  const mediaRoots = [
+    ...document.querySelectorAll(
+      '[data-message-author-role="assistant"], article, .message, [class*="response"]',
+    ),
+  ].filter(
+    (node) =>
+      node.querySelector?.("img, picture source, canvas") ||
+      /Generated image/i.test(node.innerText || ""),
+  );
+  const mediaRoot = mediaRoots.at(-1);
+  const urls = [];
+  if (mediaRoot) {
+    const foundUrls = [...mediaRoot.querySelectorAll("img, picture source")]
+      .filter((node) => {
+        const label = \`\${node.alt || ""} \${node.getAttribute?.("aria-label") || ""} \${node.className || ""}\`;
+        if (/avatar|profile|logo|icon|emoji/i.test(label)) return false;
+        if (node.tagName === "IMG") {
+          if (!node.complete || !node.naturalWidth || node.naturalWidth < 120) return false;
+        } else {
+          const rect = node.getBoundingClientRect?.();
+          if (!rect || rect.width < 120 || rect.height < 80) return false;
+        }
+        return true;
+      })
+      .map(
+        (node) =>
+          node.currentSrc ||
+          node.src ||
+          node.getAttribute("srcset") ||
+          node.getAttribute("src") ||
+          "",
+      )
+      .filter((url) => /^https?:|^blob:|^data:image\\//i.test(url));
+    urls.push(...foundUrls);
+  }
+
+  const completedVisibleImage = urls.length > 0 && !snap.composerBusy && !thinking;
+
+  const generating = waitingForAssistantMessage
+    ? true
+    : stoppedCreatingImage || completedVisibleImage
+      ? false
+      : snap.sendButtonVisible
+        ? false
+        : snap.stopButtonVisible ||
+          snap.streaming ||
+          snap.composerBusy ||
+          (preparingImage && !completedVisibleImage) ||
+          (thinking && !completedVisibleImage);
+
+  return {
+    generating,
+    waitingForAssistantMessage,
+    stopButton: snap.stopButtonVisible,
+    preparingImage: stoppedCreatingImage ? false : preparingImage,
+    stoppedCreatingImage,
+    stopButtonVisible: snap.stopButtonVisible,
+    sendReady: snap.sendButtonVisible && !snap.stopButtonVisible,
+    sendText: snap.sendButtonVisible ? "send" : "",
+    composerBusy: snap.composerBusy,
+    streamingIndicator: snap.streaming,
+    matchedStreamingIndicators: [],
+    loggedOut: snap.loggedOut,
+    logoutReason: snap.loggedOut ? "ChatGPT page is showing sign-in/sign-up while waiting for image." : "",
+    voiceReady: snap.voiceReady,
+    composerButtonCount: snap.buttonsCount,
+    buttonText: "",
+    urls,
+    visibleImageBoxCount: urls.length,
+    completedVisibleImage,
+    assistantCount: snap.assistantMessageCount,
+    latestAssistantText: snap.latestAssistantText,
+    assistantMode: snap.assistantMessageCount > 0 ? "assistant-role" : "fallback-non-user",
+  };
+`);
 
 module.exports = {
   clickChatGptStartNewChatScript,
