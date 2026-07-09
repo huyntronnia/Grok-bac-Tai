@@ -1014,8 +1014,15 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
           return { text, imgSrc };
         });
 
-        // 2. Assistant Message Nodes
-        const assistants = Array.from(document.querySelectorAll("[data-message-author-role='assistant']"));
+        // 2. Assistant Message Nodes (aligned with vidoraReadChatGptComposerStateReal)
+        const assistants = Array.from(document.querySelectorAll("[data-message-author-role='assistant'], article")).filter(el => {
+          const r = el.getBoundingClientRect();
+          const txt = (el.innerText || el.textContent || "").trim();
+          if (el.getAttribute('data-message-author-role') === 'user' || el.querySelector('[data-message-author-role="user"]')) {
+            return false;
+          }
+          return r.width > 50 && r.height > 20 && txt.length > 0;
+        });
         const latestAssistant = assistants.at(-1);
         const latestText = latestAssistant ? (latestAssistant.innerText || "").trim() : "";
 
