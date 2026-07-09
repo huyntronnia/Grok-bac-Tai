@@ -109,11 +109,70 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
     this.onFrameNavigated = this.onFrameNavigated.bind(this);
   }
 
+  reset() {
+    this.state = "IDLE";
+    this.intent = "UNKNOWN";
+    this.confidence = 1.0;
+
+    this.metrics.dom = {
+      composerReady: false,
+      composerBusy: false,
+      hasUploadedFiles: false,
+      attachmentsCount: 0,
+      attachmentsCompleted: 0,
+      composerPromptHash: "",
+      attachmentNames: [],
+      attachmentHashes: [],
+      composerState: "READY",
+      latestUserMessageHash: "",
+      latestAssistantHash: "",
+      assistantMessageCount: 0,
+      latestAssistantText: "",
+      latestAssistantTextLength: 0,
+      textStreamingActive: false,
+      dalleActive: false,
+      searchBadgeVisible: false,
+      reasoningActive: false,
+      pythonCodeInterpreterActive: false,
+      canvasActive: false,
+      placeholderVisible: false,
+      imageElementCount: 0,
+      imageCompleteCount: 0,
+      stoppedTextDetected: false,
+      policyRefusalDetected: false,
+      loggedOut: false,
+      lastMutationTimestamp: Date.now(),
+    };
+
+    this.metrics.network = {
+      dalleUrlsCaptured: [],
+      activeMediaRequests: 0,
+    };
+
+    this.metrics.runtime = {
+      lastConsoleError: "",
+      lastException: "",
+    };
+
+    this.metrics.navigation = {
+      url: "",
+      rotating: false,
+    };
+
+    this.identity = {
+      chatUrl: "",
+      conversationId: "",
+      assistantRootIndex: 0,
+      latestImageUrl: "",
+    };
+  }
+
   // --- Start & Stop Monitoring API ---
   async startMonitoring(page) {
     if (!page) {
       throw new Error("Cannot start monitor: CDP page client is missing.");
     }
+    this.reset();
     this.page = page;
     this.health.cdpConnected = true;
 

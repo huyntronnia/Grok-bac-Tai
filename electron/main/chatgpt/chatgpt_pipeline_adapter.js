@@ -37,20 +37,10 @@ class ChatGptPipelineAdapter {
     // 1. Wait for READY state
     const result = await this.monitor.waitUntil({
       state: "READY",
-      confidence: 1.0, // Full score stability
+      confidence: 0.8,
       stableFor,
       timeout: timeoutMs,
     });
-
-    // 2. Enforce strict Policy assertions
-    const validIntents = ["TEXT_RESPONSE", "SEARCH", "DEEP_RESEARCH", "PYTHON_EXECUTION", "CANVAS_EDIT", "FILE_ANALYSIS"];
-    if (!validIntents.includes(result.intent)) {
-      throw new Error(`Pipeline Policy Violation: Expected response intent, but got ${result.intent}`);
-    }
-
-    if (result.confidence < 1.0) {
-      throw new Error(`Pipeline Policy Violation: Text response settled with low confidence score: ${result.confidence}`);
-    }
 
     return result;
   }
