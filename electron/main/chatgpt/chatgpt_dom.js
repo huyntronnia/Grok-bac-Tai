@@ -2160,7 +2160,10 @@ function prepareChatGptCreateImageScript() {
 // readAssistantMessageSnapshotScript replaced by dynamic wrapper
 // readLatestAssistantScript replaced by dynamic wrapper
 
-function extractConversationSnapshot() {
+
+function extractConversationSnapshot(options = {}) {
+  const light = Boolean(options && options.light);
+
   const visible = (node) => {
     const rect = node?.getBoundingClientRect?.();
     if (!rect || rect.width < 4 || rect.height < 4) return false;
@@ -2174,6 +2177,7 @@ function extractConversationSnapshot() {
   };
 
   const hashText = (value = "") => {
+    if (light) return "";
     const text = String(value || "").replace(/\s+/g, " ").trim();
     let hash = 2166136261;
     for (let index = 0; index < text.length; index += 1) {
@@ -2184,6 +2188,7 @@ function extractConversationSnapshot() {
   };
 
   const readStableId = (node) => {
+    if (light) return "";
     const candidates = [
       node.getAttribute?.("data-message-id"),
       node.getAttribute?.("data-testid"),
@@ -2239,8 +2244,8 @@ function extractConversationSnapshot() {
   });
   const progressBars = Array.from(document.querySelectorAll("[role='progressbar'], [class*='progress']"));
 
-  const attachmentNames = attachments.map(el => (el.innerText || el.textContent || el.getAttribute('aria-label') || '').trim());
-  const attachmentHashes = attachments.map(el => {
+  const attachmentNames = light ? [] : attachments.map(el => (el.innerText || el.textContent || el.getAttribute('aria-label') || '').trim());
+  const attachmentHashes = light ? [] : attachments.map(el => {
     const text = el.innerText || el.textContent || el.getAttribute('aria-label') || '';
     const img = el.querySelector('img');
     const imgSrc = img ? (img.currentSrc || img.src || '') : '';
@@ -2252,62 +2257,66 @@ function extractConversationSnapshot() {
     return !!el.querySelector('[role="progressbar"], [class*="progress"], [class*="uploading"], [class*="loading"], [class*="spinner"]');
   });
 
-  const roleNodes = [...document.querySelectorAll("[data-message-author-role], article")].filter(visible).filter(el => {
-    const rect = el.getBoundingClientRect();
-    return rect.width > 50 && rect.height > 20;
-  });
-
-  const distinctTurns = [];
-  const processedMessageIds = new Set();
-  for (const node of roleNodes) {
-    const isUser = node.getAttribute?.('data-message-author-role') === 'user' ||
-                   node.classList?.contains?.('user') ||
-                   node.querySelector?.('[data-message-author-role="user"]');
-    const role = isUser ? 'user' : 'assistant';
-    const id = readStableId(node);
-    if (id && processedMessageIds.has(id)) continue;
-    if (id) processedMessageIds.add(id);
-    distinctTurns.push({ node, role, id });
+  // Unified Single DOM Traversal for User/Assistant Turns
+  const assistantsAndArticles = Array.from(document.querySelectorAll("[data-message-author-role='assistant'], [data-message-author-role='user'], article, .message")).filter(visible);
+  const userNodes = [];
+  const assistantNodes = [];
+  
+  for (const el of assistantsAndArticles) {
+    const isUser = el.getAttribute?.('data-message-author-role') === 'user' ||
+                   el.classList?.contains?.('user') ||
+                   el.querySelector?.('[data-message-author-role="user"]');
+    if (isUser) {
+      userNodes.push(el);
+    } else {
+      assistantNodes.push(el);
+    }
   }
 
-  let userIndex = 0;
-  const userMessages = distinctTurns.filter(t => t.role === 'user').map(t => {
-    const text = String(t.node.innerText || t.node.textContent || "").trim();
-    return {
-      index: userIndex++,
-      turnIndex: distinctTurns.indexOf(t),
-      id: t.id,
-      text,
-      textLength: text.length,
-      hash: hashText(text),
-    };
-  });
-
-  let assistantIndex = 0;
-  const assistantMessages = distinctTurns.filter(t => t.role === 'assistant').map(t => {
-    const text = readAssistantText(t.node);
-    return {
-      index: assistantIndex++,
-      turnIndex: distinctTurns.indexOf(t),
-      id: t.id,
-      text,
-      textLength: text.length,
-      hash: hashText(text),
-    };
-  });
-
-  const latestAssistant = distinctTurns.filter(t => t.role === 'assistant').at(-1)?.node || null;
+  const latestAssistant = assistantNodes.at(-1);
   const latestAssistantText = latestAssistant ? (latestAssistant.innerText || "").trim() : "";
   const latestAssistantHash = hashText(latestAssistantText);
 
-  const latestUserText = userMessages.at(-1)?.text || "";
+  const latestUser = userNodes.at(-1);
+  const latestUserText = latestUser ? latestUser.innerText.trim() : '';
   const latestUserMessageHash = hashText(latestUserText);
 
+  const userMessages = [];
+  if (!light) {
+    userNodes.forEach((node, index) => {
+      const text = String(node.innerText || node.textContent || "").trim();
+      userMessages.push({
+        index,
+        turnIndex: index * 2,
+        id: readStableId(node),
+        text,
+        textLength: text.length,
+        hash: hashText(text),
+      });
+    });
+  }
+
+  const assistantMessages = [];
+  if (!light) {
+    assistantNodes.forEach((node, index) => {
+      const text = readAssistantText(node);
+      assistantMessages.push({
+        index,
+        turnIndex: index * 2 + 1,
+        id: readStableId(node),
+        text,
+        textLength: text.length,
+        hash: hashText(text),
+      });
+    });
+  }
+
+  // Buttons extraction
   const buttons = Array.from(document.querySelectorAll('button, [role="button"], label'))
     .map((node) => {
       const rect = node.getBoundingClientRect?.();
       const text = `${node.textContent || ""} ${node.getAttribute?.("aria-label") || ""} ${node.title || ""} ${node.getAttribute?.("data-testid") || ""}`.trim();
-      const html = String(node.innerHTML || "").slice(0, 1000);
+      const html = String(node.innerHTML || "").slice(0, 500);
       const disabled = node.disabled || node.getAttribute('aria-disabled') === 'true';
       return { rect, text, html, disabled, node };
     })
@@ -2351,7 +2360,8 @@ function extractConversationSnapshot() {
 
   const progressVisible = placeholderVisible || streaming;
 
-  const images = latestAssistant ? Array.from(latestAssistant.querySelectorAll("img, canvas")) : [];
+  // Skip deep image counts / canvas scans in light mode
+  const images = (!light && latestAssistant) ? Array.from(latestAssistant.querySelectorAll("img, canvas")) : [];
   const completeImages = images.filter(img => img.tagName === "CANVAS" || img.complete);
   const imageElementCount = images.length;
   const imageCompleteCount = completeImages.length;
@@ -2375,11 +2385,13 @@ function extractConversationSnapshot() {
   const composerReadyForSend = composerHasPrompt && sendButtonVisible;
 
   let currentChatId = "";
-  const match = url.match(/\/c\/([a-f0-9-]+)/i) || url.match(/\/chats\/([a-f0-9-]+)/i);
-  if (match) currentChatId = match[1];
+  if (!light) {
+    const match = url.match(/\/c\/([a-f0-9-]+)/i) || url.match(/\/chats\/([a-f0-9-]+)/i);
+    if (match) currentChatId = match[1];
+  }
 
-  const domNodeCount = document.getElementsByTagName('*').length;
-  const canvasCount = document.querySelectorAll('canvas').length;
+  const domNodeCount = light ? 0 : document.getElementsByTagName('*').length;
+  const canvasCount = light ? 0 : document.querySelectorAll('canvas').length;
 
   let composerState = "EMPTY";
   const hasFiles = attachmentCount > 0;
@@ -2406,8 +2418,8 @@ function extractConversationSnapshot() {
     composerState = "EMPTY";
   }
 
-  const rawUserCount = userMessages.length;
-  const rawAssistantCount = assistantMessages.length;
+  const rawUserCount = userNodes.length;
+  const rawAssistantCount = assistantNodes.length;
   let waitingForAssistantMessage = false;
   if (rawUserCount > 0) {
     waitingForAssistantMessage = rawAssistantCount < rawUserCount;
@@ -2437,6 +2449,15 @@ function extractConversationSnapshot() {
     return { text, imgSrc };
   });
 
+  const toolBlocks = Array.from(document.querySelectorAll("[data-message-author-role='assistant'] [class*='tool'], [data-message-author-role='assistant'] [class*='dalle'], .dalle-tool, [data-testid*='dalle']"));
+  const hasDalleTool = toolBlocks.some(block => /dall-e|dalle|image/i.test(block.innerText || block.textContent || block.className || ""));
+  const isDalleActive = hasDalleTool && (streaming || progressBars.length > 0 || stopButtonVisible);
+
+  const hasSearchBadge = Boolean(document.querySelector("[class*='search'], [class*='web-search'], .search-badge"));
+  const isReasoning = /\bThinking\b|Đang suy nghĩ/i.test(bodyTail);
+  const isPythonActive = Boolean(document.querySelector("[class*='code-interpreter'], [class*='python']"));
+  const isCanvasActive = Boolean(document.querySelector("[class*='canvas'], #canvas-panel"));
+
   return {
     ok: true,
     url,
@@ -2450,7 +2471,7 @@ function extractConversationSnapshot() {
     composerText,
     composerPromptHash,
     composerState,
-    assistantMessageCount: assistantMessages.length,
+    assistantMessageCount: assistantNodes.length,
     latestAssistantTextLength: latestAssistantText.length,
     latestAssistantText,
     latestAssistantHash,
@@ -2486,30 +2507,36 @@ function extractConversationSnapshot() {
     activeGenerationMarker,
     buttonsCount: buttons.length,
     rendererOOM,
+    dalleActive: isDalleActive,
+    searchBadgeVisible: hasSearchBadge,
+    reasoningActive: isReasoning,
+    pythonCodeInterpreterActive: isPythonActive,
+    canvasActive: isCanvasActive,
     timestamp: Date.now(),
   };
 }
 
-function createWrapper(bodyCode) {
-  return new Function(`
-    const extractConversationSnapshot = ${extractConversationSnapshot.toString()};
+function createOptimizedWrapper(bodyCode) {
+  const fn = function() {};
+  fn.toString = () => `(() => {
+    if (typeof window.__extractConversationSnapshot !== 'function') {
+      window.__extractConversationSnapshot = ${extractConversationSnapshot.toString()};
+    }
+    const snap = window.__extractConversationSnapshot();
     ${bodyCode}
-  `);
+  })()`;
+  return fn;
 }
 
-const countAssistantMessagesScript = createWrapper(`
-  const snap = extractConversationSnapshot();
+const countAssistantMessagesScript = createOptimizedWrapper(`
   return snap.assistantMessageCount;
 `);
 
-const countChatGptAssistantRootsScript = createWrapper(`
-  const snap = extractConversationSnapshot();
+const countChatGptAssistantRootsScript = createOptimizedWrapper(`
   return { count: snap.assistantMessageCount, mode: "unified-assistant-roots" };
 `);
 
-const getConversationStateScript = createWrapper(`
-  const snap = extractConversationSnapshot();
-  
+const getConversationStateScript = createOptimizedWrapper(`
   const conversationFingerprint = snap.currentChatId + ":" + snap.latestAssistantHash + ":" + snap.latestUserMessageHash + ":" + (snap.userMessages.length + snap.assistantMessages.length);
   let hash = 2166136261;
   for (let index = 0; index < conversationFingerprint.length; index += 1) {
@@ -2553,8 +2580,7 @@ const getConversationStateScript = createWrapper(`
   };
 `);
 
-const readAssistantMessageSnapshotScript = createWrapper(`
-  const snap = extractConversationSnapshot();
+const readAssistantMessageSnapshotScript = createOptimizedWrapper(`
   return {
     ok: snap.ok,
     url: snap.url,
@@ -2576,8 +2602,7 @@ const readAssistantMessageSnapshotScript = createWrapper(`
   };
 `);
 
-const readLatestAssistantScript = createWrapper(`
-  const snap = extractConversationSnapshot();
+const readLatestAssistantScript = createOptimizedWrapper(`
   const text = snap.latestAssistantText;
   return {
     count: snap.assistantMessageCount,
@@ -2595,9 +2620,7 @@ const readLatestAssistantScript = createWrapper(`
   };
 `);
 
-const readChatGptImageStateScript = createWrapper(`
-  const snap = extractConversationSnapshot();
-  
+const readChatGptImageStateScript = createOptimizedWrapper(`
   const stoppedCreatingImage = /stopped creating image|image generation stopped|creation stopped|stopped generating/i.test(snap.latestAssistantText);
   const preparingImage = !stoppedCreatingImage && /preparing image|creating image|generating image|đang tạo ảnh|đang chuẩn bị ảnh|hoàn thiện.*nét cuối|polishing.*touches/i.test(snap.latestAssistantText);
   const waitingForAssistantMessage = snap.waitingForAssistantMessage;

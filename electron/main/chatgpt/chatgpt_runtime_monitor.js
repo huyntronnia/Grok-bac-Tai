@@ -997,7 +997,7 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
 
       const collectMetrics = () => {
         try {
-          const snap = extractConversationSnapshot();
+          const snap = extractConversationSnapshot({ light: true });
           const metricsPayload = {
             composerReady: snap.composerReady,
             composerBusy: snap.composerBusy,
