@@ -1159,10 +1159,7 @@ async function runScenePipelineLockedInternal(_event, options) {
       await persistDurableStage(projectDir, sceneId, "nv1_prepare", {
         keyframePath: expectedImagePath,
       }).catch(() => null);
-      await persistDurableStage(projectDir, sceneId, "nv1_sent", {
-        keyframePath: expectedImagePath,
-      }).catch(() => null);
-      await persistDurableStage(projectDir, sceneId, "nv1_waiting_image", {
+      await persistDurableStage(projectDir, sceneId, "nv1_requesting_image", {
         keyframePath: expectedImagePath,
       }).catch(() => null);
       await appendAppLog(null, {
@@ -1211,6 +1208,7 @@ async function runScenePipelineLockedInternal(_event, options) {
       }
       if (motionPrompt) {
         options.__nv2Succeeded = true;
+        await fs.mkdir(sceneDir, { recursive: true });
         await fs.writeFile(
           path.join(sceneDir, "motion_prompt.txt"),
           motionPrompt,
@@ -1289,6 +1287,7 @@ async function runScenePipelineLockedInternal(_event, options) {
       keyframeMotionPromptOnly,
     });
     assertPipelineRunActive(runId);
+    await fs.mkdir(sceneDir, { recursive: true });
     await fs.writeFile(
       path.join(sceneDir, "motion_prompt.txt"),
       motionPrompt,

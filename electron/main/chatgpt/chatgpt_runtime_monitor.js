@@ -21,7 +21,7 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
     this.intent = "UNKNOWN";
     this.confidence = 1.0;
     this.metricsVersion = 1;
-    
+
     // Sessions Identities
     this.identity = {
       runId: "",
@@ -36,7 +36,7 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
 
     // Diagnostic timeline log
     this.timeline = [];
-    
+
     // Watchdog Timers
     this.watchdogs = {};
     this.watchdogRules = {
@@ -113,6 +113,7 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
     this.state = "IDLE";
     this.intent = "UNKNOWN";
     this.confidence = 1.0;
+    this.intentOverride = null;
 
     this.metrics.dom = {
       composerReady: false,
@@ -178,6 +179,86 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
 
     this.logEvent("SYSTEM", "Monitoring starting");
 
+    if (page.clientType === "playwright") {
+      try {
+        const rawPage = page.page;
+
+        await rawPage.exposeFunction("chatgptUiMonitorBinding", (payloadStr) => {
+          this.onBindingCalled({
+            name: "chatgptUiMonitorBinding",
+            payload: payloadStr,
+          });
+        }).catch(() => null);
+
+        const reqIdMap = new WeakMap();
+        const getReqId = (req) => {
+          if (!reqIdMap.has(req)) {
+            reqIdMap.set(req, String(Math.random()));
+          }
+          return reqIdMap.get(req);
+        };
+
+        rawPage.on("response", (response) => {
+          const requestId = getReqId(response.request());
+          this.onResponseReceived({
+            requestId,
+            response: {
+              url: response.url(),
+              mimeType: response.headers()["content-type"] || "",
+            }
+          });
+        });
+
+        rawPage.on("requestfinished", (request) => {
+          const requestId = getReqId(request);
+          this.onLoadingFinished({ requestId });
+        });
+
+        rawPage.on("console", (msg) => {
+          this.onConsoleAPICalled({
+            type: msg.type(),
+            args: msg.args().map(arg => ({ value: String(arg) })),
+          });
+        });
+
+        rawPage.on("pageerror", (error) => {
+          this.onExceptionThrown({
+            exceptionDetails: {
+              text: error.message,
+              exception: {
+                description: error.stack,
+              }
+            }
+          });
+        });
+
+        rawPage.on("framenavigated", (frame) => {
+          this.onFrameNavigated({
+            frame: {
+              parentId: frame.parentFrame() ? "child" : undefined,
+              url: frame.url(),
+            }
+          });
+        });
+
+        const browserCode = this.getBrowserScriptCode();
+        await rawPage.addInitScript(browserCode).catch(() => null);
+        await rawPage.evaluate(browserCode).catch(() => null);
+
+        this.health.observersAlive = true;
+        this.health.mutationObserver = true;
+        this.health.resizeObserver = true;
+        this.health.runtimeBinding = true;
+        this.health.networkEnabled = true;
+
+        this.logEvent("SYSTEM", "Monitoring initialized successfully");
+      } catch (err) {
+        this.logEvent("ERROR", `Failed starting monitor: ${err.message}`);
+        throw err;
+      }
+      return;
+    }
+
     try {
       // 1. Register CDP Listeners
       if (typeof page.on === "function") {
@@ -195,7 +276,7 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
       this.health.runtimeBinding = true;
 
       // 3. Inject DOM Observer Script (on new documents and current context)
-      const browserCode = `(${this.getBrowserScriptCode.toString()})()`;
+      const browserCode = this.getBrowserScriptCode();
       await page.Page.addScriptToEvaluateOnNewDocument({ source: browserCode }).catch(() => null);
       await page.Runtime.evaluate({
         expression: browserCode,
@@ -276,24 +357,29 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
     });
   }
 
+  setIntentOverride(intent) {
+    this.intentOverride = intent;
+    this.intent = intent;
+  }
+
   // --- State Replay Engine ---
   replay(log) {
     if (!Array.isArray(log)) {
       throw new Error("Replay expects a list of event logs.");
     }
     this.logEvent("SYSTEM", `Replay started with ${log.length} records`);
-    
+
     // Reset internal state
     this.state = "IDLE";
     this.intent = "UNKNOWN";
     this.confidence = 1.0;
-    
+
     for (const record of log) {
       if (!record.type) continue;
       this.logEvent("REPLAY", `Simulating event ${record.type}`, record.payload);
       this.processIncomingEvent(record);
     }
-    
+
     this.logEvent("SYSTEM", "Replay completed");
   }
 
@@ -329,7 +415,7 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
         }
 
         const isMatching = this.state === state && this.confidence >= confidence;
-        
+
         if (isMatching) {
           if (!stableTimer) {
             stableTimer = setTimeout(() => {
@@ -354,7 +440,7 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
       }, timeout);
 
       this.on("event", checkCondition);
-      
+
       // Check initial conditions immediately
       checkCondition();
     });
@@ -483,7 +569,7 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
         requestId: event.requestId,
         timestamp: Date.now(),
       });
-      
+
       this.logEvent("NETWORK_EVENT", `Image response received: ${url.slice(0, 100)}`, { url });
       this.triggerStateUpdate("Network image response");
     }
@@ -507,7 +593,7 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
         const payload = JSON.parse(event.payload);
         if (payload.type === "DOM_METRICS") {
           const raw = payload.data || {};
-          
+
           // Merge flat metrics
           this.metrics.dom.composerReady = Boolean(raw.composerReady);
           this.metrics.dom.composerBusy = Boolean(raw.composerBusy);
@@ -543,12 +629,12 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
           this.metrics.dom.attachmentNames = rawAttachments.map(a => a.text);
           this.metrics.dom.attachmentHashes = rawAttachments.map(a => hashText(a.text + ":" + a.imgSrc));
           this.metrics.dom.composerState = (raw.progressBarsCount > 0) ? "ATTACHING_FILES" : "READY";
-          
+
           // Sync navigation state
           if (raw.url) {
             this.metrics.navigation.url = raw.url;
             this.identity.chatUrl = raw.url;
-            
+
             // Extract conversationId from url path: e.g. /c/xxxxx
             try {
               const urlObj = new URL(raw.url);
@@ -596,7 +682,7 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
     const errorMsg = errorDetails.text || "Uncaught JS Exception";
     this.metrics.runtime.lastException = errorMsg;
     this.logEvent("RUNTIME_EVENT", `Exception Thrown: ${errorMsg}`, errorDetails);
-    
+
     // Exceptions can transition to ERROR state
     this.triggerStateUpdate("Exception thrown");
   }
@@ -614,7 +700,7 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
   processIncomingEvent(record) {
     if (record.type === "DOM_EVENT") {
       Object.assign(this.metrics.dom, record.payload);
-      
+
       // Compute FNV-1a hashes in Main process during simulation
       if (record.payload.composerText !== undefined) {
         this.metrics.dom.composerPromptHash = hashText(record.payload.composerText);
@@ -646,7 +732,7 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
     } else if (record.type === "NAVIGATION_EVENT") {
       Object.assign(this.metrics.navigation, record.payload);
     }
-    
+
     this.triggerStateUpdate(record.type);
   }
 
@@ -659,7 +745,7 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
 
   scheduleStateReevaluation(reason, targetIdleMs = 3100) {
     if (!this.page) return;
-    
+
     const STABILIZABLE_STATES = new Set([
       "STREAMING_TEXT",
       "STREAMING_IMAGE",
@@ -674,15 +760,15 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
       this.clearStabilityTimer();
       return;
     }
-    
+
     const ts = this.metrics.dom.lastMutationTimestamp;
     if (!ts) return;
-    
+
     const idlePeriod = Date.now() - ts;
     const remainingMs = Math.max(100, targetIdleMs - idlePeriod);
-    
+
     this.clearStabilityTimer();
-    
+
     this.stabilityTimeout = setTimeout(() => {
       this.stabilityTimeout = null;
       this.triggerStateUpdate(`State re-evaluation: ${reason}`);
@@ -702,7 +788,7 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
     this.scheduleStateReevaluation("DOM idle");
 
     const stateChanged = oldState !== this.state || oldIntent !== this.intent;
-    
+
     const eventObj = {
       type: stateChanged ? "STATE_CHANGED" : "METRICS_UPDATE",
       oldState,
@@ -725,6 +811,10 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
 
   // --- Intent Detector Engine ---
   runIntentDetector() {
+    if (this.intentOverride) {
+      this.intent = this.intentOverride;
+      return;
+    }
     const dom = this.metrics.dom;
     const network = this.metrics.network;
 
@@ -754,7 +844,7 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
     const exception = this.metrics.runtime.lastException;
 
     // Strict state prioritization
-    
+
     // 1. Crash/Refusal -> ERROR
     if (dom.policyRefusalDetected) {
       this.state = "ERROR";
@@ -868,7 +958,7 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
     const activeState = this.state;
     const dom = this.metrics.dom;
     const idlePeriod = Date.now() - dom.lastMutationTimestamp;
-    
+
     // Clear other state watchdogs (excluding metrics watchdogs)
     for (const stateName of Object.keys(this.watchdogs)) {
       if (stateName !== activeState && stateName !== "METRICS_WATCHDOG_NET" && stateName !== "METRICS_WATCHDOG_DOM") {
@@ -958,7 +1048,7 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
   logEvent(source, text, payload = null) {
     const date = new Date();
     const timestampStr = `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}:${String(date.getSeconds()).padStart(2, "0")}.${String(date.getMilliseconds()).padStart(3, "0")}`;
-    
+
     const logItem = {
       timestamp: timestampStr,
       source,
@@ -968,7 +1058,7 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
     };
 
     this.timeline.push(logItem);
-    
+
     // Cap diagnostics timeline to 1000 items
     if (this.timeline.length > 1000) {
       this.timeline.shift();

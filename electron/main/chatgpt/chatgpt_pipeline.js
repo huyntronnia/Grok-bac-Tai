@@ -1318,6 +1318,9 @@ async function waitForLatestChatGPTGeneratedImage(client, options = {}) {
     for (let attempt = 1; ; attempt += 1) {
     assertPipelineRunActive(runId);
     const attemptStartedAt = Date.now();
+    let refreshCount = 0;
+    const REFRESH_INTERVAL_MS = 60000;
+    let nextRefreshAt = attemptStartedAt + REFRESH_INTERVAL_MS;
     let sawGenerating = false;
     let readyTicks = 0;
     let lastLogAt = 0;
@@ -1491,6 +1494,33 @@ async function waitForLatestChatGPTGeneratedImage(client, options = {}) {
 
     while (Date.now() - attemptStartedAt < 900000) {
       assertPipelineRunActive(runId);
+
+      if (Date.now() >= nextRefreshAt) {
+        refreshCount += 1;
+        const elapsedMs = Date.now() - attemptStartedAt;
+        await appendAppLog(null, {
+          source: "main",
+          kind: "running",
+          text: `Scene ${sceneId}:\nPeriodic ChatGPT refresh after 60s while waiting for NV1 image.`,
+          details: {
+            elapsedMs,
+            refreshCount,
+          },
+        }).catch(() => null);
+
+        await refreshChatGptPageBeforeImageExtract(client, {
+          sceneId,
+          stage: `periodic-refresh-nv1-wait-${refreshCount}`,
+          waitedMs: elapsedMs,
+          refreshCount,
+        }).catch(() => null);
+
+        await waitForCdpLoad(client).catch(() => null);
+        await sleep(4000);
+
+        nextRefreshAt = Date.now() + REFRESH_INTERVAL_MS;
+      }
+
       let preExtractWait = { ok: true };
       if (!hasWaitedOnce) {
         preExtractWait =

@@ -935,17 +935,36 @@ async function sendNv2PromptViaDeepCdpInput(client, prompt, context = {}) {
     client,
     `(${dispatchNv2ComposerInputEventsScript.toString()})(${JSON.stringify(prompt)})`,
   ).catch(() => null);
-  await sleep(300);
+  let loaded = null;
+  const started = Date.now();
+  while (Date.now() - started < 8000) {
+    loaded = await evaluateOnCdpPage(
+      client,
+      `(${inspectNv2ComposerSubmitStateScript.toString()})(${JSON.stringify(prompt)}, ${beforeCount})`,
+    ).catch((e) => ({ ok: false, error: e.message }));
 
-  let loaded = await evaluateOnCdpPage(
-    client,
-    `(${inspectNv2ComposerSubmitStateScript.toString()})(${JSON.stringify(prompt)}, ${beforeCount})`,
-  ).catch((error) => ({ ok: false, error: error.message }));
+    if (
+      loaded?.activeComposer &&
+      loaded?.fullPromptLoaded &&
+      loaded?.sendReady
+    ) {
+      break;
+    }
+    await sleep(200);
+  }
+
   if (
     !loaded?.activeComposer ||
     !loaded?.fullPromptLoaded ||
     !loaded?.sendReady
   ) {
+    await appendAppLog(null, {
+      source: "main",
+      kind: "warning",
+      text: "NV2 composer not ready",
+      details: loaded,
+    }).catch(() => null);
+
     return {
       ok: false,
       error: "nv2-composer-not-ready-for-submit",
@@ -1041,6 +1060,9 @@ async function sendNv2PromptViaDeepCdpInput(client, prompt, context = {}) {
     state = guarded.state;
   }
 
+  if (context.sceneId) {
+    setChatGptSendState(context.sceneId, "SENT");
+  }
   return {
     ok: true,
     mode: state?.mode || "generation-acknowledged",

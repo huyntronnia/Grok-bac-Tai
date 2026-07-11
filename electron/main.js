@@ -94,6 +94,7 @@ const {
   evaluateOnCdpPage,
   getChatGptSendState,
 } = require("./main/chatgpt/chatgpt_core");
+const BrowserAdapter = require("./main/chatgpt/browser_adapter");
 
 const {
   clickUploadButtonScript,
@@ -196,7 +197,7 @@ const {
   safeStorage,
   globalShortcut,
 } = require("electron");
-const CDP = require("chrome-remote-interface");
+let CDP = null;
 const ffmpegPath = require("ffmpeg-static");
 const fs = require("fs/promises");
 const path = require("path");
@@ -5117,6 +5118,84 @@ async function generateVideoWithGenericProvider({
 }
 
 async function getCdpPage(provider, createIfMissing = true, options = {}) {
+  const driverType = process.env.BROWSER_AUTOMATION_PROVIDER || "playwright";
+
+  if (driverType === "playwright") {
+    await ensureChromeDebug();
+    const shouldBringToFront = options.bringToFront !== false;
+    const shouldRecover = options.recover !== false;
+    const meta = PROVIDER_META[provider] || PROVIDER_META.chatgpt;
+    const adapter = new BrowserAdapter(provider, "playwright");
+    const cdpEndpoint = `http://127.0.0.1:${CHROME_DEBUG_PORT}`;
+    
+    await adapter.connect(cdpEndpoint, { url: meta.url });
+
+    // Ghi đè hàm reload để tương thích ngược cơ chế chặn reload
+    const originalReload = adapter.Page.reload;
+    adapter.Page.reload = async function (reloadOptions = {}) {
+      const stack = new Error().stack || "";
+      let caller = "unknown";
+      if (stack.includes("forceCleanChatGptNewChatRotation")) caller = "forceCleanChatGptNewChatRotation";
+      else if (stack.includes("recoverCdpPageIfCrashed")) caller = "recoverCdpPageIfCrashed";
+      else if (stack.includes("waitForLatestChatGPTGeneratedImage") || stack.includes("resendImagePrompt")) caller = "waitForLatestChatGPTGeneratedImage";
+      else if (stack.includes("refreshChatGptPageBeforeImageExtract")) caller = "refreshChatGptPageBeforeImageExtract";
+      else if (stack.includes("recoverChatGptBlockingUi")) caller = "recoverChatGptBlockingUi";
+      else if (stack.includes("recoverProviderFromCacheOrChallenge")) caller = "recoverProviderFromCacheOrChallenge";
+      
+      const timestamp = new Date().toISOString();
+      const currentSceneId = globalThis.__vidoraLastProcessedSceneId || "unknown";
+      const sendState = getChatGptSendState(currentSceneId);
+
+      const blockedReason = isReloadBlocked(currentSceneId);
+      if (blockedReason) {
+        await appendAppLog(currentSceneId, {
+          source: "main",
+          kind: "warning",
+          text: `CHATGPT_RELOAD_BLOCKED: Reload requested via Playwright was canceled. ${blockedReason}`,
+          details: { caller, stack }
+        }).catch(() => null);
+        return { ok: false, error: blockedReason };
+      }
+
+      await appendAppLog(currentSceneId, {
+        source: "main",
+        kind: "warning",
+        text: `CHATGPT_RELOAD_REQUESTED`,
+        details: {
+          timestamp,
+          sceneId: currentSceneId,
+          stage: sendState,
+          reason: "Page reload requested via Playwright",
+          caller,
+          stack
+        },
+      }).catch(() => null);
+
+      if (sendState === "PREPARING" || sendState === "READY" || sendState === "CLICKING") {
+        await appendAppLog(currentSceneId, {
+          source: "main",
+          kind: "error",
+          text: `RELOAD_BEFORE_SEND: Page reload requested before SEND_CLICK_BEGIN! State = ${sendState}`,
+          details: { caller, stack },
+        }).catch(() => null);
+      }
+
+      return originalReload(reloadOptions);
+    };
+
+    if (shouldBringToFront) await adapter.Page.bringToFront().catch(() => null);
+    await waitForCdpLoad(adapter);
+    
+    if (shouldRecover) {
+      await recoverProviderFromCacheOrChallenge(adapter, provider, "get-page").catch(() => null);
+      await recoverCdpPageIfCrashed(adapter, provider, "get-page").catch(() => null);
+    }
+    
+    globalThis.activeCdpClient = adapter;
+    return adapter;
+  }
+
+  if (!CDP) CDP = require("chrome-remote-interface");
   await ensureChromeDebug();
   const shouldBringToFront = options.bringToFront !== false;
   const shouldRecover = options.recover !== false;

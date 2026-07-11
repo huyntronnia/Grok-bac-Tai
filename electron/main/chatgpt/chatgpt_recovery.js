@@ -27,7 +27,7 @@ const {
 const {
   setChatGptContextFresh,
 } = require("../state/chatgpt_state");
-const CDP = require("chrome-remote-interface");
+let CDP = null;
 
 // Injected dependencies
 let getCdpPage = () => null;
@@ -542,12 +542,31 @@ async function recoverChatGptBlockingUi(client, context = {}) {
       context,
     };
   }
-  await closeUnexpectedProviderTabs(
-    await CDP.List({ host: "127.0.0.1", port: CHROME_DEBUG_PORT }).catch(
-      () => [],
-    ),
-    "chatgpt",
-  ).catch(() => null);
+  if (client && client.clientType === "playwright") {
+    try {
+      const contexts = client.browser.contexts();
+      if (contexts.length > 0) {
+        const pages = contexts[0].pages();
+        const providerHost = new URL((PROVIDER_META[provider] || PROVIDER_META.chatgpt).url).hostname;
+        for (const p of pages) {
+          const urlStr = p.url() || "";
+          if (p !== client.page && urlStr && !urlStr.includes(providerHost) && /(linkedin\.com|facebook\.com|twitter\.com|x\.com|\/share\b|\/sharing\b)/i.test(urlStr)) {
+            await p.close().catch(() => null);
+          }
+        }
+      }
+    } catch (err) {
+      // Bỏ qua lỗi
+    }
+  } else {
+    if (!CDP) CDP = require("chrome-remote-interface");
+    await closeUnexpectedProviderTabs(
+      await CDP.List({ host: "127.0.0.1", port: CHROME_DEBUG_PORT }).catch(
+        () => [],
+      ),
+      "chatgpt",
+    ).catch(() => null);
+  }
   await recoverCdpPageIfCrashed(
     client,
     "chatgpt",

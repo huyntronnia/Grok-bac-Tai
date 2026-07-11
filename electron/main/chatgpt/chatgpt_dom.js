@@ -2733,4 +2733,5 @@ module.exports = {
   prepareChatGptCreateImageScript,
   readAssistantMessageSnapshotScript,
   readLatestAssistantScript,
+  extractConversationSnapshot,
 };
