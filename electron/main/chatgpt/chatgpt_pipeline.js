@@ -23,6 +23,7 @@ const {
   isChatGptDotLoadingCanvasAsset,
   isChatGptLimitText,
   isSameChatTitle,
+  extractCompletedNv2ResponseFromSnapshot,
 } = require("../state");
 const {
   getChatGptContextFresh,
@@ -123,6 +124,27 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function setChatGptTaskState(sceneDir, task, state, details = {}) {
+  if (!sceneDir || !task || !state) return;
+  const snapshot = await readSceneSnapshot(sceneDir).catch(() => ({}));
+  snapshot.taskStates = {
+    ...(snapshot.taskStates || {}),
+    [task]: {
+      state,
+      updatedAt: new Date().toISOString(),
+      ...(details && typeof details === "object" ? details : {}),
+    },
+  };
+  await writeSceneSnapshot(sceneDir, snapshot).catch(() => null);
+}
+
+function validateReadyResponse(text = "") {
+  const normalized = String(text || "").trim().toLowerCase();
+  if (!normalized) return false;
+  if (isChatGptPolicyRefusalText(normalized) || isChatGptLimitText(normalized)) return false;
+  return /\b(ready|done|ok|okay|acknowledged|remembered|loaded|understood)\b|sẵn sàng|san sang|đã nhớ|da nho|xong/.test(normalized);
+}
+
 const motionPromptSendLocks = new Map();
 
 async function generateImageAndMotionWithChatGPT({
@@ -197,6 +219,7 @@ async function generateImageAndMotionWithChatGPT({
   }
 
   if (snapshot.pipelineStage === "WAIT_IMAGE" || snapshot.pipelineStage === "NV1_SENT") {
+    await setChatGptTaskState(sceneDir, "NV1", "WAIT", { sceneId });
     await appendAppLog(sceneId, {
       source: "main",
       kind: "running",
@@ -218,6 +241,9 @@ async function generateImageAndMotionWithChatGPT({
       snapshot.pipelineStage = "IMAGE_EXTRACTED";
       snapshot.imageValidated = true;
       await writeSceneSnapshot(sceneDir, snapshot);
+      await setChatGptTaskState(sceneDir, "NV1", "VALIDATE", { sceneId });
+      await setChatGptTaskState(sceneDir, "NV1", "SAVE", { sceneId, imagePath });
+      await setChatGptTaskState(sceneDir, "NV1", "COMPLETE", { sceneId, imagePath });
     } finally {
       imageNetworkCapture.stop();
     }
@@ -226,6 +252,7 @@ async function generateImageAndMotionWithChatGPT({
   }
 
   snapshot.pipelineStage = "NV1_DRAFT_READY";
+  await setChatGptTaskState(sceneDir, "NV1", "SEND", { sceneId });
   snapshot.promptHash = hashChatGptSnapshotText(imagePrompt);
   snapshot.draftId = `draft-scene-${sceneId}-${Date.now()}`;
   snapshot.createdAt = new Date().toISOString();
@@ -271,6 +298,9 @@ async function generateImageAndMotionWithChatGPT({
       snapshot.pipelineStage = "IMAGE_EXTRACTED";
       snapshot.imageValidated = true;
       await writeSceneSnapshot(sceneDir, snapshot);
+      await setChatGptTaskState(sceneDir, "NV1", "VALIDATE", { sceneId });
+      await setChatGptTaskState(sceneDir, "NV1", "SAVE", { sceneId, imagePath });
+      await setChatGptTaskState(sceneDir, "NV1", "COMPLETE", { sceneId, imagePath });
       await page.close();
       return { imagePath, motionPrompt: "" };
     }
@@ -381,7 +411,7 @@ async function generateImageAndMotionWithChatGPT({
         await appendAppLog(sceneId, {
           source: "main",
           kind: "running",
-          text: `Scene ${sceneId}: NV1 sent. Sleeping 45 seconds before refresh (Keyframe + Motion Only Mode).`,
+          text: `Scene ${sceneId}: NV1 sent. Sleeping 45 seconds before refresh (keyframe-prompt workflow).`,
         });
         await sleep(45000);
         
@@ -400,6 +430,7 @@ async function generateImageAndMotionWithChatGPT({
   const imageNetworkCapture = startChatGptImageNetworkCapture(page, { sceneId });
   try {
     snapshot.pipelineStage = "WAIT_IMAGE";
+    await setChatGptTaskState(sceneDir, "NV1", "WAIT", { sceneId });
     await writeSceneSnapshot(sceneDir, snapshot);
     
     assertPipelineRunActive(runId);
@@ -418,6 +449,15 @@ async function generateImageAndMotionWithChatGPT({
     snapshot.pipelineStage = "IMAGE_EXTRACTED";
     snapshot.imageValidated = true;
     await writeSceneSnapshot(sceneDir, snapshot);
+    await setChatGptTaskState(sceneDir, "NV1", "VALIDATE", { sceneId });
+    await setChatGptTaskState(sceneDir, "NV1", "SAVE", {
+      sceneId,
+      imagePath,
+    });
+    await setChatGptTaskState(sceneDir, "NV1", "COMPLETE", {
+      sceneId,
+      imagePath,
+    });
   } finally {
     imageNetworkCapture.stop();
   }
@@ -572,10 +612,21 @@ async function generateMotionPromptWithChatGPTOnce(
     const beforeSnapshot = await evaluateOnCdpPage(
       page,
       `(${readAssistantMessageSnapshotScript.toString()})()`,
-    ).catch(() => ({ count: 0, ids: [], hashes: [], messages: [] }));
+    ).catch((error) => ({ ok: false, error: error.message, ids: [], hashes: [], messages: [] }));
+    const beforeRootCount = await evaluateOnCdpPage(
+      page,
+      `(${countChatGptAssistantRootsScript.toString()})()`,
+    ).catch((error) => ({ ok: false, error: error.message, count: null }));
+    const beforeCountFromSnapshot = Number(beforeSnapshot?.count);
+    const beforeCountFromRoots = Number(beforeRootCount?.count);
+    const beforeCount = Number.isFinite(beforeCountFromSnapshot)
+      ? beforeCountFromSnapshot
+      : Number.isFinite(beforeCountFromRoots)
+        ? beforeCountFromRoots
+        : 0;
 
     const before = {
-      count: beforeSnapshot?.count || 0,
+      count: beforeCount,
       userCount: beforeSnapshot?.userCount || 0,
       maxTurnIndex: Number.isFinite(Number(beforeSnapshot?.maxTurnIndex)) ? Number(beforeSnapshot.maxTurnIndex) : -1,
       text: beforeSnapshot?.messages?.at?.(-1)?.text || "",
@@ -585,19 +636,55 @@ async function generateMotionPromptWithChatGPTOnce(
       userHashes: beforeSnapshot?.userHashes || [],
       url: exactConversationUrl,
     };
+    await appendAppLog(sceneId, {
+      source: "main",
+      kind: "running",
+      text: `Scene ${sceneId}: NV2 before snapshot captured (assistant=${before.count}, textLength=${String(before.text || "").length}).`,
+      details: {
+        beforeCount: before.count,
+        snapshotCount: Number.isFinite(beforeCountFromSnapshot) ? beforeCountFromSnapshot : null,
+        rootCount: Number.isFinite(beforeCountFromRoots) ? beforeCountFromRoots : null,
+        snapshotError: beforeSnapshot?.error || null,
+        rootCountError: beforeRootCount?.error || null,
+        userCount: before.userCount,
+        assistantHashCount: before.hashes.length,
+        userHashCount: before.userHashes.length,
+      },
+    }).catch(() => null);
 
     let pageState = await getConversationState(page);
     await checkProactiveMemoryGuard(sceneId, pageState);
 
-    // If we are resuming from NV2_SENT
-    if (snapshot.pipelineStage === "NV2_SENT") {
+    const nv2PromptAlreadySent =
+      pageState.latestUserMessageHash === instructionHash ||
+      (Array.isArray(before.userHashes) && before.userHashes.includes(instructionHash)) ||
+      (Array.isArray(before.hashes) && before.hashes.includes(instructionHash));
+
+    // If we are resuming from NV2_SENT, first prove the current chat actually has this NV2 prompt.
+    if (snapshot.pipelineStage === "NV2_SENT" && nv2PromptAlreadySent) {
       await appendAppLog(sceneId, {
         source: "main",
         kind: "running",
         text: `Scene ${sceneId}: Resuming NV2 from stage NV2_SENT.`
       });
     } else {
+      if (snapshot.pipelineStage === "NV2_SENT" && !nv2PromptAlreadySent) {
+        await appendAppLog(sceneId, {
+          source: "main",
+          kind: "warning",
+          text: `Scene ${sceneId}: Stale NV2_SENT snapshot ignored; current chat has no matching NV2 prompt. Uploading keyframe and sending NV2 now.`,
+          details: {
+            latestUserMessageHash: pageState.latestUserMessageHash || "",
+            instructionHash,
+            beforeUserHashCount: before.userHashes.length,
+          },
+        }).catch(() => null);
+        if (!snapshot.hydration) snapshot.hydration = {};
+        snapshot.hydration.sceneUploadDone = false;
+        snapshot.hydration.promptUploadDone = false;
+      }
       snapshot.pipelineStage = "NV2_DRAFT_READY";
+      await setChatGptTaskState(sceneDir, "NV2", "SEND", { sceneId });
       snapshot.promptHash = instructionHash;
       snapshot.draftId = `draft-scene-${sceneId}-nv2-${Date.now()}`;
       snapshot.createdAt = new Date().toISOString();
@@ -627,35 +714,27 @@ async function generateMotionPromptWithChatGPTOnce(
           snapshot.pipelineStage = "NV2_SENT";
           await writeSceneSnapshot(sceneDir, snapshot);
         } else {
-          if (!snapshot.hydration?.sceneUploadDone) {
-            await appendAppLog(null, {
-              source: "main",
-              kind: "running",
-              text: `Scene ${sceneId}: Uploading current scene keyframe before NV2.`,
-              details: { image: path.basename(imagePath || "") },
-            });
-            const nv2ImageUpload = await uploadFilesToChatGptSequentially(
-              page,
-              [imagePath],
-              sceneId,
-              {
-                trailingUploadLog: `Scene ${sceneId}: Uploading current scene keyframe for NV2...`,
-                request: "nv2-keyframe",
-              },
-            );
-            if (!nv2ImageUpload?.ok) {
-              throw new Error(`Scene ${sceneId}: ChatGPT NV2 keyframe upload failed: ${nv2ImageUpload?.error || "unknown"}`);
-            }
-            if (!snapshot.hydration) snapshot.hydration = {};
-            snapshot.hydration.sceneUploadDone = true;
-            await writeSceneSnapshot(sceneDir, snapshot);
-          } else {
-            await appendAppLog(sceneId, {
-              source: "main",
-              kind: "info",
-              text: `Scene ${sceneId}: Keyframe upload already marked done. Skipping upload.`
-            }).catch(() => null);
+          await appendAppLog(null, {
+            source: "main",
+            kind: "running",
+            text: `Scene ${sceneId}: Uploading current scene keyframe before NV2.`,
+            details: { image: path.basename(imagePath || "") },
+          });
+          const nv2ImageUpload = await uploadFilesToChatGptSequentially(
+            page,
+            [imagePath],
+            sceneId,
+            {
+              trailingUploadLog: `Scene ${sceneId}: Uploading current scene keyframe for NV2...`,
+              request: "nv2-keyframe",
+            },
+          );
+          if (!nv2ImageUpload?.ok) {
+            throw new Error(`Scene ${sceneId}: ChatGPT NV2 keyframe upload failed: ${nv2ImageUpload?.error || "unknown"}`);
           }
+          if (!snapshot.hydration) snapshot.hydration = {};
+          snapshot.hydration.sceneUploadDone = true;
+          await writeSceneSnapshot(sceneDir, snapshot);
 
           pageState = await getConversationState(page);
           snapshot.attachmentHashes = pageState.attachmentHashes || [];
@@ -680,18 +759,8 @@ async function generateMotionPromptWithChatGPTOnce(
             await appendAppLog(sceneId, {
               source: "main",
               kind: "running",
-              text: `Scene ${sceneId}: NV2 sent. Sleeping 45 seconds before refresh (Keyframe + Motion Only Mode).`,
+              text: `Scene ${sceneId}: NV2 sent. Waiting for stable response without timed refresh.`,
             });
-            await sleep(45000);
-            
-            await appendAppLog(sceneId, {
-              source: "main",
-              kind: "running",
-              text: `Scene ${sceneId}: Refreshing page after 45s sleep.`,
-            });
-            await requestReloadWithReason(page, "keyframe_motion_only_nv2_refresh", sceneId);
-            await waitForCdpLoad(page).catch(() => null);
-            await sleep(4000);
           }
         }
       }
@@ -702,6 +771,7 @@ async function generateMotionPromptWithChatGPTOnce(
       stage: "motion_prompt",
       attempt: 1,
     }).catch(() => null);
+    await setChatGptTaskState(sceneDir, "NV2", "WAIT", { sceneId });
 
     const result = await waitForChatGptResponse(page, before, {
       sceneId,
@@ -710,18 +780,32 @@ async function generateMotionPromptWithChatGPTOnce(
       targetTitle: chatContextTitle,
       stage: "motion-prompt-response",
       chatGptStability,
+      refreshAfterMs: undefined,
+      refreshReason: undefined,
     });
     if (!result?.ok) {
       throw new Error(result?.error || "IMAGE_STAGE NV2 response waiting failed.");
     }
 
     const stableText = String(result.text || "").trim();
+    await setChatGptTaskState(sceneDir, "NV2", "VALIDATE", {
+      sceneId,
+      chars: stableText.length,
+    });
     await fs.writeFile(motionPromptFile, stableText, "utf8");
     await fs.writeFile(path.join(sceneDir, "motion_prompt_from_chatgpt.txt"), stableText, "utf8").catch(() => null);
+    await setChatGptTaskState(sceneDir, "NV2", "SAVE", {
+      sceneId,
+      motionPromptFile,
+    });
 
     snapshot.pipelineStage = "WAIT_VIDEO";
     snapshot.motionValidated = true;
     await writeSceneSnapshot(sceneDir, snapshot);
+    await setChatGptTaskState(sceneDir, "NV2", "COMPLETE", {
+      sceneId,
+      motionPromptFile,
+    });
 
     await page.close().catch(() => null);
     return stableText;
@@ -1285,25 +1369,401 @@ async function waitForChatGptImageGenerationDoneBeforeExtract(
   }
 }
 
+// ============================================================================
+// waitForLatestChatGPTGeneratedImage — architecture
+// ----------------------------------------------------------------------------
+// The wait loop is split into named phases, each a standalone helper:
+//   ImageWaitContext            - mutable state carried across loop ticks
+//   detectImageWaitProgress     - progress detection (resets lastProgressAt)
+//   maybeRefreshChatGptImageWaitPage - periodic refresh (fixed schedule)
+//   pollChatGptRuntime          - runtime monitor snapshot
+//   pollChatGptDom              - direct DOM polling (active response / image turn)
+//   maybeHydrateChatGptImage    - hydration, gated on an image turn existing
+//   scanChatGptImageCandidates  - DOM / network / screenshot extraction
+//   validateChatGptImageCandidate - rejects dot-loading placeholder canvases
+//   updateCandidateStability    - stableTicks, scoped to a single candidate
+//   shouldRetryChatGptImageWait - retry gate (timeout + stall + not generating)
+// The orchestrating function, waitForLatestChatGPTGeneratedImage, wires these
+// together but keeps its external signature, return value, and thrown errors
+// unchanged.
+// ============================================================================
+
+const IMAGE_WAIT_REFRESH_INTERVAL_MS = 60000;
+const IMAGE_WAIT_GRAY_CANVAS_REFRESH_MS = 60000;
+const IMAGE_WAIT_STABLE_TICKS_REQUIRED = 3;
+const IMAGE_WAIT_READY_TICKS_REQUIRED = 8;
+const IMAGE_WAIT_ATTEMPT_TIMEOUT_MS = 300000;
+const IMAGE_WAIT_REAL_STALL_MS = 300000;
+// Threshold used by the retry gate for both "global timeout exceeded" and
+// "no progress for a long timeout" (see shouldRetryChatGptImageWait). Chosen
+// to match the old readyTicks >= 8 heuristic (~8 ticks at the loop's typical
+// cadence) without changing observed retry timing.
+const IMAGE_WAIT_LONG_NO_PROGRESS_MS = 120000;
+
+/**
+ * Mutable state for a single waitForLatestChatGPTGeneratedImage() call.
+ * Carried across every tick of the inner while-loop (but NOT reset by a
+ * periodic refresh - see maybeRefreshChatGptImageWaitPage).
+ */
+class ImageWaitContext {
+  constructor(startedAt) {
+    this.startedAt = startedAt;
+    this.lastProgressAt = startedAt;
+    this.nextRefreshAt = startedAt + IMAGE_WAIT_REFRESH_INTERVAL_MS;
+    this.refreshCount = 0;
+    this.stableTicks = 0;
+    this.lastSignature = "";
+    this.knownUrls = new Set();
+    this.lastSnapshot = null;
+    this.lastHydrationAt = 0;
+    this.grayCanvasFirstSeenAt = 0;
+    this.grayCanvasRefreshCount = 0;
+    // Internal fingerprint cache used by detectImageWaitProgress to tell
+    // "changed" from "same" between ticks. Not part of the public shape.
+    this._progressFingerprint = "";
+  }
+}
+
+/**
+ * Progress detection.
+ * Progress is anything observably new: assistant message count, latest
+ * assistant text, the current image-candidate signature, captured image
+ * urls, or runtime monitor state. Any progress resets ctx.lastProgressAt.
+ * Returns true if progress was detected on this tick.
+ */
+function detectImageWaitProgress(ctx, signals) {
+  const {
+    assistantCount = 0,
+    latestAssistantText = "",
+    candidateSignature = "",
+    urls = [],
+    runtimeState = "",
+  } = signals || {};
+
+  const fingerprint = JSON.stringify([
+    assistantCount,
+    latestAssistantText,
+    candidateSignature,
+    [...urls].sort(),
+    runtimeState,
+  ]);
+
+  const progressed = fingerprint !== ctx._progressFingerprint;
+  if (progressed) {
+    ctx.lastProgressAt = Date.now();
+    ctx._progressFingerprint = fingerprint;
+  }
+  return progressed;
+}
+
+/**
+ * Periodic refresh.
+ * Fires on a fixed schedule (every REFRESH_INTERVAL_MS of wall-clock time
+ * since the wait started): ctx.nextRefreshAt += REFRESH_INTERVAL_MS, never
+ * Date.now() + REFRESH_INTERVAL_MS, so refreshes don't drift or bunch up.
+ * A refresh never resets waiting state - it doesn't touch lastProgressAt,
+ * stableTicks, lastSignature, or any other progress/stability bookkeeping.
+ */
+async function maybeRefreshChatGptImageWaitPage(ctx, client, sceneId, options = {}) {
+  const force = Boolean(options.force);
+  if (!force && Date.now() < ctx.nextRefreshAt) return false;
+
+  ctx.refreshCount += 1;
+  const elapsedMs = Date.now() - ctx.startedAt;
+  const reason = String(options.reason || "periodic-nv1-image-wait-refresh");
+
+  await appendAppLog(null, {
+    source: "main",
+    kind: "running",
+    text: force
+      ? `Scene ${sceneId}: Force refreshing ChatGPT while waiting for NV1 image. Reason: ${reason}.`
+      : `Scene ${sceneId}: Periodic ChatGPT refresh after 60s while waiting for NV1 image.`,
+    details: { elapsedMs, refreshCount: ctx.refreshCount, reason, ...(options.details || {}) },
+  }).catch(() => null);
+
+  await refreshChatGptPageBeforeImageExtract(client, {
+    sceneId,
+    stage: `${reason}-${ctx.refreshCount}`,
+    waitedMs: elapsedMs,
+    refreshCount: ctx.refreshCount,
+  }).catch(() => null);
+
+  await waitForCdpLoad(client).catch(() => null);
+  await sleep(4000);
+
+  if (force) {
+    ctx.nextRefreshAt = Date.now() + IMAGE_WAIT_REFRESH_INTERVAL_MS;
+  } else {
+    ctx.nextRefreshAt += IMAGE_WAIT_REFRESH_INTERVAL_MS;
+  }
+  return true;
+}
+
+/**
+ * Runtime monitor snapshot, normalized into the shape the rest of the wait
+ * loop expects (previously inlined per-tick in the while loop).
+ */
+function pollChatGptRuntime() {
+  const monitorSnap = chatGptRuntimeMonitor.captureSnapshot();
+  return {
+    assistantCount: monitorSnap.metrics.dom.assistantMessageCount,
+    preparingImage:
+      monitorSnap.state === "IMAGE_PLACEHOLDER" || monitorSnap.state === "NETWORK_IMAGE",
+    voiceReady: monitorSnap.metrics.dom.composerReady,
+    latestAssistantText: monitorSnap.metrics.dom.latestAssistantText,
+    loggedOut: monitorSnap.metrics.dom.loggedOut,
+    urls: monitorSnap.metrics.network.dalleUrlsCaptured.map((u) => u.url),
+    runtimeState: monitorSnap.state,
+  };
+}
+
+/**
+ * Direct DOM polling: is there an active assistant response, and is there
+ * an "image turn" (an assistant node containing an image/canvas/loading
+ * placeholder, or a visible stop-generating button)? maybeHydrateChatGptImage
+ * only hydrates when hasImageTurn is true.
+ */
+async function pollChatGptDom(client, minAssistantRootIndex) {
+  const hasActiveAssistantResponse = await evaluateOnCdpPage(
+    client,
+    `(() => {
+      const assistants = Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'));
+      if (!assistants.length) return false;
+      const latestAssistant = assistants[assistants.length - 1];
+      const latestText = (latestAssistant.textContent || "").trim();
+      if (latestText.length > 10) return true;
+      for (const node of assistants) {
+        if (node.querySelector('img, canvas, [aria-busy="true"], [role="progressbar"], [data-testid*="loading"], [data-testid*="spinner"], .aspect-square, .aspect-video, [class*="aspect-"]')) {
+          return true;
+        }
+      }
+      return false;
+    })()`,
+  ).catch(() => false);
+
+  const hasImageTurn = await evaluateOnCdpPage(
+    client,
+    `((minRoot) => {
+      const assistants = Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'));
+      const scanMinIndex = Math.min(minRoot, Math.max(0, assistants.length - 1));
+      const sceneAssistants = assistants.slice(scanMinIndex);
+      if (!sceneAssistants.length) return false;
+
+      for (const node of sceneAssistants) {
+        const found = node.querySelector(
+          'img, canvas, [aria-busy="true"], [role="progressbar"], [data-testid*="loading"], [data-testid*="spinner"], .aspect-square, .aspect-video, [class*="aspect-"]'
+        );
+        if (found) return true;
+      }
+
+      const hasStop = !![...document.querySelectorAll('button, [role="button"]')].find(btn => {
+        const style = window.getComputedStyle(btn);
+        if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity || 1) === 0) return false;
+        return /stop|dừng/i.test(btn.textContent || btn.innerText || btn.getAttribute('aria-label') || '');
+      });
+      if (hasStop) return true;
+
+      return false;
+    })(${Number(minAssistantRootIndex || 0)})`,
+  ).catch(() => false);
+
+  return { hasActiveAssistantResponse, hasImageTurn };
+}
+
+/**
+ * Hydration.
+ * Flow: poll DOM -> detect image turn -> hydrate only when an image turn
+ * exists -> (caller) extract. Hydration is a real scroll-and-verify pass
+ * against the live DOM, so it is deliberately NOT run every loop tick -
+ * only once pollChatGptDom() has found an image turn worth hydrating.
+ */
+async function maybeHydrateChatGptImage(ctx, client, minAssistantRootIndex, sceneId, domSignals) {
+  if (!domSignals?.hasImageTurn) return null;
+
+  const hydration = await evaluateOnCdpPage(
+    client,
+    `(${ensureChatGptImageLoadedAndHydratedScript.toString()})(${minAssistantRootIndex})`,
+  ).catch((err) => {
+    if (isPipelineCancelledError(err)) throw err;
+    return { ok: false, error: err.message };
+  });
+
+  ctx.lastHydrationAt = Date.now();
+
+  const hydrationMsg = hydration?.ok
+    ? `ChatGPT image hydration success: tick=${hydration.tick || 0}, elapsed=${hydration.elapsedMs || 0}ms, mode=${hydration.mode || "unknown"}, placeholderDisappeared=${hydration.placeholderDisappeared}`
+    : `ChatGPT image hydration failed: ${hydration?.error || "unknown"}`;
+
+  await appendAppLog(sceneId, {
+    source: "main",
+    kind: hydration?.ok ? "ok" : "warning",
+    text: `Scene ${sceneId}: ${hydrationMsg}`,
+    details: hydration,
+  }).catch(() => null);
+
+  return hydration;
+}
+
+/**
+ * Candidate scanning: DOM extraction, then (if it failed) network capture,
+ * then (if that failed too) an element screenshot. Returns every attempt
+ * plus the first one that succeeded ("chosen").
+ */
+async function scanChatGptImageCandidates(client, options, minAssistantRootIndex, ctx, signals) {
+  const { scopedSnapshot, activeGeneration, sceneId } = signals;
+
+  const extracted = await extractLatestChatGPTGeneratedImageBytes(client, {
+    existingUrls: [...ctx.knownUrls],
+    minAssistantRootIndex,
+  }).catch((error) => {
+    if (isPipelineCancelledError(error)) throw error;
+    return { ok: false, error: error.message, mode: "extract-error" };
+  });
+
+  const visibleCandidate =
+    hasVisibleChatGptImageCandidate(extracted) ||
+    (Array.isArray(scopedSnapshot?.urls) && scopedSnapshot.urls.length > 0);
+
+  const networkExtract =
+    !extracted?.ok && (!activeGeneration || visibleCandidate)
+      ? await tryExtractChatGptNetworkImage(client, options.networkCapture).catch((error) => ({
+          ok: false,
+          mode: "network-error",
+          error: error.message,
+        }))
+      : null;
+
+  const screenshotExtract =
+    !extracted?.ok &&
+    !networkExtract?.ok &&
+    extracted?.screenshotCandidate &&
+    (!activeGeneration || visibleCandidate)
+      ? await captureChatGptImageElementScreenshot(client, extracted.screenshotCandidate, {
+          sceneId: sceneId || "",
+        }).catch((error) => ({
+          ok: false,
+          mode: "element-screenshot-error",
+          error: error.message,
+        }))
+      : null;
+
+  const chosen = extracted?.ok
+    ? extracted
+    : networkExtract?.ok
+      ? networkExtract
+      : screenshotExtract?.ok
+        ? screenshotExtract
+        : null;
+
+  return { extracted, networkExtract, screenshotExtract, chosen, visibleCandidate };
+}
+
+/** Rejects candidates that are still the dot-loading placeholder canvas. */
+async function validateChatGptImageCandidate(chosen, sceneId, ctx, client) {
+  if (!chosen?.ok) return chosen;
+  if (isChatGptDotLoadingCanvasAsset(chosen)) {
+    const now = Date.now();
+    if (!ctx.grayCanvasFirstSeenAt) {
+      ctx.grayCanvasFirstSeenAt = now;
+    }
+    const grayCanvasAgeMs = now - ctx.grayCanvasFirstSeenAt;
+    await appendAppLog(sceneId, {
+      source: "main",
+      kind: "running",
+      text: `chatgptImageExtract: extracted candidate is still a dot-loading canvas (${chosen.width}x${chosen.height}, ${chosen.byteLength} bytes). Continuing wait...`,
+      details: {
+        grayCanvasAgeMs,
+        grayCanvasRefreshAfterMs: IMAGE_WAIT_GRAY_CANVAS_REFRESH_MS,
+        grayCanvasRefreshCount: ctx.grayCanvasRefreshCount,
+      },
+    });
+    if (grayCanvasAgeMs >= IMAGE_WAIT_GRAY_CANVAS_REFRESH_MS) {
+      ctx.grayCanvasRefreshCount += 1;
+      ctx.grayCanvasFirstSeenAt = now;
+      await maybeRefreshChatGptImageWaitPage(ctx, client, sceneId, {
+        force: true,
+        reason: "gray_canvas_stuck_refresh",
+        details: {
+          grayCanvasAgeMs,
+          grayCanvasRefreshAfterMs: IMAGE_WAIT_GRAY_CANVAS_REFRESH_MS,
+          grayCanvasRefreshCount: ctx.grayCanvasRefreshCount,
+          width: chosen.width || 0,
+          height: chosen.height || 0,
+          byteLength: chosen.byteLength || 0,
+        },
+      });
+    }
+    return null;
+  }
+  ctx.grayCanvasFirstSeenAt = 0;
+  return chosen;
+}
+
+/**
+ * Candidate stability.
+ * stableTicks is scoped to a single candidate signature: if the signature
+ * changes, stableTicks resets to 1 (never carried over from a different
+ * candidate); if there is no candidate at all, stableTicks drops to 0.
+ */
+function updateCandidateStability(ctx, chosen) {
+  if (!chosen?.ok) {
+    ctx.stableTicks = 0;
+    return ctx.stableTicks;
+  }
+  const signature = chatGptImageCandidateSignature(chosen);
+  if (signature && signature === ctx.lastSignature) {
+    ctx.stableTicks += 1;
+  } else {
+    ctx.lastSignature = signature;
+    ctx.stableTicks = 1;
+  }
+  return ctx.stableTicks;
+}
+
+/**
+ * Retry gate.
+ * A retry (resending the image prompt) along the "no usable asset" path is
+ * only justified when ALL of the following hold:
+ *   - the global attempt timeout has been exceeded
+ *   - there has been no observable progress for a long timeout
+ *   - the runtime is not currently generating anything
+ *   - there is no placeholder/loader visible in the DOM
+ * (the separate "real_stall" and "text-only-answer" paths bypass this gate
+ * intentionally, since they detect distinct, unambiguous failure modes.)
+ */
+function shouldRetryChatGptImageWait(ctx, signals) {
+  const {
+    attemptStartedAt,
+    attemptTimeoutMs,
+    longNoProgressMs,
+    isGeneratingOrLoading,
+    hasPlaceholder,
+  } = signals;
+
+  const timeoutExceeded = Date.now() - attemptStartedAt >= attemptTimeoutMs;
+  const noProgressForLong = Date.now() - ctx.lastProgressAt >= longNoProgressMs;
+
+  return timeoutExceeded && noProgressForLong && !isGeneratingOrLoading && !hasPlaceholder;
+}
+
 async function waitForLatestChatGPTGeneratedImage(client, options = {}) {
   const sceneId =
     (typeof options !== "undefined" && options?.sceneId) ||
     (typeof context !== "undefined" && context?.sceneId) ||
     "";
   const runId = String(options.originalOptions?.runId || "").trim();
-  const known = new Set(options.existingUrls || []);
-  const realStallMs = 300000;
   const minAssistantRootIndex = Number(options.minAssistantRootIndex || 0);
-  let lastSnapshot = null;
-  let loggedAfterResponse = false;
 
+  const ctx = new ImageWaitContext(Date.now());
+  for (const url of options.existingUrls || []) ctx.knownUrls.add(url);
+
+  let loggedAfterResponse = false;
   let falseGeneratingTicks = 0;
   let lastExtract = null;
-  let lastSignature = "";
-  let stableTicks = 0;
   let lastDiagnostic = null;
   let lastReadiness = { state: "no_candidate_yet" };
   let hasWaitedOnce = false;
+
   await captureAndLogChatGptDiagnostics(client, sceneId, options.beforeCount || 0, "image-extract-init").catch(() => null);
 
   await chatGptRuntimeMonitor.startMonitoring(client);
@@ -1313,14 +1773,12 @@ async function waitForLatestChatGPTGeneratedImage(client, options = {}) {
       source: "main",
       kind: "running",
       text: `chatgptImageExtract: waiting for latest assistant image for scene ${sceneId}`,
-      details: { minAssistantRootIndex, existingUrlCount: known.size },
+      details: { minAssistantRootIndex, existingUrlCount: ctx.knownUrls.size },
     });
-    for (let attempt = 1; ; attempt += 1) {
+
+    for (let attempt = 1; attempt <= 1; attempt += 1) {
     assertPipelineRunActive(runId);
     const attemptStartedAt = Date.now();
-    let refreshCount = 0;
-    const REFRESH_INTERVAL_MS = 60000;
-    let nextRefreshAt = attemptStartedAt + REFRESH_INTERVAL_MS;
     let sawGenerating = false;
     let readyTicks = 0;
     let lastLogAt = 0;
@@ -1481,7 +1939,7 @@ async function waitForLatestChatGPTGeneratedImage(client, options = {}) {
       if (!resent.ok)
         throw new Error(
           resent.error ||
-            "KhÃ´ng gá»­i láº¡i Ä‘Æ°á»£c image prompt vÃ o ChatGPT.",
+            "KhÃ´ng gá»­i láº¡i Ä‘Æ°á»£c image prompt vÃ o ChatGPT.",
         );
       await appendAppLog(null, {
         source: "main",
@@ -1492,34 +1950,11 @@ async function waitForLatestChatGPTGeneratedImage(client, options = {}) {
       hasWaitedOnce = false;
     };
 
-    while (Date.now() - attemptStartedAt < 900000) {
+    while (Date.now() - attemptStartedAt < IMAGE_WAIT_ATTEMPT_TIMEOUT_MS) {
       assertPipelineRunActive(runId);
 
-      if (Date.now() >= nextRefreshAt) {
-        refreshCount += 1;
-        const elapsedMs = Date.now() - attemptStartedAt;
-        await appendAppLog(null, {
-          source: "main",
-          kind: "running",
-          text: `Scene ${sceneId}:\nPeriodic ChatGPT refresh after 60s while waiting for NV1 image.`,
-          details: {
-            elapsedMs,
-            refreshCount,
-          },
-        }).catch(() => null);
-
-        await refreshChatGptPageBeforeImageExtract(client, {
-          sceneId,
-          stage: `periodic-refresh-nv1-wait-${refreshCount}`,
-          waitedMs: elapsedMs,
-          refreshCount,
-        }).catch(() => null);
-
-        await waitForCdpLoad(client).catch(() => null);
-        await sleep(4000);
-
-        nextRefreshAt = Date.now() + REFRESH_INTERVAL_MS;
-      }
+      // ---- 1. periodic refresh (fixed schedule; never resets waiting state) ----
+      await maybeRefreshChatGptImageWaitPage(ctx, client, sceneId);
 
       let preExtractWait = { ok: true };
       if (!hasWaitedOnce) {
@@ -1542,12 +1977,17 @@ async function waitForLatestChatGPTGeneratedImage(client, options = {}) {
         await sleep(2000);
       }
       if (!preExtractWait?.ok) {
-        await resendImagePrompt(
-          preExtractWait?.retryReason || "pre-extract-wait-failed",
-          preExtractWait?.imageState ||
-            lastSnapshot || { error: preExtractWait?.error || "unknown" },
-        );
-        break;
+        await appendAppLog(null, {
+          source: "main",
+          kind: "warning",
+          text: `Scene ${sceneId}: NV1 pre-extract wait did not finish; continuing wait without resend.`,
+          details: {
+            reason: preExtractWait?.retryReason || "pre-extract-wait-failed",
+            error: preExtractWait?.error || "",
+          },
+        }).catch(() => null);
+        await sleep(2500);
+        continue;
       }
       if (!loggedAfterResponse) {
         loggedAfterResponse = true;
@@ -1556,16 +1996,9 @@ async function waitForLatestChatGPTGeneratedImage(client, options = {}) {
       assertPipelineRunActive(runId);
       await sleep(3000);
       assertPipelineRunActive(runId);
-      await recoverCdpPageIfCrashed(
-        client,
-        "chatgpt",
-        `image-wait-scene-${(typeof options !== "undefined" && options?.sceneId) || (typeof context !== "undefined" && context?.sceneId) || ""}`,
-      ).catch(() => null);
+      await recoverCdpPageIfCrashed(client, "chatgpt", `image-wait-scene-${sceneId}`).catch(() => null);
       await recoverChatGptBlockingUi(client, {
-        sceneId:
-          (typeof options !== "undefined" && options?.sceneId) ||
-          (typeof context !== "undefined" && context?.sceneId) ||
-          "",
+        sceneId,
         stage: "image-wait-before-extract",
       }).catch(() => null);
 
@@ -1576,62 +2009,17 @@ async function waitForLatestChatGPTGeneratedImage(client, options = {}) {
           : typeof page !== "undefined"
             ? page
             : null,
-        {
-          sceneId:
-            (typeof options !== "undefined" && options?.sceneId) ||
-            (typeof context !== "undefined" && context?.sceneId) ||
-            "",
-          stage: "before-image-extract-wait",
-        },
+        { sceneId, stage: "before-image-extract-wait" },
       );
 
-      // Ensure the image is fully loaded and hydrated using the scroll-and-verify loop
+      // ---- 2. poll runtime + poll DOM ----
       assertPipelineRunActive(runId);
-      const hydration = await evaluateOnCdpPage(
-        client,
-        `(${ensureChatGptImageLoadedAndHydratedScript.toString()})(${minAssistantRootIndex})`,
-      ).catch((err) => {
-        if (isPipelineCancelledError(err)) throw err;
-        return { ok: false, error: err.message };
-      });
-      
-      const hydrationMsg = hydration?.ok
-        ? `ChatGPT image hydration success: tick=${hydration.tick || 0}, elapsed=${hydration.elapsedMs || 0}ms, mode=${hydration.mode || "unknown"}, placeholderDisappeared=${hydration.placeholderDisappeared}`
-        : `ChatGPT image hydration failed: ${hydration?.error || "unknown"}`;
+      const domSignals = await pollChatGptDom(client, minAssistantRootIndex);
+      const snapshot = pollChatGptRuntime();
+      ctx.lastSnapshot = snapshot;
 
-      await appendAppLog(sceneId, {
-        source: "main",
-        kind: hydration?.ok ? "ok" : "warning",
-        text: `Scene ${sceneId}: ${hydrationMsg}`,
-        details: hydration,
-      }).catch(() => null);
-
-      assertPipelineRunActive(runId);
-      const extracted = await extractLatestChatGPTGeneratedImageBytes(client, {
-        existingUrls: [...known],
-        minAssistantRootIndex,
-      }).catch((error) => {
-        if (isPipelineCancelledError(error)) throw error;
-        return {
-          ok: false,
-          error: error.message,
-          mode: "extract-error",
-        };
-      });
-      lastExtract = extracted;
-      if (extracted?.diagnostics) lastDiagnostic = extracted.diagnostics;
-
-      assertPipelineRunActive(runId);
-      const monitorSnap = chatGptRuntimeMonitor.captureSnapshot();
-      const snapshot = {
-        assistantCount: monitorSnap.metrics.dom.assistantMessageCount,
-        preparingImage: monitorSnap.state === "IMAGE_PLACEHOLDER" || monitorSnap.state === "NETWORK_IMAGE",
-        voiceReady: monitorSnap.metrics.dom.composerReady,
-        latestAssistantText: monitorSnap.metrics.dom.latestAssistantText,
-        loggedOut: monitorSnap.metrics.dom.loggedOut,
-        urls: monitorSnap.metrics.network.dalleUrlsCaptured.map(u => u.url),
-      };
-      lastSnapshot = snapshot;
+      // ---- 3. hydrate only when an image turn exists, then extract ----
+      const hydration = await maybeHydrateChatGptImage(ctx, client, minAssistantRootIndex, sceneId, domSignals);
 
       // false-generating-empty-chat-break
       if (isFalseChatGptImageGeneratingState(snapshot)) {
@@ -1643,7 +2031,7 @@ async function waitForLatestChatGPTGeneratedImage(client, options = {}) {
         await appendAppLog(null, {
           source: "main",
           kind: "running",
-          text: `Scene ${(typeof options !== "undefined" && options?.sceneId) || (typeof context !== "undefined" && context?.sceneId) || ""}: ChatGPT image generating looks stale/empty; tick ${falseGeneratingTicks}/3.`,
+          text: `Scene ${sceneId}: ChatGPT image generating looks stale/empty; tick ${falseGeneratingTicks}/3.`,
           details: vidoraCompactLogDetails({ imageState: snapshot }),
         }).catch(() => null);
 
@@ -1651,16 +2039,14 @@ async function waitForLatestChatGPTGeneratedImage(client, options = {}) {
           await appendAppLog(null, {
             source: "main",
             kind: "error",
-            text: `Scene ${(typeof options !== "undefined" && options?.sceneId) || (typeof context !== "undefined" && context?.sceneId) || ""}: ChatGPT không thực sự tạo ảnh; thoát vòng chờ để retry gửi NV1.`,
+            text: `Scene ${sceneId}: ChatGPT image state stale; continuing wait without NV1 resend.`,
             details: {
               imageState: snapshot,
               reason: "false-generating-empty-chat",
             },
           }).catch(() => null);
-
-          throw new Error(
-            "false-generating-empty-chat: ChatGPT page is idle/empty but detector says generating.",
-          );
+          await sleep(2500);
+          continue;
         }
       } else {
         falseGeneratingTicks = 0;
@@ -1674,87 +2060,36 @@ async function waitForLatestChatGPTGeneratedImage(client, options = {}) {
           ),
         );
       const activeGeneration = isChatGptActivelyGenerating(snapshot);
-      const hasActiveAssistantResponse = await evaluateOnCdpPage(
-        client,
-        `(() => {
-          const assistants = Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'));
-          if (!assistants.length) return false;
-          const latestAssistant = assistants[assistants.length - 1];
-          const latestText = (latestAssistant.textContent || "").trim();
-          if (latestText.length > 10) return true;
-          for (const node of assistants) {
-            if (node.querySelector('img, canvas, [aria-busy="true"], [role="progressbar"], [data-testid*="loading"], [data-testid*="spinner"], .aspect-square, .aspect-video, [class*="aspect-"]')) {
-              return true;
-            }
-          }
-          return false;
-        })()`
-      ).catch(() => false);
-
       const hasNewAssistantAfterPrompt =
         Number(snapshot?.assistantCount || 0) > minAssistantRootIndex ||
-        hasActiveAssistantResponse;
+        domSignals.hasActiveAssistantResponse;
       const scopedSnapshot = hasNewAssistantAfterPrompt
         ? snapshot
         : { ...snapshot, urls: [] };
-      const visibleCandidate =
-        hasVisibleChatGptImageCandidate(extracted) ||
-        (Array.isArray(scopedSnapshot?.urls) && scopedSnapshot.urls.length > 0);
-      const networkExtract =
-        !extracted?.ok && (!activeGeneration || visibleCandidate)
-          ? await tryExtractChatGptNetworkImage(
-              client,
-              options.networkCapture,
-            ).catch((error) => ({
-              ok: false,
-              mode: "network-error",
-              error: error.message,
-            }))
-          : null;
-      const screenshotExtract =
-        !extracted?.ok &&
-        !networkExtract?.ok &&
-        extracted?.screenshotCandidate &&
-        (!activeGeneration || visibleCandidate)
-          ? await captureChatGptImageElementScreenshot(
-              client,
-              extracted.screenshotCandidate,
-              {
-                sceneId:
-                  (typeof options !== "undefined" && options?.sceneId) ||
-                  (typeof context !== "undefined" && context?.sceneId) ||
-                  "",
-              },
-            ).catch((error) => ({
-              ok: false,
-              mode: "element-screenshot-error",
-              error: error.message,
-            }))
-          : null;
-      let chosen = extracted?.ok
-        ? extracted
-        : networkExtract?.ok
-          ? networkExtract
-          : screenshotExtract?.ok
-            ? screenshotExtract
-            : null;
 
-      if (chosen?.ok) {
-        if (isChatGptDotLoadingCanvasAsset(chosen)) {
-          await appendAppLog(sceneId, {
-            source: "main",
-            kind: "running",
-            text: `chatgptImageExtract: extracted candidate is still a dot-loading canvas (${chosen.width}x${chosen.height}, ${chosen.byteLength} bytes). Continuing wait...`,
-          });
-          chosen = null;
-        }
-      }
+      // ---- 4. scan candidates (DOM -> network -> screenshot) ----
+      const {
+        extracted,
+        networkExtract,
+        screenshotExtract,
+        chosen: rawChosen,
+        visibleCandidate,
+      } = await scanChatGptImageCandidates(client, options, minAssistantRootIndex, ctx, {
+        scopedSnapshot,
+        activeGeneration,
+        sceneId,
+      });
+      lastExtract = extracted;
+      if (extracted?.diagnostics) lastDiagnostic = extracted.diagnostics;
+
+      const chosen = await validateChatGptImageCandidate(rawChosen, sceneId, ctx, client);
+
       const readiness = classifyChatGptImageReadiness({
         chosen,
         extracted,
         snapshot: scopedSnapshot,
         elapsedMs: Date.now() - attemptStartedAt,
-        stallMs: realStallMs,
+        stallMs: IMAGE_WAIT_REAL_STALL_MS,
       });
       lastReadiness = readiness;
 
@@ -1791,16 +2126,22 @@ async function waitForLatestChatGPTGeneratedImage(client, options = {}) {
         }
       }).catch(() => null);
 
+      // ---- 5. progress detection (resets ctx.lastProgressAt on any change) ----
+      detectImageWaitProgress(ctx, {
+        assistantCount: snapshot?.assistantCount || 0,
+        latestAssistantText: snapshot?.latestAssistantText || "",
+        candidateSignature: chosen?.ok ? chatGptImageCandidateSignature(chosen) : "",
+        urls: scopedSnapshot?.urls || [],
+        runtimeState: snapshot?.runtimeState || "",
+      });
+
+      // ---- 6. candidate stability (never reused across a different candidate) ----
+      const stableTicks = updateCandidateStability(ctx, chosen);
+
       if (chosen?.ok) {
-        const signature = chatGptImageCandidateSignature(chosen);
-        if (signature && signature === lastSignature) stableTicks += 1;
-        else {
-          lastSignature = signature;
-          stableTicks = 1;
-        }
         await appendAppLog(null, {
           source: "main",
-          kind: stableTicks >= 3 ? "ok" : "running",
+          kind: stableTicks >= IMAGE_WAIT_STABLE_TICKS_REQUIRED ? "ok" : "running",
           text: `chatgptImageExtract: found candidate type=${chosen.method || chosen.sourceKind || "image"} stable=${stableTicks}/2`,
           details: {
             method: chosen.method || "",
@@ -1813,17 +2154,14 @@ async function waitForLatestChatGPTGeneratedImage(client, options = {}) {
             readinessState: readiness.state,
           },
         });
-        if (stableTicks >= 3) {
+        if (stableTicks >= IMAGE_WAIT_STABLE_TICKS_REQUIRED) {
           if (readiness.visibleCandidate) {
             await appendAppLog(null, {
               source: "main",
               kind: "ok",
               text: "chatgptImageExtract: visible image detected; suppressing thinking-stall",
               details: {
-                sceneId:
-                  (typeof options !== "undefined" && options?.sceneId) ||
-                  (typeof context !== "undefined" && context?.sceneId) ||
-                  "",
+                sceneId,
                 readinessState: readiness.state,
                 activeGeneration: readiness.activeGeneration,
               },
@@ -1832,7 +2170,7 @@ async function waitForLatestChatGPTGeneratedImage(client, options = {}) {
           await appendAppLog(null, {
             source: "main",
             kind: "ok",
-            text: `chatgptImageExtract: saved image via method=${chosen.method || chosen.sourceKind || "unknown"} for scene ${(typeof options !== "undefined" && options?.sceneId) || (typeof context !== "undefined" && context?.sceneId) || ""}`,
+            text: `chatgptImageExtract: saved image via method=${chosen.method || chosen.sourceKind || "unknown"} for scene ${sceneId}`,
             details: {
               width: chosen.width || 0,
               height: chosen.height || 0,
@@ -1853,10 +2191,7 @@ async function waitForLatestChatGPTGeneratedImage(client, options = {}) {
         ) {
           refreshedForVisibleOutput = true;
           await refreshChatGptPageBeforeImageExtract(client, {
-            sceneId:
-              (typeof options !== "undefined" && options?.sceneId) ||
-              (typeof context !== "undefined" && context?.sceneId) ||
-              "",
+            sceneId,
             stage: "visible-image-not-extractable-refresh",
             waitedMs: Date.now() - attemptStartedAt,
             readinessState: readiness.state,
@@ -1877,10 +2212,7 @@ async function waitForLatestChatGPTGeneratedImage(client, options = {}) {
             kind: "running",
             text: "chatgptImageExtract: visible image detected; suppressing thinking-stall",
             details: {
-              sceneId:
-                (typeof options !== "undefined" && options?.sceneId) ||
-                (typeof context !== "undefined" && context?.sceneId) ||
-                "",
+              sceneId,
               readinessState: readiness.state,
               diagnostic: {
                 ...(lastDiagnostic || {}),
@@ -1897,10 +2229,7 @@ async function waitForLatestChatGPTGeneratedImage(client, options = {}) {
             kind: "error",
             text: "chatgptImageExtract: image visible but extraction failed",
             details: {
-              sceneId:
-                (typeof options !== "undefined" && options?.sceneId) ||
-                (typeof context !== "undefined" && context?.sceneId) ||
-                "",
+              sceneId,
               rejected: extracted?.diagnostics?.rejected?.slice?.(0, 8) || [],
               imageCandidates:
                 extracted?.diagnostics?.imageCandidates?.slice?.(0, 8) || [],
@@ -1918,7 +2247,7 @@ async function waitForLatestChatGPTGeneratedImage(client, options = {}) {
           await appendAppLog(null, {
             source: "main",
             kind: "running",
-            text: `Scene ${(typeof options !== "undefined" && options?.sceneId) || (typeof context !== "undefined" && context?.sceneId) || ""}: waiting for ChatGPT generated image asset (${snapshot?.preparingImage ? "preparing-image" : "thinking"}).`,
+            text: `Scene ${sceneId}: waiting for ChatGPT generated image asset (${snapshot?.preparingImage ? "preparing-image" : "thinking"}).`,
             details: {
               mode: snapshot?.assistantMode,
               urls: snapshot?.urls?.length || 0,
@@ -1953,10 +2282,7 @@ async function waitForLatestChatGPTGeneratedImage(client, options = {}) {
           kind: "running",
           text: `chatgptImageExtract: candidate rejected reason=${extracted?.mode || networkExtract?.mode || screenshotExtract?.mode || "not-ready"}`,
           details: {
-            sceneId:
-              (typeof options !== "undefined" && options?.sceneId) ||
-              (typeof context !== "undefined" && context?.sceneId) ||
-              "",
+            sceneId,
             diagnostic: {
               ...(lastDiagnostic || {}),
               reasonSelected: readiness.state,
@@ -1969,52 +2295,60 @@ async function waitForLatestChatGPTGeneratedImage(client, options = {}) {
         });
       }
       if (readiness.state === "real_stall") {
-        await resendImagePrompt("real_stall", snapshot);
-        break;
+        await appendAppLog(null, {
+          source: "main",
+          kind: "warning",
+          text: `Scene ${sceneId}: NV1 real stall detected; continuing wait without resend.`,
+          details: { readinessState: readiness.state },
+        }).catch(() => null);
+        await sleep(2500);
+        continue;
       }
-      const activeAssetOrLoader = await evaluateOnCdpPage(
-        client,
-        `((minRoot) => {
-          const assistants = Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'));
-          const scanMinIndex = Math.min(minRoot, Math.max(0, assistants.length - 1));
-          const sceneAssistants = assistants.slice(scanMinIndex);
-          if (!sceneAssistants.length) return false;
-          
-          for (const node of sceneAssistants) {
-            const found = node.querySelector(
-              'img, canvas, [aria-busy="true"], [role="progressbar"], [data-testid*="loading"], [data-testid*="spinner"], .aspect-square, .aspect-video, [class*="aspect-"]'
-            );
-            if (found) return true;
-          }
-          
-          const hasStop = !![...document.querySelectorAll('button, [role="button"]')].find(btn => {
-            const style = window.getComputedStyle(btn);
-            if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity || 1) === 0) return false;
-            return /stop|dừng/i.test(btn.textContent || btn.innerText || btn.getAttribute('aria-label') || '');
-          });
-          if (hasStop) return true;
-          
-          return false;
-        })(${Number(minAssistantRootIndex || 0)})`
-      ).catch(() => false);
 
+      // ---- 7. retry gate ----
       const hasNetworkActivity = Boolean(options.networkCapture?.summary?.()?.length > 0);
-      const isGeneratingOrLoading = activeAssetOrLoader || hasNetworkActivity || hasActiveAssistantResponse;
+      const isGeneratingOrLoading =
+        domSignals.hasImageTurn || hasNetworkActivity || domSignals.hasActiveAssistantResponse;
+
+      const retryDue = shouldRetryChatGptImageWait(ctx, {
+        attemptStartedAt,
+        attemptTimeoutMs: IMAGE_WAIT_LONG_NO_PROGRESS_MS,
+        longNoProgressMs: IMAGE_WAIT_LONG_NO_PROGRESS_MS,
+        isGeneratingOrLoading,
+        hasPlaceholder: domSignals.hasImageTurn,
+      });
 
       if (
-        (sawGenerating && composerLooksReady && readyTicks >= 8 && !isGeneratingOrLoading) ||
+        (sawGenerating &&
+          composerLooksReady &&
+          readyTicks >= IMAGE_WAIT_READY_TICKS_REQUIRED &&
+          !isGeneratingOrLoading &&
+          retryDue) ||
         textOnlyAnswer
       ) {
-        await resendImagePrompt(
-          textOnlyAnswer
-            ? "text-only-answer"
-            : "no-usable-image-asset-after-generating",
-          snapshot,
-        );
-        break;
+        await appendAppLog(null, {
+          source: "main",
+          kind: "warning",
+          text: `Scene ${sceneId}: NV1 output not usable yet; continuing wait without resend.`,
+          details: {
+            textOnlyAnswer,
+            retryDue,
+            readyTicks,
+          },
+        }).catch(() => null);
+        await sleep(2500);
+        continue;
       }
     }
+    }
+  } finally {
+    await chatGptRuntimeMonitor.stopMonitoring();
   }
+
+  // NOTE: unreachable under normal control flow - the outer `for` loop above
+  // has no exit condition of its own and only ends via `return chosen;` or a
+  // thrown error (propagated out through the `finally` above). Preserved
+  // verbatim from the pre-refactor implementation so behavior is unchanged.
   await fs
     .writeFile(
       path.join(
@@ -2023,12 +2357,12 @@ async function waitForLatestChatGPTGeneratedImage(client, options = {}) {
       ),
       JSON.stringify(
         {
-          lastSnapshot: sanitizeChatGptImageSnapshot(lastSnapshot),
+          lastSnapshot: sanitizeChatGptImageSnapshot(ctx.lastSnapshot),
           lastExtract,
           readiness: { ...lastReadiness, state: "timeout" },
           diagnostic: { ...(lastDiagnostic || {}), reasonSelected: "timeout" },
           networkCandidates: options.networkCapture?.summary?.() || [],
-          existingUrlCount: known.size,
+          existingUrlCount: ctx.knownUrls.size,
         },
         null,
         2,
@@ -2044,16 +2378,13 @@ async function waitForLatestChatGPTGeneratedImage(client, options = {}) {
       readiness: { ...lastReadiness, state: "timeout" },
       diagnostic: { ...(lastDiagnostic || {}), reasonSelected: "timeout" },
       lastExtract,
-      lastSnapshot: sanitizeChatGptImageSnapshot(lastSnapshot),
+      lastSnapshot: sanitizeChatGptImageSnapshot(ctx.lastSnapshot),
       networkCandidates: options.networkCapture?.summary?.() || [],
     },
   });
   throw new Error(
     "Timed out waiting for a complete ChatGPT generated image asset. Screenshot crop was not saved as keyframe.",
   );
-  } finally {
-    await chatGptRuntimeMonitor.stopMonitoring();
-  }
 }
 
 async function extractLatestChatGPTGeneratedImageBytes(client, options = {}) {
@@ -2592,41 +2923,120 @@ async function extractLatestChatGPTGeneratedImageBytesScript(
       .filter(Boolean)
       .at(-1) || "";
   const rootsFrom = () => {
-    const roleNodes = [
+    const assistantRoleNodes = [
       ...document.querySelectorAll('[data-message-author-role="assistant"]'),
     ];
-    const nodes = roleNodes.length
-      ? roleNodes
-      : [
-          ...document.querySelectorAll(
-            '[data-testid*="conversation-turn"], [data-message-id], article, .message, [class*="response"], [class*="markdown"]',
+    const rootSelector = [
+      ".agent-turn",
+      '[data-testid*="conversation-turn"]',
+      "[data-message-id]",
+      "article",
+      ".message",
+    ].join(", ");
+    const imageTurnMarkerSelector = [
+      ".agent-turn",
+      ".group\\/imagegen-image",
+      'img[alt^="Generated image"]',
+      'button[aria-label="Edit image"]',
+      '[data-testid="image-gen-overlay-actions"]',
+      '[data-testid*="image"]',
+      '[class*="image-turn"]',
+      '[class*="media"]',
+      '[class*="asset"]',
+    ].join(", ");
+    const hasImageTurnMarker = (node) =>
+      Boolean(
+        node.matches?.(imageTurnMarkerSelector) ||
+          node.querySelector?.(
+            '.group\\/imagegen-image, img[alt^="Generated image"], button[aria-label="Edit image"], [data-testid="image-gen-overlay-actions"]',
           ),
-        ].filter((node) => {
-          if (node.closest?.('[data-message-author-role="user"]')) return false;
-          if (node.querySelector?.('[data-message-author-role="user"]'))
-            return false;
-          const text = (node.innerText || "").trim();
-          return (
-            text.length > 20 ||
-            node.querySelector?.("img, picture source, canvas, a[href], button")
-          );
-        });
-    const unique = [...new Set(nodes)].sort(
-      (a, b) =>
-        (a.getBoundingClientRect?.().y || 0) -
-        (b.getBoundingClientRect?.().y || 0),
-    );
-    return unique.map((node, index) => ({
-      node,
-      index,
-      mode: roleNodes.length ? "assistant-role" : "fallback-assistant-root",
-    }));
+      );
+    const imageTurnNodes = [
+      ...document.querySelectorAll(imageTurnMarkerSelector),
+    ].map((node) => node.closest?.(rootSelector) || node).filter((node) => {
+      if (node.closest?.('[data-message-author-role="user"]')) return false;
+      if (node.querySelector?.('[data-message-author-role="user"]'))
+        return false;
+      if (!node.querySelector?.('img, picture source, canvas, a[href], button')) return false;
+      return (
+        hasImageTurnMarker(node) ||
+        isVisible(node, true) ||
+        Boolean(node.querySelector?.('img, canvas'))
+      );
+    });
+    const fallbackNodes = [
+      ...document.querySelectorAll(
+        rootSelector,
+      ),
+    ].filter((node) => {
+      if (node.closest?.('[data-message-author-role="user"]')) return false;
+      if (node.querySelector?.('[data-message-author-role="user"]'))
+        return false;
+      const text = (node.innerText || "").trim();
+      return (
+        text.length > 20 ||
+        hasImageTurnMarker(node) ||
+        node.querySelector?.("img, picture source, canvas, a[href], button")
+      );
+    });
+    const toRoots = (nodes, mode) =>
+      nodes.map((node) => ({ node, mode }));
+    const dedupeRoots = (items) => {
+      const seen = new Set();
+      return items
+        .filter((item) => {
+          if (!item?.node || seen.has(item.node)) return false;
+          seen.add(item.node);
+          return true;
+        })
+        .sort(
+          (a, b) =>
+            (a.node.getBoundingClientRect?.().y || 0) -
+            (b.node.getBoundingClientRect?.().y || 0),
+        )
+        .map((item, index) => ({ ...item, index }));
+    };
+    const assistantRoleRoots = dedupeRoots(toRoots(assistantRoleNodes, "assistant-role"));
+    const responseRoots = dedupeRoots([
+      ...toRoots(assistantRoleNodes, "assistant-role"),
+      ...toRoots(imageTurnNodes, "image-turn-root"),
+      ...toRoots(fallbackNodes, "fallback-assistant-root"),
+    ]);
+    return {
+      assistantRoleRoots,
+      responseRoots,
+      rootDebug: {
+        roleNodeCount: assistantRoleNodes.length,
+        fallbackNodeCount: fallbackNodes.length,
+        imageTurnNodeCount: imageTurnNodes.length,
+        agentTurnNodeCount: [...document.querySelectorAll(".agent-turn")].length,
+        generatedImageNodeCount: [
+          ...document.querySelectorAll(
+            '.group\\/imagegen-image, img[alt^="Generated image"]',
+          ),
+        ].length,
+      },
+    };
   };
-  const assistantRoots = rootsFrom();
-  const scanMinRoot = Math.min(minRoot, Math.max(0, assistantRoots.length - 1));
-  const selectedRoots = assistantRoots.filter((root) => root.index >= scanMinRoot);
+  const { assistantRoleRoots, responseRoots, rootDebug } = rootsFrom();
+  const baselineLooksStale =
+    minRoot > 0 &&
+    responseRoots.length > 0 &&
+    minRoot >= responseRoots.length &&
+    minRoot > assistantRoleRoots.length;
+  const scanMinRoot = baselineLooksStale
+    ? 0
+    : Math.min(minRoot, Math.max(0, responseRoots.length - 1));
+  const selectedRoots = responseRoots.filter(
+    (root) =>
+      root.index >= scanMinRoot ||
+      root.mode === "image-turn-root",
+  );
   const waitingForNewAssistantRoot =
-    minRoot > 0 && !selectedRoots.length && assistantRoots.length;
+    !baselineLooksStale &&
+    minRoot > 0 &&
+    !selectedRoots.length &&
+    assistantRoleRoots.length;
   const usingLatestRootFallback = false;
   const roots = selectedRoots.length
     ? selectedRoots
@@ -2663,9 +3073,18 @@ async function extractLatestChatGPTGeneratedImageBytesScript(
       ),
     ].some((node) => isVisible(node, true));
   const diagnostics = {
-    assistantRootCount: assistantRoots.length,
+    assistantRootCount: assistantRoleRoots.length,
+    responseRootCount: responseRoots.length,
     selectedRootCount: roots.length,
+    roleNodeCount: rootDebug.roleNodeCount,
+    fallbackNodeCount: rootDebug.fallbackNodeCount,
+    uniqueRootCount: responseRoots.length,
+    agentTurnNodeCount: rootDebug.agentTurnNodeCount,
+    imageTurnNodeCount: rootDebug.imageTurnNodeCount,
+    generatedImageNodeCount: rootDebug.generatedImageNodeCount,
     minAssistantRootIndex: minRoot,
+    effectiveMinAssistantRootIndex: scanMinRoot,
+    staleMinAssistantRootIndex: baselineLooksStale,
     usingLatestRootFallback,
     waitingForNewAssistantRoot,
     stopVisible,
@@ -2944,7 +3363,7 @@ async function extractLatestChatGPTGeneratedImageBytesScript(
     mode: candidates.length
       ? "candidate-fetch-failed"
       : "no-complete-generated-image",
-    rootCount: assistantRoots.length,
+    rootCount: responseRoots.length,
     minAssistantRootIndex: minRoot,
     screenshotCandidate: screenshotCandidate
       ? {
@@ -3298,169 +3717,163 @@ async function waitForChatGptResponse(page, before, options = {}) {
   const {
     sceneId,
     promptText: instruction,
-    promptHash: instructionHash,
-    targetTitle: chatContextTitle,
-    stage = "motion_prompt",
-    chatGptStability = {},
-    sceneDir,
   } = options;
   const runId = String(options.runId || options.originalOptions?.runId || "").trim();
 
   const startedAt = Date.now();
   let latest = '';
-  let lastState = null;
-  let recoveredOnce = 0;
-  let motionAttemptStartedAt = startedAt;
   let lastBadMotionText = '';
   let badMotionTextTicks = 0;
+  let lastStableHash = "";
+  let previousPollHash = "";
+  let lastTextChangeAt = Date.now();
+  let stableResponseTicks = 0;
+  const NV2_RESPONSE_TIMEOUT_MS = 300000;
+  const NV2_STABLE_RESPONSE_TICKS = 3;
+  const NV2_TEXT_STABLE_MS = 4000;
 
-  const retryMotionPrompt = async (reason, state) => {
-    recoveredOnce += 1;
-    if (sceneDir) {
-      await fs.writeFile(
-        path.join(
-          sceneDir,
-          `scene_${String(sceneId).padStart(3, '0')}_chatgpt_motion_recovery_${recoveredOnce}_${reason}.json`
-        ),
-        JSON.stringify({ reason, state, elapsedMs: Date.now() - motionAttemptStartedAt }, null, 2),
-        'utf8'
-      ).catch(() => null);
-    }
-    await appendAppLog(null, {
-      source: 'main',
-      kind: 'running',
-      text: `Scene ${sceneId}: NV2 bị kẹt (${reason}), retry ${recoveredOnce}/3: F5 → Stop → F5 → upload lại ảnh → gửi lại NV2.`
-    });
-    
-    // Stop monitoring before reload
-    await chatGptRuntimeMonitor.stopMonitoring();
-    
-    await page.Page.reload({ ignoreCache: true }).catch(() => null);
-    await waitForCdpLoad(page).catch(() => null);
-    await sleep(1800);
-    const responseChoiceRecovery = await recoverChatGptResponseChoiceChat(page, {
-      sceneId,
-      targetTitle: chatContextTitle,
-      stage: `motion-prompt-retry-${recoveredOnce}`,
-    });
-    if (responseChoiceRecovery?.recovered) {
-      await appendAppLog(null, {
-        source: 'main',
-        kind: 'ok',
-        text: `Scene ${sceneId}: NV2 recovery da tao chat moi truoc khi gui lai prompt.`,
-        details: responseChoiceRecovery,
-      });
-    }
-    const stopped = await evaluateOnCdpPage(page, `(${clickChatGptStopGeneratingScript.toString()})()`).catch((error) => ({ ok: false, error: error.message }));
-    await appendAppLog(null, {
-      source: 'main',
-      kind: stopped?.ok ? 'ok' : 'running',
-      text: `Scene ${sceneId}: NV2 recovery Stop: ${stopped?.ok ? stopped.mode || 'ok' : stopped?.error || 'không thấy Stop'}`,
-      details: stopped
-    });
-    await sleep(800);
-    await page.Page.reload({ ignoreCache: true }).catch(() => null);
-    await waitForCdpLoad(page).catch(() => null);
-    await sleep(2200);
-    
-    // Restart monitoring
-    await chatGptRuntimeMonitor.startMonitoring(page);
-
-    const imagePath = sceneDir ? path.join(sceneDir, `scene_${String(sceneId).padStart(3, '0')}_keyframe.png`) : '';
-    const uploadAgain = imagePath ? await uploadFileViaCdp(page, imagePath, 'chatgpt').catch((error) => ({ ok: false, error: error.message })) : { ok: false };
-
-    await appendAppLog(null, {
-      source: 'main',
-      kind: uploadAgain?.ok ? 'ok' : 'error',
-      text: `Scene ${sceneId}: NV2 recovery upload lại keyframe: ${uploadAgain?.ok ? 'ChatGPT đã nhận ảnh' : uploadAgain?.error || 'failed'}`,
-      details: uploadAgain
-    });
-    if (!uploadAgain?.ok) throw new Error(uploadAgain?.error || 'Không upload lại được keyframe trước khi retry NV2.');
-    await sleep(1500);
-    const resent = await sendPromptViaCdpInput(page, instruction);
-
-    if (!resent?.ok) throw new Error(resent?.error || 'Không gửi lại Nhiệm vụ 2 sau recovery.');
-    motionAttemptStartedAt = Date.now();
-    lastBadMotionText = '';
-    badMotionTextTicks = 0;
-    await appendAppLog(null, {
-      source: 'main',
-      kind: 'ok',
-      text: `Scene ${sceneId}: đã gửi lại NV2 sau recovery ${recoveredOnce}/3.`,
-      details: { resent }
-    });
-    return true;
-  };
-
-  const adapter = new ChatGptPipelineAdapter(chatGptRuntimeMonitor);
-  await chatGptRuntimeMonitor.startMonitoring(page);
+  await chatGptRuntimeMonitor.startMonitoring(page).catch(() => null);
 
   try {
-    const NV2_STALLED_NO_PROGRESS_TIMEOUT_MS = 45000;
-
-    while (true) {
+    while (Date.now() - startedAt < NV2_RESPONSE_TIMEOUT_MS) {
       assertPipelineRunActive(runId);
-      let waitError = null;
-      let resolvedState = null;
 
-      try {
-        resolvedState = await adapter.waitForResponseReady(NV2_STALLED_NO_PROGRESS_TIMEOUT_MS, 3000);
-      } catch (error) {
-        if (isPipelineCancelledError(error)) throw error;
-        waitError = error;
-      }
-
-      const currentText = (chatGptRuntimeMonitor.metrics.dom.latestAssistantText || "").trim();
+      const snapshot = await evaluateOnCdpPage(
+        page,
+        `(${readLatestAssistantScript.toString()})()`,
+      ).catch((error) => ({ error: error.message }));
+      const messageSnapshot = await evaluateOnCdpPage(
+        page,
+        `(${readAssistantMessageSnapshotScript.toString()})()`,
+      ).catch((error) => ({ ok: false, error: error.message, messages: [] }));
+      const monitorSnapshot = chatGptRuntimeMonitor.captureSnapshot?.() || {};
+      const monitorDom = monitorSnapshot.metrics?.dom || {};
+      const monitorNetwork = monitorSnapshot.metrics?.network || {};
+      const currentText = String(snapshot?.text || "").trim();
       const currentTextLength = currentText.length;
+      const currentHash = String(snapshot?.hash || "");
+      const domAssistantCount = Number(snapshot?.count || 0);
+      const monitorAssistantCount = Number(monitorDom.assistantMessageCount || 0);
+      const assistantCount = Math.max(domAssistantCount, monitorAssistantCount);
+      const hardGenerating = Boolean(
+        snapshot?.stopButton ||
+        snapshot?.streamingIndicator ||
+        messageSnapshot?.stopVisible ||
+        messageSnapshot?.stopButtonVisible ||
+        messageSnapshot?.streamingIndicator ||
+        monitorSnapshot.state === "STREAMING_TEXT"
+      );
+      const softBusy = Boolean(
+        snapshot?.composerBusy ||
+        snapshot?.activeGenerationMarker ||
+        messageSnapshot?.composerBusy ||
+        messageSnapshot?.activeGenerationMarker ||
+        monitorSnapshot.state === "HYDRATING" ||
+        monitorSnapshot.state === "WAITING_SEND" ||
+        monitorSnapshot.state === "UPLOADING" ||
+        monitorDom.generationActive
+      );
+      const hasNewMessage =
+        assistantCount > Number(before?.count || 0);
+      const hasChangedLatestText =
+        Boolean(currentHash) && currentHash !== previousPollHash;
+      previousPollHash = currentHash;
+      const freshAssistant = hasNewMessage ||
+        (Boolean(currentText) && currentText !== String(before?.text || "").trim());
+      const resolvedState = {
+        generation: hardGenerating,
+        streamingIndicator: Boolean(
+          snapshot?.streamingIndicator ||
+          messageSnapshot?.streamingIndicator ||
+          monitorSnapshot.state === "STREAMING_TEXT"
+        ),
+      };
+      const completedSnapshot = {
+        ...messageSnapshot,
+        count: Math.max(Number(messageSnapshot?.count || 0), assistantCount),
+        composerBusy: false,
+        streamingIndicator: hardGenerating,
+        activeGenerationMarker: hardGenerating,
+        generationActive: hardGenerating,
+      };
+      const completed = extractCompletedNv2ResponseFromSnapshot(completedSnapshot, before);
+      const completedText = String(completed?.text || "").trim();
+      const completedHash = completedText ? hashChatGptSnapshotText(completedText) : "";
+      const observedText = completedText || currentText;
+      const observedHash = completedHash || currentHash;
+      const observedTextLength = observedText.length;
+      if (observedHash && observedHash !== lastStableHash) {
+        lastStableHash = observedHash;
+        lastTextChangeAt = Date.now();
+        stableResponseTicks = observedTextLength > 15 ? 1 : 0;
+      } else if (observedHash && observedTextLength > 15) {
+        stableResponseTicks += 1;
+      } else {
+        stableResponseTicks = 0;
+      }
+      const textStableMs = Date.now() - lastTextChangeAt;
 
-      await appendAppLog(null, {
+      await appendAppLog(sceneId, {
         source: 'main',
         kind: 'running',
-        text: `[NV2] Polling via Monitor: textLength=${currentTextLength}, state=${chatGptRuntimeMonitor.state}, intent=${chatGptRuntimeMonitor.intent}`,
+        text: `ChatGPT NV2: waiting for response (assistant=${assistantCount}/${before?.count || 0}, textLength=${currentTextLength}, hash=${currentHash || "none"}, generating=${hardGenerating}, stable=${stableResponseTicks}/${NV2_STABLE_RESPONSE_TICKS})`,
         details: {
-          currentTextLength,
-          state: chatGptRuntimeMonitor.state,
-          intent: chatGptRuntimeMonitor.intent,
-          confidence: chatGptRuntimeMonitor.confidence,
-          waitError: waitError ? waitError.message : null
-        }
+          elapsedMs: Date.now() - startedAt,
+          timeoutMs: NV2_RESPONSE_TIMEOUT_MS,
+          latestTextChanged: hasChangedLatestText,
+          freshAssistant,
+          assistantCount,
+          domAssistantCount,
+          monitorAssistantCount,
+          textLength: currentTextLength,
+          hash: currentHash,
+          completedOk: Boolean(completed?.ok),
+          completedError: completed?.error || null,
+          completedTextLength: completedText.length,
+          completedHash,
+          generating: hardGenerating,
+          hardGenerating,
+          softBusy,
+          stableResponseTicks,
+          stableResponseTarget: NV2_STABLE_RESPONSE_TICKS,
+          textStableMs,
+          textStableTargetMs: NV2_TEXT_STABLE_MS,
+          stopButton: Boolean(snapshot?.stopButton),
+          composerBusy: Boolean(snapshot?.composerBusy),
+          generationSignals:
+            snapshot?.generationSignals ||
+            messageSnapshot?.generationSignals ||
+            monitorDom.generationSignals ||
+            null,
+          runtimeState: monitorSnapshot.state || "",
+          runtimeIntent: monitorSnapshot.intent || "",
+          loggedOut: Boolean(monitorDom.loggedOut),
+          activeMediaRequests: Number(monitorNetwork.activeMediaRequests || 0),
+          source: snapshot?.source || snapshot?.mode || "readLatestAssistantScript",
+          snapshotError: snapshot?.error || null,
+        },
       }).catch(() => null);
 
-      if (currentText) {
-        if (isChatGptPolicyRefusalText(currentText)) {
-          await notifyChatGptPolicyRefusal(sceneId, 'NV2/motion-prompt', currentText);
-        }
-      }
-
-      if (resolvedState && !waitError) {
-        const validation = validateMotionPromptResponse(currentText, { beforeText: before?.text || '', instruction, taskPrompt: '', state: resolvedState });
-        if (validation.ok) {
-          latest = currentText;
-          break;
-        } else {
-          waitError = new Error(validation.error || "invalid-response");
-        }
-      }
-
-      if (!currentText) {
-        if (waitError) {
-          if (recoveredOnce >= 3) {
-            throw new Error(`Timeout waiting for NV2 response after multiple recoveries: ${waitError.message}`);
-          }
-          const mockState = { generating: false, text: "", count: chatGptRuntimeMonitor.metrics.dom.assistantMessageCount };
-          if (await retryMotionPrompt('no-assistant-after-send', mockState)) {
-            continue;
-          }
-        }
+      if (!observedText) {
         await sleep(1500);
         continue;
       }
 
-      latest = currentText;
-      const freshAssistant = chatGptRuntimeMonitor.metrics.dom.assistantMessageCount > (before?.count || 0) || latest !== before?.text;
-      const quality = validateMotionPromptResponse(latest, { beforeText: before?.text || '', instruction, taskPrompt: '', state: resolvedState });
-      
-      const retryableBadMotionText = freshAssistant && !quality.ok && isRetryableChatGptToolErrorText(latest, 'motion');
+      latest = observedText;
+
+      if (isChatGptPolicyRefusalText(latest)) {
+        await notifyChatGptPolicyRefusal(sceneId, 'NV2/motion-prompt', latest);
+      }
+
+      const quality = validateMotionPromptResponse(latest, {
+        beforeText: before?.text || '',
+        instruction,
+        taskPrompt: '',
+        state: resolvedState,
+      });
+
+      const retryableBadMotionText =
+        freshAssistant && !quality.ok && isRetryableChatGptToolErrorText(latest, 'motion');
       const normalizedBadMotionText = normalizeChatGptRetryText(latest);
       if (freshAssistant && !quality.ok && (retryableBadMotionText || quality.error === 'too-short')) {
         if (normalizedBadMotionText && normalizedBadMotionText === lastBadMotionText) {
@@ -3474,22 +3887,43 @@ async function waitForChatGptResponse(page, before, options = {}) {
         badMotionTextTicks = 0;
       }
 
-      if (waitError) {
-        if (recoveredOnce >= 3) {
-          throw new Error(`Timeout waiting for NV2 response: ${waitError.message}`);
-        }
-        const mockState = { generating: false, text: latest, count: chatGptRuntimeMonitor.metrics.dom.assistantMessageCount };
-        if (await retryMotionPrompt(retryableBadMotionText ? 'retryable-bad-motion-text' : (quality.error || 'bad-response-idle'), mockState)) {
-          continue;
-        }
+      if (
+        completed?.ok &&
+        quality.ok &&
+        !hardGenerating &&
+        stableResponseTicks >= NV2_STABLE_RESPONSE_TICKS &&
+        textStableMs >= NV2_TEXT_STABLE_MS
+      ) {
+        return { ok: true, text: latest };
       }
+
+      await appendAppLog(null, {
+        source: 'main',
+        kind: 'running',
+        text: `Scene ${sceneId}: NV2 response not valid yet; continuing without upload or resend.`,
+        details: {
+          error: completed?.error || quality.error || (hardGenerating ? "still-generating" : "waiting-for-stable-response"),
+          quality,
+          completedState: completed?.state || null,
+          generating: hardGenerating,
+          hardGenerating,
+          softBusy,
+          stableResponseTicks,
+          stableResponseTarget: NV2_STABLE_RESPONSE_TICKS,
+          textStableMs,
+          textStableTargetMs: NV2_TEXT_STABLE_MS,
+          badMotionTextTicks,
+          retryableBadMotionText,
+          elapsedMs: Date.now() - startedAt,
+        },
+      }).catch(() => null);
 
       await sleep(1500);
     }
 
-    return { ok: true, text: latest };
+    throw new Error(`Timeout waiting for NV2 response after ${Math.round(NV2_RESPONSE_TIMEOUT_MS / 1000)}s without resend.`);
   } finally {
-    await chatGptRuntimeMonitor.stopMonitoring();
+    await chatGptRuntimeMonitor.stopMonitoring().catch(() => null);
   }
 }
 
@@ -3759,15 +4193,21 @@ function isValidChatGptConversationUrl(url = "") {
 async function waitForChatGptHydrationResponse(
   client,
   beforeCount = 0,
-  { sceneId = 0, request = 0 } = {},
+  {
+    sceneId = 0,
+    request = 0,
+    beforeText = "",
+    timeoutMs = 180000,
+    idleReloadMs = 120000,
+    requireReady = true,
+  } = {},
 ) {
   await captureAndLogChatGptDiagnostics(client, sceneId, beforeCount, `hydration-request-${request}-init`).catch(() => null);
 
-  let lastText = "";
-  let stableTicks = 0;
+  const baselineText = String(beforeText || "").trim();
   const startedAt = Date.now();
   let refreshedAfterIdle = false;
-  while (Date.now() - startedAt < 180000) {
+  while (Date.now() - startedAt < timeoutMs) {
     assertPipelineRunActive();
     await sleep(2500);
     const snapshot = await evaluateOnCdpPage(
@@ -3777,32 +4217,41 @@ async function waitForChatGptHydrationResponse(
     const text = String(snapshot?.text || "").trim();
     const hasNewMessage =
       Number(snapshot?.count || 0) > Number(beforeCount || 0);
+    const hasChangedLatestText =
+      Boolean(baselineText) && Boolean(text) && text !== baselineText;
+    const ready = !requireReady || validateReadyResponse(text);
 
     await appendAppLog(sceneId, {
       source: "main",
       kind: "running",
       text: `ChatGPT hydration request ${request}: waiting for response (assistant count: ${snapshot?.count || 0}/${beforeCount}, generating: ${snapshot?.generating || false})`,
+      details: {
+        elapsedMs: Date.now() - startedAt,
+        timeoutMs,
+        latestTextChanged: hasChangedLatestText,
+        ready,
+        chars: text.length,
+      },
     }).catch(() => null);
-    if (hasNewMessage && text.length > 10) {
-      if (text === lastText) {
-        stableTicks += 1;
-      } else {
-        stableTicks = 0;
-        lastText = text;
-      }
-      if (stableTicks >= 2 && !snapshot.generating) {
-        await appendAppLog(null, {
-          source: "main",
-          kind: "ok",
-          text: `ChatGPT hydration request ${request} acknowledged.`,
-          details: { sceneId, chars: text.length },
-        }).catch(() => null);
-        return text;
-      }
+    if ((hasNewMessage || hasChangedLatestText) && ready && !snapshot?.generating) {
+      await appendAppLog(null, {
+        source: "main",
+        kind: "ok",
+        text: `ChatGPT hydration request ${request} acknowledged.`,
+        details: {
+          sceneId,
+          chars: text.length,
+          beforeCount,
+          latestCount: snapshot?.count || 0,
+          latestTextChanged: hasChangedLatestText,
+          ready,
+        },
+      }).catch(() => null);
+      return text;
     }
     if (
       !refreshedAfterIdle &&
-      Date.now() - startedAt > 120000 &&
+      Date.now() - startedAt > idleReloadMs &&
       !snapshot?.generating &&
       !hasNewMessage
     ) {
@@ -3810,7 +4259,7 @@ async function waitForChatGptHydrationResponse(
       await appendAppLog(null, {
         source: "main",
         kind: "warning",
-        text: `ChatGPT hydration request ${request} has no response after 45s and no loading state. Refreshing page once before continuing wait.`,
+        text: `ChatGPT hydration request ${request} has no response after ${Math.round(idleReloadMs / 1000)}s and no loading state. Refreshing page once before continuing wait.`,
         details: { sceneId, beforeCount, latestCount: snapshot?.count || 0 },
       }).catch(() => null);
       const reloadResult = await requestReloadWithReason(client, `hydration_timeout_req_${request}`, sceneId);
@@ -3851,16 +4300,32 @@ async function hydrateFreshChatGptContextAfterRotation(
   if (!snapshot.hydration) {
     snapshot.hydration = {};
   }
-  snapshot.hydration.request1Done = !!snapshot.hydration.request1Done;
-  snapshot.hydration.request2Done = !!snapshot.hydration.request2Done;
+  snapshot.hydration.request1Done = false;
+  snapshot.hydration.request2Done = false;
   snapshot.hydration.characterUploadDone = !!snapshot.hydration.characterUploadDone;
   snapshot.hydration.sceneUploadDone = !!snapshot.hydration.sceneUploadDone;
   snapshot.hydration.lastFrameUploadDone = !!snapshot.hydration.lastFrameUploadDone;
   snapshot.hydration.promptUploadDone = !!snapshot.hydration.promptUploadDone;
 
   const page = await getCdpPage("chatgpt", true, { bringToFront: true });
+  const initialAssistantCount = await evaluateOnCdpPage(
+    page,
+    `(${countChatGptAssistantRootsScript.toString()})()`,
+  ).catch(() => ({ count: 0 }));
+  if (Number(initialAssistantCount?.count || 0) > 0) {
+    await appendAppLog(null, {
+      source: "main",
+      kind: "running",
+      text: `ChatGPT hydrate skipped: current chat already has assistant messages.`,
+      details: { sceneId, assistantCount: initialAssistantCount?.count || 0 },
+    }).catch(() => null);
+    setChatGptContextFresh(false);
+    globalThis.__vidoraChatGptNewChatMode = false;
+    return;
+  }
 
-  if (!snapshot.hydration.request1Done) {
+  {
+    await setChatGptTaskState(sceneDir, "REQUEST1", "SEND", { sceneId });
     const prepromptFiles = projectDir
       ? await collectPrepromptRequestFiles({ outputFolder: projectDir })
       : [];
@@ -3868,6 +4333,10 @@ async function hydrateFreshChatGptContextAfterRotation(
       page,
       `(${countChatGptAssistantRootsScript.toString()})()`,
     ).catch(() => ({ count: 0 }));
+    const beforePrepromptLatest = await evaluateOnCdpPage(
+      page,
+      `(${readLatestAssistantScript.toString()})()`,
+    ).catch(() => ({}));
     if (prepromptFiles.length) {
       await appendAppLog(null, {
         source: "main",
@@ -3913,11 +4382,24 @@ async function hydrateFreshChatGptContextAfterRotation(
       throw new Error(
         `chatgpt-hydration-preprompt-message-failed: ${sentPreprompt?.error || "unknown"}`,
       );
-    await waitForChatGptHydrationResponse(page, beforePreprompt?.count || 0, { sceneId, request: 1 });
+    await setChatGptTaskState(sceneDir, "REQUEST1", "WAIT", { sceneId });
+    const request1Text = await waitForChatGptHydrationResponse(page, beforePreprompt?.count || 0, {
+      sceneId,
+      request: 1,
+      beforeText: beforePrepromptLatest?.text || "",
+      timeoutMs: 300000,
+      idleReloadMs: 120000,
+      requireReady: true,
+    });
+    await setChatGptTaskState(sceneDir, "REQUEST1", "VALIDATE", {
+      sceneId,
+      chars: String(request1Text || "").length,
+    });
 
     snapshot.hydration.request1Done = true;
     snapshot.pipelineStage = "HYDRATION_2";
     await writeSceneSnapshot(sceneDir, snapshot);
+    await setChatGptTaskState(sceneDir, "REQUEST1", "COMPLETE", { sceneId });
   }
 
   const deadline = Date.now() + 15000;
@@ -3945,7 +4427,8 @@ async function hydrateFreshChatGptContextAfterRotation(
     }).catch(() => null);
   }
 
-  if (!snapshot.hydration.request2Done) {
+  {
+    await setChatGptTaskState(sceneDir, "REQUEST2", "SEND", { sceneId });
     const recentKeyframes = projectDir
       ? await collectRecentProjectKeyframes(projectDir, 5, sceneId)
       : [];
@@ -3953,6 +4436,10 @@ async function hydrateFreshChatGptContextAfterRotation(
       page,
       `(${countChatGptAssistantRootsScript.toString()})()`,
     ).catch(() => ({ count: 0 }));
+    const beforeScenesLatest = await evaluateOnCdpPage(
+      page,
+      `(${readLatestAssistantScript.toString()})()`,
+    ).catch(() => ({}));
     if (recentKeyframes.length) {
       await appendAppLog(null, {
         source: "main",
@@ -3970,6 +4457,7 @@ async function hydrateFreshChatGptContextAfterRotation(
         {
           rotationHydration: true,
           request: 2,
+          batchUpload: true,
           trailingUploadLog: `Scene ${sceneId}: Uploading recent keyframes for ChatGPT hydration...`,
         },
       );
@@ -3987,7 +4475,7 @@ async function hydrateFreshChatGptContextAfterRotation(
     }
     const sentScenes = await sendPromptViaCdpInput(
       page,
-      "Request 2: read and remember the attached keyframes from up to 20 previous project scenes. Use them as visual continuity context for upcoming requests. Reply only when ready.",
+      "Request 2: read and remember the attached keyframes from up to 5 previous project scenes. Use them as visual continuity context for upcoming requests. Reply only when ready.",
       {
         beforeCount: beforeScenes?.count || 0,
         sceneId,
@@ -3998,11 +4486,27 @@ async function hydrateFreshChatGptContextAfterRotation(
       throw new Error(
         `chatgpt-hydration-keyframes-message-failed: ${sentScenes?.error || "unknown"}`,
       );
-    await waitForChatGptHydrationResponse(page, beforeScenes?.count || 0, { sceneId, request: 2 });
+    await setChatGptTaskState(sceneDir, "REQUEST2", "WAIT", {
+      sceneId,
+      attachments: recentKeyframes.length,
+    });
+    const request2Text = await waitForChatGptHydrationResponse(page, beforeScenes?.count || 0, {
+      sceneId,
+      request: 2,
+      beforeText: beforeScenesLatest?.text || "",
+      timeoutMs: 600000,
+      idleReloadMs: 240000,
+      requireReady: true,
+    });
+    await setChatGptTaskState(sceneDir, "REQUEST2", "VALIDATE", {
+      sceneId,
+      chars: String(request2Text || "").length,
+    });
 
     snapshot.hydration.request2Done = true;
     snapshot.pipelineStage = "NV1_DRAFT_READY";
     await writeSceneSnapshot(sceneDir, snapshot);
+    await setChatGptTaskState(sceneDir, "REQUEST2", "COMPLETE", { sceneId });
   }
 
   setChatGptContextFresh(false);

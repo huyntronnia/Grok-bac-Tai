@@ -20,7 +20,7 @@ const {
   EMAIL_PATTERN,
   LOG_URL_PATTERN,
   APP_LOG_FILE,
-  } = require("./main/logging");
+} = require("./main/logging");
 
 const {
   sanitizeFileName,
@@ -41,7 +41,7 @@ const {
 const {
   getCdpPageMemoryMetrics,
   logMemoryMilestone,
-  } = require("./main/memory");
+} = require("./main/memory");
 
 const {
   getPipelineStateFile,
@@ -268,8 +268,8 @@ const {
 async function logChatGptStage(client, stage, context = {}, extra = {}) {
   const state = client
     ? await vidoraReadChatGptComposerStateReal(client, context).catch(
-        () => ({}),
-      )
+      () => ({}),
+    )
     : {};
   const stageLog = buildChatGptStageLog({
     sceneId: context.sceneId || "",
@@ -644,8 +644,8 @@ async function overwriteProjectSessionFile(
     path.dirname(targetPath),
     sanitizeFileName(
       path.basename(targetPath, path.extname(targetPath)) ||
-        safePayload.project?.name ||
-        "vidora-project",
+      safePayload.project?.name ||
+      "vidora-project",
     ),
   );
   safePayload.runtime = {
@@ -710,8 +710,8 @@ async function openProjectSessionFile() {
   }
   const projectFolderName = sanitizeFileName(
     path.basename(filePath, path.extname(filePath)) ||
-      parsed?.project?.name ||
-      "ai-scene-project",
+    parsed?.project?.name ||
+    "ai-scene-project",
   );
   const projectFolder = path.join(path.dirname(filePath), projectFolderName);
   parsed.runtime = { ...(parsed.runtime || {}), outputFolder: projectFolder };
@@ -972,15 +972,15 @@ async function readWebAccountStore({ includeSecrets = false } = {}) {
       includeSecrets
         ? account
         : {
-            id: account.id,
-            provider: normalizeCredentialProvider(account.provider),
-            label: account.label || "",
-            email: account.email || "",
-            state: account.state || "available",
-            selected: Boolean(account.selected),
-            lastUsedAt: account.lastUsedAt || "",
-            updatedAt: account.updatedAt || "",
-          },
+          id: account.id,
+          provider: normalizeCredentialProvider(account.provider),
+          label: account.label || "",
+          email: account.email || "",
+          state: account.state || "available",
+          selected: Boolean(account.selected),
+          lastUsedAt: account.lastUsedAt || "",
+          updatedAt: account.updatedAt || "",
+        },
     ),
   };
 }
@@ -1092,7 +1092,7 @@ async function deleteWebAccount(_event, accountId = "") {
     const next = store.accounts.find(
       (account) =>
         normalizeCredentialProvider(account.provider) ===
-          normalizeCredentialProvider(removed.provider) &&
+        normalizeCredentialProvider(removed.provider) &&
         !["limited", "login_required", "disabled"].includes(account.state),
     );
     if (next) next.selected = true;
@@ -1179,11 +1179,11 @@ async function checkProactiveMemoryGuard(sceneId, pageState) {
       if (processInfo) {
         rendererPrivate = processInfo.privateBytes || 0;
       }
-    } catch (_err) {}
+    } catch (_err) { }
   }
 
   const memoryGB = rendererPrivate / 1024 / 1024 / 1024;
-  
+
   if (memoryGB > 1.6) {
     await appendAppLog(sceneId, {
       source: "main",
@@ -1471,7 +1471,7 @@ async function collectRecentProjectKeyframes(
 function captureChatGptDiagnosticSnapshotScript() {
   const assistants = [...document.querySelectorAll('[data-message-author-role="assistant"]')];
   const lastAssistant = assistants[assistants.length - 1];
-  
+
   const progressBars = [...document.querySelectorAll('[role="progressbar"], [data-testid*="loading"], [data-testid*="spinner"], progress')]
     .map(el => ({
       outerHTML: el.outerHTML.slice(0, 300),
@@ -1497,7 +1497,7 @@ function captureChatGptDiagnosticSnapshotScript() {
 
   const sendButton = [...document.querySelectorAll('button')]
     .find(btn => /send|submit|gui|arrow-up|paper-plane|composer-submit/i.test(btn.innerText + " " + btn.className + " " + (btn.getAttribute("aria-label") || "") + " " + btn.innerHTML));
-  
+
   const stopButton = [...document.querySelectorAll('button')]
     .find(btn => /stop|cancel|dừng/i.test(btn.innerText + " " + btn.className + " " + (btn.getAttribute("aria-label") || "") + " " + btn.innerHTML));
 
@@ -2337,7 +2337,7 @@ async function closeChromeDebug() {
   for (const win of webWindows.values()) {
     try {
       if (!win.isDestroyed()) win.close();
-    } catch (_error) {}
+    } catch (_error) { }
   }
   webWindows.clear();
   try {
@@ -2346,16 +2346,16 @@ async function closeChromeDebug() {
       (tabs || []).map((tab) =>
         tab.id
           ? readJson(`${CHROME_CDP_HOST}/json/close/${tab.id}`).catch(
-              () => null,
-            )
+            () => null,
+          )
           : null,
       ),
     );
-  } catch (_error) {}
+  } catch (_error) { }
   if (chromeProcess?.pid) {
     try {
       process.kill(chromeProcess.pid);
-    } catch (_error) {}
+    } catch (_error) { }
   }
   chromeProcess = null;
 }
@@ -2489,9 +2489,9 @@ async function scanFolder(_event, folderPath) {
       const sceneNumber = getSceneNumber(entry.name) ?? sceneHint;
       const keyframePath = sceneNumber
         ? path.join(
-            path.dirname(fullPath),
-            `scene_${String(sceneNumber).padStart(3, "0")}_keyframe.png`,
-          )
+          path.dirname(fullPath),
+          `scene_${String(sceneNumber).padStart(3, "0")}_keyframe.png`,
+        )
         : "";
       videos.push({
         name: entry.name,
@@ -3144,9 +3144,9 @@ async function callAIProvider({
       Authorization: `Bearer ${apiKey}`,
       ...(provider === "openrouter"
         ? {
-            "HTTP-Referer": "http://localhost",
-            "X-Title": "AI Video Prompt Planner",
-          }
+          "HTTP-Referer": "http://localhost",
+          "X-Title": "AI Video Prompt Planner",
+        }
         : {}),
     },
     body: JSON.stringify({
@@ -3399,9 +3399,9 @@ async function checkWebLogin(_event, provider, options = {}) {
   });
   const capability = ["grok", "pixverse"].includes(normalizedProvider)
     ? await evaluateOnCdpPage(
-        page,
-        `(${detectVideoCapabilityScript.toString()})(${JSON.stringify(normalizedProvider)})`,
-      ).catch((error) => ({ ok: false, error: error.message }))
+      page,
+      `(${detectVideoCapabilityScript.toString()})(${JSON.stringify(normalizedProvider)})`,
+    ).catch((error) => ({ ok: false, error: error.message }))
     : null;
   if (
     !state.loggedIn &&
@@ -4854,7 +4854,7 @@ async function generateVideoWithGenericProvider({
     await page.close();
     throw new Error(
       capability?.error ||
-        `${title} account này chưa có feature tạo video/upload ảnh. Hãy đổi account/plan rồi chạy lại.`,
+      `${title} account này chưa có feature tạo video/upload ảnh. Hãy đổi account/plan rồi chạy lại.`,
     );
   }
 
@@ -5022,10 +5022,10 @@ async function generateVideoWithGenericProvider({
       ? await submitPixVersePrompt(page, motionPrompt, config)
       : provider === "grok"
         ? await submitGrokVideoPrompt(page, motionPrompt, {
-            ...config,
-            sceneId,
-            imagePath,
-          })
+          ...config,
+          sceneId,
+          imagePath,
+        })
         : await sendPromptViaCdpInput(page, motionPrompt);
   if (!sent.ok)
     throw new Error(sent.error || `Không gửi được motion prompt vào ${title}.`);
@@ -5127,7 +5127,7 @@ async function getCdpPage(provider, createIfMissing = true, options = {}) {
     const meta = PROVIDER_META[provider] || PROVIDER_META.chatgpt;
     const adapter = new BrowserAdapter(provider, "playwright");
     const cdpEndpoint = `http://127.0.0.1:${CHROME_DEBUG_PORT}`;
-    
+
     await adapter.connect(cdpEndpoint, { url: meta.url });
 
     // Ghi đè hàm reload để tương thích ngược cơ chế chặn reload
@@ -5141,7 +5141,7 @@ async function getCdpPage(provider, createIfMissing = true, options = {}) {
       else if (stack.includes("refreshChatGptPageBeforeImageExtract")) caller = "refreshChatGptPageBeforeImageExtract";
       else if (stack.includes("recoverChatGptBlockingUi")) caller = "recoverChatGptBlockingUi";
       else if (stack.includes("recoverProviderFromCacheOrChallenge")) caller = "recoverProviderFromCacheOrChallenge";
-      
+
       const timestamp = new Date().toISOString();
       const currentSceneId = globalThis.__vidoraLastProcessedSceneId || "unknown";
       const sendState = getChatGptSendState(currentSceneId);
@@ -5185,12 +5185,12 @@ async function getCdpPage(provider, createIfMissing = true, options = {}) {
 
     if (shouldBringToFront) await adapter.Page.bringToFront().catch(() => null);
     await waitForCdpLoad(adapter);
-    
+
     if (shouldRecover) {
       await recoverProviderFromCacheOrChallenge(adapter, provider, "get-page").catch(() => null);
       await recoverCdpPageIfCrashed(adapter, provider, "get-page").catch(() => null);
     }
-    
+
     globalThis.activeCdpClient = adapter;
     return adapter;
   }
@@ -5261,7 +5261,7 @@ async function getCdpPage(provider, createIfMissing = true, options = {}) {
     else if (stack.includes("refreshChatGptPageBeforeImageExtract")) caller = "refreshChatGptPageBeforeImageExtract";
     else if (stack.includes("recoverChatGptBlockingUi")) caller = "recoverChatGptBlockingUi";
     else if (stack.includes("recoverProviderFromCacheOrChallenge")) caller = "recoverProviderFromCacheOrChallenge";
-    
+
     const timestamp = new Date().toISOString();
     const currentSceneId = globalThis.__vidoraLastProcessedSceneId || "unknown";
     const sendState = getChatGptSendState(currentSceneId);
@@ -5313,7 +5313,7 @@ async function getCdpPage(provider, createIfMissing = true, options = {}) {
     else if (stack.includes("refreshChatGptPageBeforeImageExtract")) caller = "refreshChatGptPageBeforeImageExtract";
     else if (stack.includes("recoverChatGptBlockingUi")) caller = "recoverChatGptBlockingUi";
     else if (stack.includes("recoverProviderFromCacheOrChallenge")) caller = "recoverProviderFromCacheOrChallenge";
-    
+
     const timestamp = new Date().toISOString();
     const currentSceneId = globalThis.__vidoraLastProcessedSceneId || "unknown";
     const sendState = getChatGptSendState(currentSceneId);
@@ -6234,7 +6234,7 @@ async function recoverGrokCanvasAfterLimit(page, options = {}) {
   if (!uploadCurrent?.ok)
     throw new Error(
       uploadCurrent?.error ||
-        "Không upload lại keyframe scene hiện tại sau limit.",
+      "Không upload lại keyframe scene hiện tại sau limit.",
     );
   const beforeVideos = await evaluateOnCdpPage(
     page,
@@ -6268,11 +6268,11 @@ async function addMediaFileToGrokCanvas(client, filePath, mediaType = "image") {
   return accepted?.ok
     ? { ok: true, uploadClick, accepted }
     : {
-        ok: false,
-        error: accepted?.error || "Grok chưa nhận media.",
-        uploadClick,
-        accepted,
-      };
+      ok: false,
+      error: accepted?.error || "Grok chưa nhận media.",
+      uploadClick,
+      accepted,
+    };
 }
 
 async function labelGrokCanvas(page, sceneId = "", sceneDir = "") {
@@ -7151,11 +7151,11 @@ async function uploadFileViaCdp(client, filePath, provider = "grok") {
     return accepted?.ok
       ? { ok: true, uploaded: accepted, mode: "grok-composer-image-paste" }
       : {
-          ok: false,
-          error:
-            accepted?.error ||
-            "Grok chưa nhận ảnh trong ô prompt, không gửi NV2 để tránh tạo sai.",
-        };
+        ok: false,
+        error:
+          accepted?.error ||
+          "Grok chưa nhận ảnh trong ô prompt, không gửi NV2 để tránh tạo sai.",
+      };
   }
 
   const handle = await client.DOM.getDocument();
@@ -7403,9 +7403,9 @@ async function submitPixVersePrompt(client, prompt, config = {}) {
   return clicked?.ok
     ? { ok: true, mode: "pixverse-create", selector: clicked.selector }
     : {
-        ok: false,
-        error: clicked?.error || "Không bấm được nút Create PixVerse.",
-      };
+      ok: false,
+      error: clicked?.error || "Không bấm được nút Create PixVerse.",
+    };
 }
 
 async function submitGrokVideoPrompt(client, prompt, config = {}) {
@@ -8576,11 +8576,11 @@ function closeGrokTemplateModalScript() {
   const target = candidates[0];
   const syntheticBox = modal
     ? {
-        x: Math.max(0, modal.rect.right - 30),
-        y: Math.max(0, modal.rect.top + 8),
-        width: 26,
-        height: 26,
-      }
+      x: Math.max(0, modal.rect.right - 30),
+      y: Math.max(0, modal.rect.top + 8),
+      width: 26,
+      height: 26,
+    }
     : null;
   if (!target && !syntheticBox)
     return {
@@ -8608,11 +8608,11 @@ function closeGrokTemplateModalScript() {
   }
   const box = target
     ? {
-        x: target.rect.x,
-        y: target.rect.y,
-        width: target.rect.width,
-        height: target.rect.height,
-      }
+      x: target.rect.x,
+      y: target.rect.y,
+      width: target.rect.width,
+      height: target.rect.height,
+    }
     : syntheticBox;
   return {
     ok: true,
@@ -8620,11 +8620,11 @@ function closeGrokTemplateModalScript() {
     box,
     modal: modal
       ? {
-          x: modal.rect.x,
-          y: modal.rect.y,
-          width: modal.rect.width,
-          height: modal.rect.height,
-        }
+        x: modal.rect.x,
+        y: modal.rect.y,
+        width: modal.rect.width,
+        height: modal.rect.height,
+      }
       : null,
     state,
   };
@@ -8677,25 +8677,25 @@ function getGrokTemplateViewportFallbackPointsScript() {
   const modal = modalCandidates[0]?.rect;
   const points = modal
     ? [
-        { name: "modal-x-hard", x: modal.right - 18, y: modal.top + 18 },
-        { name: "modal-x-hard-2", x: modal.right - 26, y: modal.top + 26 },
-        { name: "backdrop-top-left", x: 20, y: 20 },
-        { name: "backdrop-bottom-left", x: 20, y: innerHeight - 20 },
-      ]
+      { name: "modal-x-hard", x: modal.right - 18, y: modal.top + 18 },
+      { name: "modal-x-hard-2", x: modal.right - 26, y: modal.top + 26 },
+      { name: "backdrop-top-left", x: 20, y: 20 },
+      { name: "backdrop-bottom-left", x: 20, y: innerHeight - 20 },
+    ]
     : [
-        {
-          name: "viewport-x-hard",
-          x: innerWidth * 0.81,
-          y: innerHeight * 0.14,
-        },
-        {
-          name: "viewport-x-hard-2",
-          x: innerWidth * 0.8,
-          y: innerHeight * 0.15,
-        },
-        { name: "backdrop-top-left", x: 20, y: 20 },
-        { name: "backdrop-bottom-left", x: 20, y: innerHeight - 20 },
-      ];
+      {
+        name: "viewport-x-hard",
+        x: innerWidth * 0.81,
+        y: innerHeight * 0.14,
+      },
+      {
+        name: "viewport-x-hard-2",
+        x: innerWidth * 0.8,
+        y: innerHeight * 0.15,
+      },
+      { name: "backdrop-top-left", x: 20, y: 20 },
+      { name: "backdrop-bottom-left", x: 20, y: innerHeight - 20 },
+    ];
   const hits = points.map((point) => {
     const hit = document.elementFromPoint(point.x, point.y);
     return {
@@ -8996,11 +8996,11 @@ function forceHideGrokTemplateModalScript() {
     hidden,
     modal: modal
       ? {
-          x: modal.rect.x,
-          y: modal.rect.y,
-          width: modal.rect.width,
-          height: modal.rect.height,
-        }
+        x: modal.rect.x,
+        y: modal.rect.y,
+        width: modal.rect.width,
+        height: modal.rect.height,
+      }
       : null,
   };
 }
@@ -9074,9 +9074,9 @@ async function prepareGrokVideoComposerScript(config = {}) {
       text: target ? textOf(target).slice(0, 120) : "",
       box: target
         ? (() => {
-            const r = target.getBoundingClientRect();
-            return { x: r.x, y: r.y, w: r.width, h: r.height };
-          })()
+          const r = target.getBoundingClientRect();
+          return { x: r.x, y: r.y, w: r.width, h: r.height };
+        })()
         : null,
     };
   };
@@ -9889,15 +9889,15 @@ function getGrokSendPreflightScript(expectedPrompt = "", options = {}) {
     const rect = node?.getBoundingClientRect?.();
     return rect
       ? {
-          x: rect.x,
-          y: rect.y,
-          width: rect.width,
-          height: rect.height,
-          top: rect.top,
-          left: rect.left,
-          bottom: rect.bottom,
-          right: rect.right,
-        }
+        x: rect.x,
+        y: rect.y,
+        width: rect.width,
+        height: rect.height,
+        top: rect.top,
+        left: rect.left,
+        bottom: rect.bottom,
+        right: rect.right,
+      }
       : null;
   };
   const textOf = (node) =>
@@ -10006,10 +10006,10 @@ function getGrokSendPreflightScript(expectedPrompt = "", options = {}) {
       if (item.disabled || !item.box) return false;
       const nearComposer = composer?.box
         ? item.box.top > composer.box.top - 90 &&
-          item.box.top < composer.box.bottom + 90 &&
-          item.box.left > composer.box.left - 40
+        item.box.top < composer.box.bottom + 90 &&
+        item.box.left > composer.box.left - 40
         : item.box.left > window.innerWidth * 0.72 &&
-          item.box.top > window.innerHeight * 0.68;
+        item.box.top > window.innerHeight * 0.68;
       if (!nearComposer) return false;
       if (
         /Agent\s*\(?Beta\)?|Create\s*Worlds|Historical\s*Stories|Short\s*Film|UGC\s*Product|^\s*(Image|Video|480p|720p|6s|10s)\s*$/i.test(
@@ -10424,11 +10424,11 @@ function detectGrokGenerationProblemScript() {
     hasRetry: Boolean(retry),
     retryBox: retry?.rect
       ? {
-          x: retry.rect.x,
-          y: retry.rect.y,
-          width: retry.rect.width,
-          height: retry.rect.height,
-        }
+        x: retry.rect.x,
+        y: retry.rect.y,
+        width: retry.rect.width,
+        height: retry.rect.height,
+      }
       : null,
     retryText: retry?.text || "",
     tailSnippet: tail.slice(-420),
@@ -10855,10 +10855,10 @@ function findChatGptConversationScript(title = "") {
     .map((node) => {
       const text = normalize(
         node.innerText ||
-          node.textContent ||
-          node.getAttribute("aria-label") ||
-          node.title ||
-          "",
+        node.textContent ||
+        node.getAttribute("aria-label") ||
+        node.title ||
+        "",
       );
       const rect = node.getBoundingClientRect?.();
       return { node, text, rect };
@@ -11031,13 +11031,13 @@ app.on("gpu-process-crashed", (_event, killed) => {
 process.on("exit", (code) => {
   try {
     console.log("[VidoraProcessExit]", code);
-  } catch (_) {}
+  } catch (_) { }
 });
 
 process.on("beforeExit", (code) => {
   try {
     console.log("[VidoraProcessBeforeExit]", code);
-  } catch (_) {}
+  } catch (_) { }
 });
 
 app.on("before-quit", (event) => {
@@ -11071,7 +11071,7 @@ app.on("browser-window-created", (_event, win) => {
         title: win.getTitle?.() || "",
       });
     });
-  } catch (_) {}
+  } catch (_) { }
 });
 
 async function getVeoUpCoordinateConfigHandler() {
@@ -11479,6 +11479,6 @@ process.on("exit", () => {
   if (chromeProcess?.pid) {
     try {
       process.kill(chromeProcess.pid);
-    } catch (_error) {}
+    } catch (_error) { }
   }
 });

@@ -128,6 +128,24 @@ const scenePipelineLocks = new Map();
 
 const scenePipelineFailureTracker = {};
 
+async function readChatGptAssistantCountForInit(sceneId = 0) {
+  const page = await getCdpPage("chatgpt", true, { bringToFront: true }).catch(() => null);
+  if (!page) return null;
+  const state = await evaluateOnCdpPage(
+    page,
+    `(${countChatGptAssistantRootsScript.toString()})()`,
+  ).catch(() => null);
+  const count = Number(state?.count ?? state ?? 0);
+  if (!Number.isFinite(count)) return null;
+  await appendAppLog(null, {
+    source: "main",
+    kind: "running",
+    text: `ChatGPT chat-init gate: assistantCount=${count}.`,
+    details: { sceneId, assistantCount: count },
+  }).catch(() => null);
+  return count;
+}
+
 let sessionSceneCounter = 0;
 const CHAT_ROTATION_ENABLED = false;
 
@@ -614,12 +632,26 @@ async function runScenePipelineLocked(_event, options) {
     }).catch(() => null);
   }
 
-  if (getChatGptContextFresh()) {
+  const assistantCountForChatInit = await readChatGptAssistantCountForInit(sceneId);
+  if (assistantCountForChatInit === 0) {
+    setChatGptContextFresh(true);
     assertPipelineRunActive(runId);
     await appendAppLog(null, {
       source: "main",
       kind: "running",
-      text: `ChatGPT fresh chat: hydrating request 1/2 before active scene request.`,
+      text: `ChatGPT empty chat detected: hydrating request 1/2 before active scene request.`,
+      details: { sceneId, assistantCount: assistantCountForChatInit },
+    }).catch(() => null);
+    await hydrateFreshChatGptContextAfterRotation(options, sceneId);
+    assertPipelineRunActive(runId);
+  } else if (assistantCountForChatInit > 0) {
+    setChatGptContextFresh(false);
+  } else if (getChatGptContextFresh()) {
+    assertPipelineRunActive(runId);
+    await appendAppLog(null, {
+      source: "main",
+      kind: "warning",
+      text: `ChatGPT chat-init gate unavailable; using fresh-context fallback.`,
       details: { sceneId },
     }).catch(() => null);
     await hydrateFreshChatGptContextAfterRotation(options, sceneId);
@@ -653,7 +685,7 @@ async function runScenePipelineLocked(_event, options) {
         },
       ).catch(() => null);
 
-      // Re-implement the Periodic 5-Scene Rotation Counter (Only increment on active browser actions):
+      // Rotate after 3 fully successful scenes (only increment on active browser actions):
       const fullChatGptSceneSucceeded = Boolean(
         options?.__nv1Succeeded && options?.__nv2Succeeded,
       );
@@ -666,13 +698,13 @@ async function runScenePipelineLocked(_event, options) {
         await appendAppLog(null, {
           source: "main",
           kind: "ok",
-          text: `Scene ${sceneId} completed successfully (active ChatGPT browser run). Session scene counter: ${sessionSceneCounter}/20.`,
+          text: `Scene ${sceneId} completed successfully (active ChatGPT browser run). Session scene counter: ${sessionSceneCounter}/3.`,
         }).catch(() => null);
       } else {
         await appendAppLog(null, {
           source: "main",
           kind: "ok",
-          text: `Scene ${sceneId} completed successfully (cached or partial ChatGPT browser run). Session scene counter: ${sessionSceneCounter}/20 (no increment without NV1+NV2 success).`,
+          text: `Scene ${sceneId} completed successfully (cached or partial ChatGPT browser run). Session scene counter: ${sessionSceneCounter}/3 (no increment without NV1+NV2 success).`,
           details: {
             nv1Succeeded: Boolean(options?.__nv1Succeeded),
             nv2Succeeded: Boolean(options?.__nv2Succeeded),
@@ -682,11 +714,11 @@ async function runScenePipelineLocked(_event, options) {
           },
         }).catch(() => null);
       }
-      if (CHAT_ROTATION_ENABLED && sessionSceneCounter >= 20) {
+      if (CHAT_ROTATION_ENABLED && sessionSceneCounter >= 3) {
         await appendAppLog(null, {
           source: "main",
           kind: "running",
-          text: `ChatGPT long-run rotation: ${sessionSceneCounter}/20 scenes completed in current chat. Opening new chat and hydrating request 1/2 before next scene.`,
+          text: `ChatGPT long-run rotation: ${sessionSceneCounter}/3 scenes completed in current chat. Opening new chat and hydrating request 1/2 before next scene.`,
           details: { sceneId, sessionSceneCounter },
         }).catch(() => null);
         assertPipelineRunActive(runId);
@@ -694,6 +726,7 @@ async function runScenePipelineLocked(_event, options) {
         assertPipelineRunActive(runId);
         await hydrateFreshChatGptContextAfterRotation(options, sceneId);
         assertPipelineRunActive(runId);
+        sessionSceneCounter = 0;
       }
 
       if (CHAT_ROTATION_ENABLED && globalThis.__vidoraSafeExitRotationScheduled) {
@@ -710,14 +743,23 @@ async function runScenePipelineLocked(_event, options) {
         assertPipelineRunActive(runId);
         sessionSceneCounter = 0;
       }
-      // Inter-Scene Breather Padding: wait 10000ms to release active browser memory cache
-      await appendAppLog(null, {
-        source: "main",
-        kind: "running",
-        text: `Scene ${sceneId}: Inter-Scene Breather: sleeping 10000ms before returning success...`,
-      }).catch(() => null);
-      await sleep(10000);
-      assertPipelineRunActive(runId);
+      const sceneAlreadyCompleted = Boolean(result?.alreadyCompleted);
+      if (sceneAlreadyCompleted) {
+        await appendAppLog(null, {
+          source: "main",
+          kind: "ok",
+          text: `Scene ${sceneId} was already complete before this run; continuing to the next scene immediately.`,
+        }).catch(() => null);
+      } else {
+        // Inter-Scene Breather Padding applies only after work completed in this run.
+        await appendAppLog(null, {
+          source: "main",
+          kind: "running",
+          text: `Scene ${sceneId} completed in this run: sleeping 10000ms before returning success...`,
+        }).catch(() => null);
+        await sleep(10000);
+        assertPipelineRunActive(runId);
+      }
 
       return result;
     } catch (error) {
@@ -1453,6 +1495,7 @@ async function runScenePipelineLockedInternal(_event, options) {
       });
       return {
         ok: true,
+        alreadyCompleted: true,
         sceneId,
         sceneDir,
         phase: "video",
