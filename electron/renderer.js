@@ -314,7 +314,6 @@ function getContinuityReferenceSettings() {
     includeLastFrame: true,
     maxKeyFrames,
     sendToChatGPT: continuityChatgptToggle?.checked !== false,
-    sendToGrok: Boolean(continuityGrokToggle?.checked),
   };
 }
 
@@ -2876,7 +2875,7 @@ function getRuntimeSnapshot() {
     currentSceneId,
     activeBatchIds: normalizedBatchIds,
     paused,
-    lastCheckpointRef: projectRuntime.lastCheckpointRef || getRouterMetadata().status?.lastSafeCheckpointRef || null,
+    lastCheckpointRef: projectRuntime.lastCheckpointRef || null,
     lastAction: decision.action || projectRuntime.lastAction || null,
     resumeMode: projectRuntime.resumeMode || 'manual-start',
     lastErrorClassification: projectRuntime.lastErrorClassification || null,
@@ -2892,7 +2891,7 @@ function getRuntimeSnapshot() {
 function getSceneFileRecord(scene, index) {
   const sceneId = getSceneRef(scene, index);
   return {
-    ...stripObsoleteProjectModeFields(scene),
+    ...scrubLegacyProjectFields(stripObsoleteProjectModeFields(scene)),
     sceneId,
     sceneIndex: index,
     rawSceneText: scene.rawSceneText || scene.original || '',
@@ -2948,6 +2947,36 @@ function stripObsoleteProjectModeFields(value = {}) {
   return Object.fromEntries(Object.entries(value).filter(([key]) => !blocked.has(key)));
 }
 
+function normalizeLegacyVideoProvider(_value) {
+  return 'veoup';
+}
+
+function scrubLegacyProjectFields(value) {
+  const blocked = new Set([
+    'accountRouterEnabled',
+    'grokRecovery',
+    'grokRouter',
+    'pixverse',
+    'router',
+    'routingPolicy',
+    'selectedGrokAccountId',
+    'sendToGrok',
+    'videoPlatform',
+    'videoProvider',
+  ]);
+  if (Array.isArray(value)) {
+    return value.map((item) => scrubLegacyProjectFields(item));
+  }
+  if (!value || typeof value !== 'object') {
+    return value;
+  }
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([key]) => !blocked.has(key))
+      .map(([key, item]) => [key, scrubLegacyProjectFields(item)]),
+  );
+}
+
 function getRouterMetadata() {
   return {
     accountRouterEnabled: Boolean(grokRouterEnabledToggle?.checked),
@@ -2969,7 +2998,8 @@ function getProjectSessionPayload() {
   const previewTimeline = getPreviewTimeline();
   const scenes = (project?.scenes || []).map(getSceneFileRecord);
   const runtime = getRuntimeSnapshot();
-  const projectFields = stripObsoleteProjectModeFields(project || {});
+  const projectFields = scrubLegacyProjectFields(stripObsoleteProjectModeFields(project || {}));
+  const continuityReferences = getContinuityReferenceSettings();
   return {
     schemaVersion: 1,
     appVersion: 'electron-phase2',
@@ -2979,7 +3009,7 @@ function getProjectSessionPayload() {
       description: project?.description || '',
       updatedAt: new Date().toISOString(),
       scenes,
-      continuityReferences: getContinuityReferenceSettings(),
+      continuityReferences,
       finalTimeline: previewTimeline,
     },
     inputs: {
@@ -2996,16 +3026,16 @@ function getProjectSessionPayload() {
     config: {
       scriptProvider: providerSelect?.value || '',
       imageProvider: providerSelect?.value || '',
-      videoProvider: videoPlatformSelect?.value || 'grok',
+      videoProvider: 'veoup',
       imageGeneration: {
         ...getImageGenerationSettings(),
         apiKey: '',
       },
-      continuityReferences: getContinuityReferenceSettings(),
+      continuityReferences,
       selectedModels: {
         script: modelInput?.value || '',
         image: providerSelect?.value || '',
-        video: videoPlatformSelect?.value || 'grok',
+        video: 'veoup',
       },
       selectedLabels: {
         provider: getSelectedText(providerSelect),
@@ -3018,26 +3048,15 @@ function getProjectSessionPayload() {
       outputLanguage: 'Vietnamese',
       stylePreset: 'current-renderer-settings',
     },
-    router: getRouterMetadata(),
     runtime: {
       ...runtime,
       outputFolder,
-      videoPlatform: videoPlatformSelect?.value || 'grok',
+      videoProvider: 'veoup',
       reviewSettings: getReviewSettings(),
       skipReview: shouldSkipReview(),
       keyframeMotionPromptOnly: isKeyframeMotionPromptOnlyModeEnabled(),
-      pixverse: {
-        resolution: pixverseResolutionSelect?.value || '',
-        ratio: pixverseRatioSelect?.value || '',
-        duration: pixverseDurationSelect?.value || '',
-        model: pixverseModelSelect?.value || '',
-        preview: Boolean(pixversePreviewToggle?.checked),
-        audio: Boolean(pixverseAudioToggle?.checked),
-      },
-      continuityReferences: getContinuityReferenceSettings(),
-      grokRecovery: getGrokRecoverySettings(),
+      continuityReferences,
       chatGptStability: getChatGptStabilitySettings(),
-      grokRouter: getGrokRouterSettings(),
       activePreviewTimeline: previewTimeline,
       autoRun: false,
       waitingForUserStart: true,
@@ -3095,7 +3114,7 @@ function normalizeProjectSessionForRenderer(payload = {}) {
     batchSize: clamp(Number(sourceProject.batchSize || payload.config?.batchSize || 10), 1, 10),
     durationSec: normalizeSceneDuration(sourceProject.durationSec || payload.config?.sceneDurationSeconds || 10),
     keyframeMotionPromptOnly: Boolean(sourceProject.keyframeMotionPromptOnly ?? payload.runtime?.keyframeMotionPromptOnly ?? payload.config?.keyframeMotionPromptOnly),
-    continuityReferences: sourceProject.continuityReferences || payload.runtime?.continuityReferences || payload.config?.continuityReferences || {},
+    continuityReferences: scrubLegacyProjectFields(sourceProject.continuityReferences || payload.runtime?.continuityReferences || payload.config?.continuityReferences || {}),
     finalVideoPath: sourceProject.finalVideoPath || payload.assets?.finalOutputs?.[0]?.path || '',
     finalTimeline: Array.isArray(payload.previewTimeline) && payload.previewTimeline.length
       ? payload.previewTimeline
@@ -3164,7 +3183,7 @@ function applyProjectSessionPayload(payload = {}, filePath = '') {
   setControlValue(providerSelect, payload.config?.scriptProvider);
   setControlValue(accountSelect, payload.config?.selectedLabels?.account);
   setControlValue(modelInput, payload.config?.selectedModels?.script || payload.config?.selectedLabels?.model);
-  setControlValue(videoPlatformSelect, payload.runtime?.videoPlatform || payload.config?.videoProvider);
+  setControlValue(videoPlatformSelect, normalizeLegacyVideoProvider(payload.runtime?.videoProvider || payload.runtime?.videoPlatform || payload.config?.videoProvider));
   applyImageGenerationSettings(payload.runtime?.imageGeneration || payload.config?.imageGeneration);
   applyReviewSettings(payload.runtime?.reviewSettings || { skipReview: payload.runtime?.skipReview });
   applyPipelineModeSettings({ keyframeMotionPromptOnly: project?.keyframeMotionPromptOnly ?? payload.runtime?.keyframeMotionPromptOnly ?? payload.config?.keyframeMotionPromptOnly });
@@ -3420,11 +3439,11 @@ function persist() {
     let sanitizedProject = null;
     if (project) {
       sanitizedProject = {
-        ...project,
+        ...scrubLegacyProjectFields(project),
         scenes: Array.isArray(project.scenes)
           ? project.scenes.map(s => {
               if (s) {
-                const copy = { ...s };
+                const copy = scrubLegacyProjectFields({ ...s });
                 delete copy.imageDataUrl;
                 return copy;
               }
@@ -3435,18 +3454,16 @@ function persist() {
     }
 
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
-      project: sanitizedProject,
+      project: scrubLegacyProjectFields(sanitizedProject),
       activeBatchIds,
       paused,
       outputFolder,
       currentProjectFilePath,
       projectDirty,
-      projectRuntime,
-      grokRouter: getGrokRouterSettings(),
+      projectRuntime: scrubLegacyProjectFields(projectRuntime),
       reviewSettings: getReviewSettings(),
       imageGeneration: getImageGenerationSettings(),
       continuityReferences: getContinuityReferenceSettings(),
-      grokRecovery: getGrokRecoverySettings(),
       chatGptStability: getChatGptStabilitySettings(),
       pipelineMode: { keyframeMotionPromptOnly: isKeyframeMotionPromptOnlyModeEnabled() },
       veoupPreviewStartOnly: Boolean(veoupPreviewStartOnlyToggle?.checked)
@@ -3458,11 +3475,11 @@ function persist() {
       if (project) {
         const activeSceneId = projectRuntime?.currentSceneId;
         fallbackProject = {
-          ...project,
+          ...scrubLegacyProjectFields(project),
           scenes: Array.isArray(project.scenes)
             ? project.scenes.map((s, idx) => {
                 if (!s) return s;
-                const copy = { ...s };
+                const copy = scrubLegacyProjectFields({ ...s });
                 delete copy.imageDataUrl;
                 
                 const isCompleted = ['video_done', 'video_ready', 'scene_completed'].includes(copy.status);
@@ -3482,18 +3499,16 @@ function persist() {
       }
 
       localStorage.setItem(STORAGE_KEY, JSON.stringify({
-        project: fallbackProject,
+        project: scrubLegacyProjectFields(fallbackProject),
         activeBatchIds,
         paused,
         outputFolder,
         currentProjectFilePath,
         projectDirty,
-        projectRuntime,
-        grokRouter: getGrokRouterSettings(),
+        projectRuntime: scrubLegacyProjectFields(projectRuntime),
         reviewSettings: getReviewSettings(),
         imageGeneration: getImageGenerationSettings(),
         continuityReferences: getContinuityReferenceSettings(),
-        grokRecovery: getGrokRecoverySettings(),
         chatGptStability: getChatGptStabilitySettings(),
         pipelineMode: { keyframeMotionPromptOnly: isKeyframeMotionPromptOnlyModeEnabled() },
         veoupPreviewStartOnly: Boolean(veoupPreviewStartOnlyToggle?.checked)

@@ -6,6 +6,9 @@ const root = path.resolve(__dirname, '..');
 const read = (file) => fs.readFileSync(path.join(root, file), 'utf8').replace(/\r\n/g, '\n');
 
 const main = read('electron/main.js');
+const chatgptPipeline = read('electron/main/chatgpt/chatgpt_pipeline.js');
+const pipelineRunner = read('electron/main/pipeline/pipeline_runner.js');
+const chatgptRuntime = `${main}\n${chatgptPipeline}\n${pipelineRunner}`;
 const renderer = read('electron/renderer.js');
 
 assert(main.includes('function buildImageStagePrompt('), 'IMAGE_STAGE prompt builder missing');
@@ -32,16 +35,16 @@ assert(main.includes('Scene ${sceneId}: Sending local keyframe + Motion Prompt t
 assert(main.includes('function resolveProjectPrepromptFolder('), 'preprompt folder resolver missing');
 assert(main.includes("path.join(projectRoot, 'preprompt')"), 'preprompt directory resolution missing');
 assert(main.includes('async function collectPrepromptRequestFiles('), 'preprompt request file collector missing');
-assert(main.includes('ChatGPT hydrate request 1: uploading ${prepromptFiles.length} preprompt file(s).'), 'request 1 must upload preprompt files');
-assert(main.includes('Request 1: read and remember all attached preprompt files. Reply only when ready.'), 'request 1 prompt missing');
-assert(main.includes('await waitForChatGptHydrationResponse(page, beforePreprompt?.count || 0, { sceneId, request: 1 });'), 'request 1 must wait for ChatGPT response');
-assert(main.includes('ChatGPT hydrate request 2: uploading ${recentKeyframes.length} recent keyframe(s).'), 'request 2 must upload recent keyframes');
-assert(main.includes('Request 2: read and remember the attached keyframes from up to 20 previous project scenes.'), 'request 2 prompt missing');
-assert(main.includes('await waitForChatGptHydrationResponse(page, beforeScenes?.count || 0, { sceneId, request: 2 });'), 'request 2 must wait for ChatGPT response');
+assert(chatgptRuntime.includes('ChatGPT hydrate request 1: uploading ${prepromptFiles.length} preprompt file(s).'), 'request 1 must upload preprompt files');
+assert(chatgptRuntime.includes('Request 1: read and remember all attached preprompt files. Reply only when ready.'), 'request 1 prompt missing');
+assert(/await waitForChatGptHydrationResponse\(\s*page,\s*beforePreprompt\?\.count \|\| 0,\s*{[\s\S]*?request: 1,/.test(chatgptRuntime), 'request 1 must wait for ChatGPT response');
+assert(chatgptRuntime.includes('ChatGPT hydrate request 2: uploading ${recentKeyframes.length} recent keyframe(s).'), 'request 2 must upload recent keyframes');
+assert(chatgptRuntime.includes('Request 2: read and remember the attached keyframes from up to 5 previous project scenes.'), 'request 2 prompt missing');
+assert(/await waitForChatGptHydrationResponse\(\s*page,\s*beforeScenes\?\.count \|\| 0,\s*{[\s\S]*?request: 2,/.test(chatgptRuntime), 'request 2 must wait for ChatGPT response');
 assert(renderer.includes('recentScenes: buildRecentScenesForHydration(scene.id, 20)'), 'renderer must send max 20 recent scenes');
-assert(main.includes('sessionSceneCounter >= 20'), 'ChatGPT chat must rotate after 20 active scenes');
-assert(main.includes('Session scene counter: ${sessionSceneCounter}/20'), 'rotation counter log must use /20');
-assert(main.includes('ChatGPT long-run rotation: ${sessionSceneCounter}/20 scenes completed in current chat.'), 'long-run rotation log missing');
+assert(chatgptRuntime.includes('const CHAT_ROTATION_ENABLED = false;'), 'automatic ChatGPT rotation must be disabled');
+assert(/CHAT_ROTATION_ENABLED\s*&&\s*sessionSceneCounter\s*>=/.test(chatgptRuntime), 'scene-count rotation branch must be gated by CHAT_ROTATION_ENABLED');
+assert(chatgptRuntime.includes('Session scene counter: ${sessionSceneCounter}/3'), 'rotation counter log missing');
 assert(main.includes('Scene ${sceneId}: Sending NV1.'), 'NV1 send log must use requested text');
 assert(main.includes('isChatGptContextFresh = false;'), 'fresh context flag must flip after send/upload success');
 assert(main.indexOf('await waitForChatGptHydrationResponse(page, beforeScenes?.count || 0, { sceneId, request: 2 });') < main.indexOf('isChatGptContextFresh = false;'), 'fresh flag must flip after request 2 acknowledgement');

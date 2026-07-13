@@ -1,0 +1,201 @@
+{
+  "electron/main.js": [
+    "child_process",
+    "electron/main/logging/index.js",
+    "electron/main/utils/index.js",
+    "electron/main/memory/index.js",
+    "electron/main/state/index.js",
+    "electron/main/state/chatgpt_state.js",
+    "electron/main/chatgpt/chatgpt_dom.js",
+    "electron/main/chatgpt/chatgpt_core.js",
+    "electron/main/chatgpt/browser_adapter.js",
+    "electron/main/chatgpt/chatgpt_upload.js",
+    "electron/main/chatgpt/chatgpt_send.js",
+    "electron/main/chatgpt/chatgpt_recovery.js",
+    "electron/main/bootstrap/index.js",
+    "electron/main/ipc/index.js",
+    "electron/main/chatgpt/index.js",
+    "electron/main/recovery/index.js",
+    "electron",
+    "ffmpeg-static",
+    "fs/promises",
+    "path",
+    "crypto",
+    "async_hooks",
+    "electron/main/veoup/index.js",
+    "electron/main/pipeline/index.js",
+    "./chatgptStability",
+    "fs",
+    "chrome-remote-interface"
+  ],
+  "electron/preload.js": [
+    "electron"
+  ],
+  "electron/renderer.js": [],
+  "electron/main/index.js": [
+    "electron/main/chatgpt/index.js",
+    "electron/main/pipeline/index.js",
+    "electron/main/recovery/index.js",
+    "electron/main/state/index.js",
+    "electron/main/utils/index.js",
+    "electron/main/logging/index.js",
+    "electron/main/memory/index.js"
+  ],
+  "electron/main/bootstrap/index.js": [
+    "electron/main/bootstrap/bootstrap.js"
+  ],
+  "electron/main/bootstrap/bootstrap.js": [],
+  "electron/main/chatgpt/index.js": [
+    "electron/main/chatgpt/chatgpt_core.js",
+    "electron/main/chatgpt/chatgpt_dom.js",
+    "electron/main/chatgpt/chatgpt_send.js",
+    "electron/main/chatgpt/chatgpt_upload.js",
+    "electron/main/chatgpt/chatgpt_recovery.js",
+    "electron/main/chatgpt/chatgpt_pipeline.js",
+    "electron/main/chatgpt/chatgpt_runtime_monitor.js",
+    "electron/main/chatgpt/chatgpt_pipeline_adapter.js"
+  ],
+  "electron/main/chatgpt/browser_adapter.js": [
+    "electron/main/logging/index.js",
+    "playwright-core"
+  ],
+  "electron/main/chatgpt/chatgpt_core.js": [
+    "electron/main/logging/index.js",
+    "electron/main/utils/index.js",
+    "electron/main/chatgpt/chatgpt_dom.js"
+  ],
+  "electron/main/chatgpt/chatgpt_dom.js": [],
+  "electron/main/chatgpt/chatgpt_pipeline.js": [
+    "electron",
+    "fs/promises",
+    "path",
+    "electron/main/chatgpt/chatgpt_runtime_monitor.js",
+    "electron/main/chatgpt/chatgpt_pipeline_adapter.js",
+    "electron/main/logging/index.js",
+    "electron/main/utils/index.js",
+    "electron/main/memory/index.js",
+    "electron/main/state/index.js",
+    "electron/main/state/chatgpt_state.js",
+    "electron/main/chatgpt/chatgpt_dom.js",
+    "electron/main/chatgpt/chatgpt_core.js",
+    "electron/main/chatgpt/chatgpt_send.js",
+    "electron/main/chatgpt/chatgpt_upload.js",
+    "../../chatgptStability",
+    "electron/main/chatgpt/chatgpt_recovery.js",
+    "electron/main/recovery/index.js",
+    "electron/main/chatgpt/chatgpt_pipeline_adapter.js",
+    "electron/main/chatgpt/chatgpt_runtime_monitor.js"
+  ],
+  "electron/main/chatgpt/chatgpt_pipeline_adapter.js": [],
+  "electron/main/chatgpt/chatgpt_recovery.js": [
+    "electron/main/logging/index.js",
+    "electron/main/utils/index.js",
+    "electron/main/chatgpt/chatgpt_core.js",
+    "electron/main/chatgpt/chatgpt_dom.js",
+    "electron/main/chatgpt/chatgpt_upload.js",
+    "electron/main/chatgpt/chatgpt_send.js",
+    "electron/main/state/index.js",
+    "electron/main/state/chatgpt_state.js",
+    "chrome-remote-interface"
+  ],
+  "electron/main/chatgpt/chatgpt_runtime_monitor.js": [
+    "events",
+    "electron/main/logging/index.js",
+    "electron/main/chatgpt/chatgpt_dom.js"
+  ],
+  "electron/main/chatgpt/chatgpt_send.js": [
+    "electron/main/logging/index.js",
+    "electron/main/utils/index.js",
+    "electron/main/state/index.js",
+    "electron/main/chatgpt/chatgpt_core.js",
+    "electron/main/chatgpt/chatgpt_dom.js",
+    "electron/main/chatgpt/chatgpt_runtime_monitor.js",
+    "electron/main/chatgpt/chatgpt_runtime_monitor.js"
+  ],
+  "electron/main/chatgpt/chatgpt_upload.js": [
+    "path",
+    "electron/main/logging/index.js",
+    "electron/main/utils/index.js",
+    "electron/main/chatgpt/chatgpt_dom.js",
+    "electron/main/chatgpt/chatgpt_core.js"
+  ],
+  "electron/main/chatgpt/debug.js": [
+    "playwright",
+    "repl"
+  ],
+  "electron/main/ipc/index.js": [
+    "electron/main/ipc/ipc_handlers.js"
+  ],
+  "electron/main/ipc/ipc_handlers.js": [],
+  "electron/main/logging/index.js": [
+    "electron/main/logging/logging.js"
+  ],
+  "electron/main/logging/logging.js": [
+    "electron",
+    "fs/promises",
+    "fs",
+    "path"
+  ],
+  "electron/main/memory/index.js": [
+    "electron/main/memory/memory.js"
+  ],
+  "electron/main/memory/memory.js": [
+    "electron",
+    "electron/main/logging/index.js"
+  ],
+  "electron/main/pipeline/index.js": [
+    "electron/main/pipeline/pipeline_runner.js"
+  ],
+  "electron/main/pipeline/pipeline_runner.js": [
+    "electron",
+    "async_hooks",
+    "fs/promises",
+    "path",
+    "electron/main/logging/index.js",
+    "electron/main/utils/index.js",
+    "electron/main/recovery/index.js",
+    "electron/main/memory/index.js",
+    "electron/main/state/index.js",
+    "electron/main/state/chatgpt_state.js",
+    "electron/main/chatgpt/index.js",
+    "electron/main/veoup/index.js",
+    "../../chatgptStability"
+  ],
+  "electron/main/recovery/index.js": [
+    "electron/main/recovery/recovery.js"
+  ],
+  "electron/main/recovery/recovery.js": [
+    "electron/main/logging/index.js"
+  ],
+  "electron/main/state/index.js": [
+    "electron/main/state/state.js"
+  ],
+  "electron/main/state/chatgpt_state.js": [],
+  "electron/main/state/state.js": [
+    "fs/promises",
+    "path",
+    "electron/main/utils/index.js"
+  ],
+  "electron/main/utils/index.js": [
+    "electron/main/utils/utils.js"
+  ],
+  "electron/main/utils/utils.js": [
+    "electron",
+    "ffmpeg-static",
+    "fs/promises",
+    "path",
+    "electron/main/logging/index.js"
+  ],
+  "electron/main/veoup/index.js": [
+    "electron/main/veoup/veoup.js"
+  ],
+  "electron/main/veoup/veoup.js": [
+    "fs",
+    "fs/promises",
+    "os",
+    "path",
+    "child_process",
+    "electron",
+    "electron/main/logging/index.js"
+  ]
+}

@@ -867,6 +867,7 @@ async function runScenePipelineLocked(_event, options) {
       }
 
       if (
+        CHAT_ROTATION_ENABLED &&
         consecutiveFailures >= 2 &&
         isChatGptRequestFailureEligibleForRotation &&
         !isNv2ExistingResponseStillGenerating &&

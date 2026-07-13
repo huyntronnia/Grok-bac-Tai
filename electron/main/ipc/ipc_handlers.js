@@ -54,6 +54,8 @@ function initIpcHandlers(runtime) {
     ensureProjectSceneFolders,
     importCharacterPresetsHandler,
     runVeoUpAutomation,
+    clearChatGptCacheHandler,
+    openFreshChatGptHandler,
     getChatGptSendState,
     isReloadBlocked,
   } = runtime;
@@ -127,6 +129,14 @@ function initIpcHandlers(runtime) {
   ipcMain.handle(
     "chatgpt:rename-current-chat",
     renameChatGptCurrentConversation,
+  );
+  ipcMain.handle(
+    "chatgpt:clear-cache",
+    safeIpcHandler(clearChatGptCacheHandler),
+  );
+  ipcMain.handle(
+    "chatgpt:open-fresh-chat",
+    safeIpcHandler(openFreshChatGptHandler),
   );
   ipcMain.handle("project:export", exportProject);
   ipcMain.handle("project:new-session", newProjectSession);

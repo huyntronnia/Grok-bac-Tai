@@ -1262,7 +1262,6 @@ async function invalidateChatGptConversationIdentity(reason = "unknown") {
 }
 
 async function forceCleanChatGptNewChatRotation() {
-  return { ok: false, skipped: true, reason: "chat-rotation-disabled" };
   const currentSceneId = globalThis.__vidoraLastProcessedSceneId || "unknown";
   const sendState = getChatGptSendState(currentSceneId);
   const timestamp = new Date().toISOString();
@@ -3700,65 +3699,6 @@ async function openFreshChatGptRootPage(reason = "new-chat") {
     details: { reason },
   }).catch(() => null);
   throw new Error("direct-chatgpt-new-chat-without-hydration-disabled");
-}
-
-function getManualChatGptActionBlockReason() {
-  const activeRunIds = pipelineCancellation?.activeRunIds || new Set();
-  if (activeRunIds.size > 0) {
-    return "pipeline-active";
-  }
-  const currentSceneId = globalThis.__vidoraLastProcessedSceneId || "unknown";
-  const sendState = getChatGptSendState(currentSceneId);
-  if (["PREPARING", "READY", "CLICKING", "SENDING", "ATTACHING"].includes(sendState)) {
-    return `send-active-${sendState}`;
-  }
-  return "";
-}
-
-function assertManualChatGptActionAllowed(action = "manual-chatgpt-action") {
-  const blockedReason = getManualChatGptActionBlockReason();
-  if (blockedReason) throw new Error(`${action}-blocked-${blockedReason}`);
-}
-
-async function clearChatGptCacheHandler() {
-  assertManualChatGptActionAllowed("chatgpt-clear-cache");
-  const page = await getCdpPage("chatgpt", true, {
-    bringToFront: false,
-    recover: true,
-  });
-  await page.Network?.enable?.().catch(() => null);
-  await page.Network?.clearBrowserCache?.();
-  await appendAppLog(null, {
-    source: "main",
-    kind: "ok",
-    text: "Manual ChatGPT cache clear completed; cookies, login and current conversation preserved.",
-  }).catch(() => null);
-  return { ok: true, preservedCookies: true, preservedConversation: true };
-}
-
-async function openFreshChatGptHandler() {
-  assertManualChatGptActionAllowed("chatgpt-open-fresh-chat");
-  const page = await getCdpPage("chatgpt", true, {
-    bringToFront: true,
-    recover: true,
-  });
-  await page.Page?.bringToFront?.().catch(() => null);
-  const clicked = await evaluateOnCdpPage(
-    page,
-    `(${clickChatGptStartNewChatScript.toString()})()`,
-  ).catch((error) => ({ ok: false, error: error.message }));
-  if (!clicked?.ok) {
-    await page.Page.navigate({ url: "https://chatgpt.com/" });
-    await waitForCdpLoad(page).catch(() => null);
-  }
-  setChatGptContextFresh(true);
-  await appendAppLog(null, {
-    source: "main",
-    kind: "ok",
-    text: "Manual ChatGPT new chat opened.",
-    details: { clickedNewChat: Boolean(clicked?.ok) },
-  }).catch(() => null);
-  return { ok: true, clickedNewChat: Boolean(clicked?.ok) };
 }
 
 async function assertChatGptNotExistingConversation(client, sceneId = "") {
@@ -11352,8 +11292,6 @@ app.whenReady().then(() => {
       ensureProjectSceneFolders,
       importCharacterPresetsHandler,
       runVeoUpAutomation,
-      clearChatGptCacheHandler,
-      openFreshChatGptHandler,
       getChatGptSendState,
       isReloadBlocked,
     },

@@ -279,12 +279,9 @@ async function performDurableRecovery(page, options, sceneDir, snapshot, stage, 
       await appendAppLog(sceneId, {
         source: "main",
         kind: "warning",
-        text: `Recovery Level 8: Rotating chat...`
+        text: `Recovery Level 8: automatic chat rotation disabled; waiting for manual recovery.`
       });
-      snapshot.rotationBudget = (snapshot.rotationBudget || 1) - 1;
-      await writeSceneSnapshot(sceneDir, { rotationBudget: snapshot.rotationBudget });
-      await forceCleanChatGptNewChatRotation();
-      return { action: "rotate", pageState };
+      return { action: "wait", pageState };
     } else {
       await appendAppLog(sceneId, {
         source: "main",

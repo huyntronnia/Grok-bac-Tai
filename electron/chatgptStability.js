@@ -38,7 +38,7 @@ const CHATGPT_STABILITY_DEFAULTS = Object.freeze({
   sendReadyTimeoutMs: 30000,
   autoSelectChoice: true,
   defaultChoiceIndex: 0,
-  newChatEveryNScenes: 3,
+  newChatEveryNScenes: 0,
   maxConversationAgeMs: 20 * 60 * 1000,
   maxAssistantMessagesPerChat: 12,
   softReloadAfterFailures: 2,
@@ -165,7 +165,7 @@ function getRecoveryDecision(reason, attempt = 0) {
     if (attempt === 4) return 'clear-composer';
     if (attempt === 5) return 'keyboard-submit';
     if (attempt === 6) return 'soft-reload';
-    if (attempt === 7) return 'new-chat';
+    if (attempt === 7) return 'wait';
     if (attempt === 8) return 'browser-restart';
     return 'fail';
   } else {
@@ -173,20 +173,13 @@ function getRecoveryDecision(reason, attempt = 0) {
     if (attempt === 4) return 'escape-overlays';
     if (attempt === 5) return 'clear-composer';
     if (attempt === 6) return 'soft-reload';
-    if (attempt === 7) return 'new-chat';
+    if (attempt === 7) return 'wait';
     if (attempt === 8) return 'browser-restart';
     return 'fail';
   }
 }
 
 function shouldRotateConversation({ sceneOrdinal = 0, conversationStartedAt = 0, assistantMessageCount = 0, domNodeCount = 0, repeatedComposerBusy = 0, repeatedWrongTarget = 0, rotateEveryScenes = 20 } = {}) {
-  const now = Date.now();
-  if (sceneOrdinal > 0 && sceneOrdinal % rotateEveryScenes === 0) return { rotate: true, reason: 'scene-interval' };
-  if (conversationStartedAt && now - Number(conversationStartedAt) > CHATGPT_STABILITY_DEFAULTS.maxConversationAgeMs) return { rotate: true, reason: 'conversation-age' };
-  if (assistantMessageCount >= CHATGPT_STABILITY_DEFAULTS.maxAssistantMessagesPerChat) return { rotate: true, reason: 'assistant-message-count' };
-  if (domNodeCount >= 9000) return { rotate: true, reason: 'dom-heavy' };
-  if (repeatedComposerBusy >= 2) return { rotate: true, reason: 'repeated-composer-busy' };
-  if (repeatedWrongTarget >= 2) return { rotate: true, reason: 'repeated-wrong-target' };
   return { rotate: false, reason: '' };
 }
 

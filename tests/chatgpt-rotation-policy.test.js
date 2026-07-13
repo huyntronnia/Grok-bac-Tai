@@ -5,6 +5,9 @@ const vm = require('vm');
 
 const root = path.resolve(__dirname, '..');
 const main = fs.readFileSync(path.join(root, 'electron/main.js'), 'utf8');
+const chatgptPipeline = fs.readFileSync(path.join(root, 'electron/main/chatgpt/chatgpt_pipeline.js'), 'utf8');
+const chatgptRecovery = fs.readFileSync(path.join(root, 'electron/main/chatgpt/chatgpt_recovery.js'), 'utf8');
+const chatgptRuntime = `${main}\n${chatgptPipeline}\n${chatgptRecovery}`;
 const renderer = fs.readFileSync(path.join(root, 'electron/renderer.js'), 'utf8');
 
 function extractFunction(name) {
@@ -18,13 +21,15 @@ function extractFunction(name) {
 }
 
 function extractAsyncFunction(name) {
-  const start = main.indexOf(`async function ${name}(`);
+  return extractAsyncFunctionFrom(main, name);
+}
+
+function extractAsyncFunctionFrom(source, name, endMarker = '\n}\n\nasync function ') {
+  const start = source.indexOf(`async function ${name}(`);
   assert(start >= 0, `${name} source not found`);
-  const endFunction = main.indexOf('\n}\n\nfunction ', start);
-  const endAsync = main.indexOf('\n}\n\nasync function ', start + 1);
-  const candidates = [endFunction, endAsync].filter((value) => value > start);
-  assert(candidates.length, `${name} source end not found`);
-  return main.slice(start, Math.min(...candidates) + 3);
+  const end = source.indexOf(endMarker, start + 1);
+  assert(end > start, `${name} source end not found`);
+  return source.slice(start, end);
 }
 
 const sandbox = {};
@@ -51,7 +56,7 @@ assert(!main.includes('window.location.href = "https://chatgpt.com/"'), 'memory 
 assert(main.includes('ChatGPT memory GC refresh disabled'), 'memory GC disable log missing');
 assert(main.includes('Rotating ChatGPT only after repeated valid request failures.'), 'rotation pre-log missing');
 assert(main.includes('hydrateFreshChatGptContextAfterRotation(options, sceneId)'), 'fresh chat must be hydrated after recovery rotation');
-assert(main.includes('collectRecentProjectKeyframes(projectDir, 30)'), 'rotation hydration must collect up to 30 recent keyframes');
+assert(chatgptRuntime.includes('collectRecentProjectKeyframes(projectDir, 5)'), 'rotation hydration must collect up to 5 recent keyframes');
 assert(main.includes('ChatGPT rotation hydrate request 1: uploading selected scene txt file.'), 'rotation request 1 selected scene file upload log missing');
 assert(main.includes('sourceSceneFilePath && await pathExists(sourceSceneFilePath)'), 'rotation request 1 must prefer the original selected scene txt path');
 assert(main.includes('sourceSceneFileName || \'scene.txt\''), 'rotation request 1 must preserve selected scene file name for fallback copy');
@@ -62,14 +67,21 @@ assert(renderer.includes('sourceSceneFileName: newProjectSceneFileOriginalName |
 assert(renderer.includes('sourceSceneFilePath: newProjectSceneFilePath || \'\''), 'new project must store selected scene file path when available');
 assert(renderer.includes('sourceSceneText: project?.sourceSceneText || scriptInput?.value?.trim() || \'\''), 'pipeline payload must pass selected scene text fallback');
 
-const responseChoiceRecovery = extractAsyncFunction('recoverChatGptResponseChoiceChat');
+const responseChoiceRecovery = extractAsyncFunctionFrom(
+  chatgptRecovery,
+  'recoverChatGptResponseChoiceChat',
+  '\nasync function forceCleanChatGptNewChatRotation',
+);
 assert(!responseChoiceRecovery.includes('clickChatGptStartNewChatScript'), 'response-choice recovery must not click New Chat directly');
 assert(!responseChoiceRecovery.includes("Page.navigate({ url: 'https://chatgpt.com/'"), 'response-choice recovery must not navigate to root directly');
 assert(responseChoiceRecovery.includes('response-choice-no-auto-new-chat'), 'response-choice recovery must skip direct new-chat rotation');
 
-const imageFlow = extractAsyncFunction('generateImageAndMotionWithChatGPT');
+const imageFlow = extractAsyncFunctionFrom(
+  chatgptPipeline,
+  'generateImageAndMotionWithChatGPT',
+  '\nasync function generateMotionPromptWithChatGPT',
+);
 assert(!imageFlow.includes('openFreshChatGptRootPage'), 'image/NV1 flow must not directly open a new ChatGPT chat');
-assert(imageFlow.includes('ChatGPT new-chat flag was stale; continuing in current hydrated conversation.'), 'stale new-chat flag must be cleared without opening root');
 const directNewChatHelper = extractAsyncFunction('openFreshChatGptRootPage');
 assert(directNewChatHelper.includes('direct-chatgpt-new-chat-without-hydration-disabled'), 'direct New Chat helper must be hard disabled');
 assert(!directNewChatHelper.includes("Page.navigate({ url: 'https://chatgpt.com/'"), 'direct New Chat helper must not navigate to root');

@@ -71,8 +71,8 @@ assert(files.main.includes('videoResult = await generateVideoWithProvider'), 'ma
 assert(files.main.includes('await forceCleanChatGptNewChatRotation()'), 'ChatGPT rotation recovery missing');
 
 assert(files.renderer.includes('stripObsoleteProjectModeFields'), 'save sanitizer missing');
-assert(files.renderer.includes('...stripObsoleteProjectModeFields(scene)'), 'scene save sanitizer not applied');
-assert(files.renderer.includes('const projectFields = stripObsoleteProjectModeFields(project || {})'), 'project save sanitizer not applied');
+assert(files.renderer.includes('...scrubLegacyProjectFields(stripObsoleteProjectModeFields(scene))'), 'scene save sanitizer not applied');
+assert(files.renderer.includes('const projectFields = scrubLegacyProjectFields(stripObsoleteProjectModeFields(project || {}))'), 'project save sanitizer not applied');
 
 const stripObsoleteProjectModeFields = (value = {}) => {
   const blocked = new Set([

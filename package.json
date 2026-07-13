@@ -6,7 +6,7 @@
   "scripts": {
     "start": "electron .",
     "dev": "electron .",
-    "test": "node -r ./tests/normalize-hook.js tests/partial-mode-cleanup.test.js && node -r ./tests/normalize-hook.js tests/pipeline-stop-cancellation.test.js && node -r ./tests/normalize-hook.js tests/veoup-output-lifecycle.test.js && node -r ./tests/normalize-hook.js tests/chatgpt-stage-isolation.test.js",
+    "test": "node -r ./tests/normalize-hook.js tests/partial-mode-cleanup.test.js && node -r ./tests/normalize-hook.js tests/pipeline-stop-cancellation.test.js && node -r ./tests/normalize-hook.js tests/veoup-output-lifecycle.test.js && node -r ./tests/normalize-hook.js tests/chatgpt-stage-isolation.test.js && node -r ./tests/normalize-hook.js tests/renderer-legacy-project-migration.test.js && node -r ./tests/normalize-hook.js tests/ipc-parity-manual-chatgpt.test.js && node -r ./tests/normalize-hook.js tests/no-auto-chatgpt-rotation.test.js",
     "dist": "electron-builder --win nsis --x64"
   },
   "keywords": [
