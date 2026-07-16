@@ -141,7 +141,7 @@ function sanitizeLogString(value = "") {
         }
         const host = parsed.hostname.toLowerCase();
         const safePath = parsed.pathname || "/";
-        if (host === "grok.com" || host === "chatgpt.com")
+        if (host === "chatgpt.com")
           return `${parsed.origin}${safePath}`;
         return `${parsed.origin}/...`;
       } catch (_error) {
@@ -290,10 +290,11 @@ function vidoraShouldThrottleLog(key, intervalMs = 12000) {
 
 async function appendAppLog(first, second, third, fourth) {
   let entry = {};
+  const isNumberScene = typeof first === "number" || (typeof first === "string" && /^\d+$/.test(first));
   if (first && typeof first === "object" && second === undefined) {
     entry = first;
   } else if (
-    first === null &&
+    (first === null || isNumberScene) &&
     second &&
     typeof second === "object" &&
     third === undefined
@@ -328,9 +329,9 @@ async function appendAppLog(first, second, third, fourth) {
         .catch(() => null);
       if (processInfo) {
         rendererMemory = {
-          privateBytes: processInfo.privateBytes,
-          sharedBytes: processInfo.sharedBytes,
-          residentSetBytes: processInfo.residentSetBytes,
+          privateBytes: Number(processInfo.private || 0) * 1024,
+          sharedBytes: Number(processInfo.shared || 0) * 1024,
+          residentSetBytes: Number(processInfo.residentSet || 0) * 1024,
         };
       }
     } catch (_err) {}

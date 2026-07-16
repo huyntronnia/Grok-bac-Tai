@@ -1,6 +1,9 @@
 const { appendAppLog } = require("../logging");
 const { sleep } = require("../utils");
-const { verifyDraftOwnership } = require("../state");
+const {
+  verifyDraftOwnership,
+  hashChatGptSnapshotText,
+} = require("../state");
 const {
   evaluateOnCdpPage,
   getConversationState,
@@ -138,12 +141,78 @@ async function waitForHeavyChatGptPromptDomCooldown(prompt = "", context = {}) {
   return { ok: true, skipped: false, length };
 }
 
+async function waitForChatGptReadyForNewPrompt(
+  client,
+  prompt,
+  context = {},
+  timeoutMs = 120000,
+) {
+  const expectedPromptHash = hashChatGptSnapshotText(prompt);
+  const startedAt = Date.now();
+  let lastState = null;
+  let lastGeneration = null;
+  while (Date.now() - startedAt < timeoutMs) {
+    assertPipelineRunActive();
+    lastState = await getConversationState(client);
+    if (
+      expectedPromptHash &&
+      lastState?.latestUserMessageHash === expectedPromptHash
+    ) {
+      return {
+        ok: true,
+        alreadySent: true,
+        expectedPromptHash,
+        state: lastState,
+      };
+    }
+    lastGeneration = await evaluateOnCdpPage(
+      client,
+      `(${detectChatGptActiveGenerationScriptStrict.toString()})()`,
+    ).catch((error) => ({ generating: true, error: error.message }));
+    if (
+      !lastState?.stopButtonVisible &&
+      !lastState?.streaming &&
+      !lastGeneration?.generating
+    ) {
+      return {
+        ok: true,
+        alreadySent: false,
+        expectedPromptHash,
+        state: lastState,
+        generation: lastGeneration,
+      };
+    }
+    await sleep(1000);
+  }
+  return {
+    ok: false,
+    error: "previous-chatgpt-response-still-streaming",
+    context,
+    state: lastState,
+    generation: lastGeneration,
+  };
+}
+
 async function runChatGptRobustSendLadder(
   client,
   prompt,
   { focused, beforeCount, strictAssistantStart, context },
 ) {
   const sceneId = context?.sceneId || "unknown";
+  const readyForPrompt = await waitForChatGptReadyForNewPrompt(
+    client,
+    prompt,
+    context,
+  );
+  if (!readyForPrompt?.ok) return readyForPrompt;
+  if (readyForPrompt.alreadySent) {
+    return {
+      ok: true,
+      status: "already-sent-by-user-message-ownership",
+      send: "already-sent-by-user-message-ownership",
+      acknowledged: readyForPrompt,
+    };
+  }
   setChatGptSendState(sceneId, "PREPARING");
   await appendAppLog(sceneId, {
     source: "main",
@@ -175,7 +244,7 @@ async function runChatGptRobustSendLadder(
   })()`,
   ).catch(() => null);
 
-  // 3. Enforce Native Character Dispatches via CDP Input Domain
+  // 3. Enforce native text dispatches via the CDP Input domain.
   await client.Input.insertText({ text: prompt }).catch(() => null);
   await sleep(400);
 
@@ -218,6 +287,22 @@ async function runChatGptRobustSendLadder(
     await sleep(300);
   }
 
+  comp = await evaluateOnCdpPage(
+    client,
+    `(${getComposerTextScript.toString()})()`,
+  ).catch(() => ({ text: "" }));
+  const composerPromptHash = hashChatGptSnapshotText(comp?.text || "");
+  const expectedPromptHash = hashChatGptSnapshotText(prompt);
+  if (!expectedPromptHash || composerPromptHash !== expectedPromptHash) {
+    return {
+      ok: false,
+      error: "chatgpt-composer-prompt-ownership-mismatch",
+      expectedPromptHash,
+      composerPromptHash,
+      composerLength: String(comp?.text || "").trim().length,
+    };
+  }
+
   setChatGptSendState(sceneId, "READY");
   await appendAppLog(sceneId, {
     source: "main",
@@ -233,6 +318,8 @@ async function runChatGptRobustSendLadder(
   }).catch(() => null);
   await waitForHeavyChatGptPromptDomCooldown(prompt, context);
 
+  const monitor = require("./chatgpt_runtime_monitor");
+
   setChatGptSendState(sceneId, "CLICKING");
   await appendAppLog(sceneId, {
     source: "main",
@@ -242,10 +329,24 @@ async function runChatGptRobustSendLadder(
 
   // 7. First click cycle:
   // Programmatically evaluate the state of the send button.
+  const preClickSnap = monitor.captureSnapshot();
+  const preClickState = preClickSnap.state;
+  const preClickComposerLength = (preClickSnap.metrics?.dom?.composerText || "").length;
+
   const clickInspectScript = `(${inspectAndClickChatGptSendButtonSafely.toString()})()`;
   let clickedResult = await evaluateOnCdpPage(client, clickInspectScript).catch(
     (err) => ({ ok: false, error: err.message }),
   );
+
+  const sendBtnStatus = clickedResult?.ok ? clickedResult.status : "error/not-found";
+  const sendBtnEnabled = sendBtnStatus === "clicked" || sendBtnStatus === "already-sent-safely";
+
+  await appendAppLog(null, {
+    source: "main",
+    kind: "running",
+    text: `runChatGptRobustSendLadder (First Click): Send button enabled? ${sendBtnEnabled} (status: ${sendBtnStatus}). Runtime state: ${preClickState}. Composer length: ${preClickComposerLength}`,
+    details: clickedResult,
+  });
 
   if (clickedResult?.ok) {
     if (
@@ -255,13 +356,12 @@ async function runChatGptRobustSendLadder(
       await appendAppLog(null, {
         source: "main",
         kind: "running",
-        text: `runChatGptRobustSendLadder: detected Stop button (already sent safely); skipping click.`,
+        text: `runChatGptRobustSendLadder: previous Stop button detected before click; current prompt is not acknowledged.`,
       });
-      // Instantly terminate with { ok: true, status: 'already-sent-safely' }
       return {
-        ok: true,
-        status: "already-sent-safely",
-        send: "already-sent-safely",
+        ok: false,
+        error: "previous-chatgpt-response-still-streaming",
+        status: clickedResult.status,
       };
     }
 
@@ -269,6 +369,11 @@ async function runChatGptRobustSendLadder(
       // Pair immediately with native absolute mouse click
       const x = clickedResult.rect.x + clickedResult.rect.width / 2;
       const y = clickedResult.rect.y + clickedResult.rect.height / 2;
+      await appendAppLog(null, {
+        source: "main",
+        kind: "running",
+        text: `runChatGptRobustSendLadder: Dispatching native click at (${x}, ${y})`,
+      });
       await client.Input.dispatchMouseEvent({
         type: "mousePressed",
         x,
@@ -289,32 +394,46 @@ async function runChatGptRobustSendLadder(
   // Mandatory 1.5-second pacing delay
   await sleep(1500);
 
-  // Composer Text Length Interlock
+  // Post-click check
+  const postClickSnap = monitor.captureSnapshot();
+  const postClickState = postClickSnap.state;
   let afterClick = await evaluateOnCdpPage(
     client,
-    `(${getComposerTextScript.toString()})()`,
+    `(${getComposerTextScript.toString()})()`
   ).catch(() => ({ text: "" }));
   let composerTextLength = String(afterClick?.text || "").trim().length;
-  if (composerTextLength === 0) {
+
+  await appendAppLog(null, {
+    source: "main",
+    kind: "running",
+    text: `runChatGptRobustSendLadder (First Click Post-check): Runtime state: ${postClickState}. Composer length: ${composerTextLength}`,
+  });
+
+  if (composerTextLength === 0 || clickedResult?.isStopActiveNow) {
     await appendAppLog(null, {
       source: "main",
-      kind: "running",
-      text: `runChatGptRobustSendLadder: composer is empty after single click, prompt sent successfully.`,
+      kind: "ok",
+      text: `runChatGptRobustSendLadder: Composer is empty or Stop button appeared. Prompt sent successfully.`,
     });
     const ack = await waitForPromptSendAcknowledged(
       client,
+      prompt,
       beforeCount || 0,
       10000,
     );
     return {
-      ok: true,
+      ok: ack.ok,
       send: clickedResult?.selector || "submit-button",
       acknowledged: ack,
     };
   }
 
   // Fallback / retry click (only if composer still has text)
-  if (composerTextLength > 0) {
+  if (composerTextLength > 0 && !clickedResult?.isStopActiveNow) {
+    const preRetrySnap = monitor.captureSnapshot();
+    const preRetryState = preRetrySnap.state;
+    const preRetryComposerLength = (preRetrySnap.metrics?.dom?.composerText || "").length;
+
     await appendAppLog(null, {
       source: "main",
       kind: "running",
@@ -326,6 +445,16 @@ async function runChatGptRobustSendLadder(
       (err) => ({ ok: false, error: err.message }),
     );
 
+    const retryBtnStatus = clickedResult?.ok ? clickedResult.status : "error/not-found";
+    const retryBtnEnabled = retryBtnStatus === "clicked" || retryBtnStatus === "already-sent-safely";
+
+    await appendAppLog(null, {
+      source: "main",
+      kind: "running",
+      text: `runChatGptRobustSendLadder (Retry Click): Send button enabled? ${retryBtnEnabled} (status: ${retryBtnStatus}). Runtime state: ${preRetryState}. Composer length: ${preRetryComposerLength}`,
+      details: clickedResult,
+    });
+
     if (clickedResult?.ok) {
       if (
         clickedResult.status === "already-sent-safely" ||
@@ -336,11 +465,10 @@ async function runChatGptRobustSendLadder(
           kind: "running",
           text: `runChatGptRobustSendLadder: retry detected Stop button (already sent safely); skipping click.`,
         });
-        // Instantly terminate with { ok: true, status: 'already-sent-safely' }
         return {
-          ok: true,
-          status: "already-sent-safely",
-          send: "already-sent-safely",
+          ok: false,
+          error: "previous-chatgpt-response-still-streaming",
+          status: clickedResult.status,
         };
       }
 
@@ -348,6 +476,11 @@ async function runChatGptRobustSendLadder(
         // Pair immediately with native absolute mouse click
         const x = clickedResult.rect.x + clickedResult.rect.width / 2;
         const y = clickedResult.rect.y + clickedResult.rect.height / 2;
+        await appendAppLog(null, {
+          source: "main",
+          kind: "running",
+          text: `runChatGptRobustSendLadder: Dispatching retry native click at (${x}, ${y})`,
+        });
         await client.Input.dispatchMouseEvent({
           type: "mousePressed",
           x,
@@ -368,25 +501,35 @@ async function runChatGptRobustSendLadder(
     // Mandatory 1.5-second pacing delay
     await sleep(1500);
 
-    // Final composer text length check
+    // Final check
+    const postRetrySnap = monitor.captureSnapshot();
+    const postRetryState = postRetrySnap.state;
     afterClick = await evaluateOnCdpPage(
       client,
-      `(${getComposerTextScript.toString()})()`,
+      `(${getComposerTextScript.toString()})()`
     ).catch(() => ({ text: "" }));
     composerTextLength = String(afterClick?.text || "").trim().length;
+
+    await appendAppLog(null, {
+      source: "main",
+      kind: "running",
+      text: `runChatGptRobustSendLadder (Retry Click Post-check): Runtime state: ${postRetryState}. Composer length: ${composerTextLength}`,
+    });
+
     if (composerTextLength === 0) {
       await appendAppLog(null, {
         source: "main",
-        kind: "running",
+        kind: "ok",
         text: `runChatGptRobustSendLadder: composer is empty after retry click, prompt sent successfully.`,
       });
       const ack = await waitForPromptSendAcknowledged(
         client,
+        prompt,
         beforeCount || 0,
         10000,
       );
       return {
-        ok: true,
+        ok: ack.ok,
         send: clickedResult?.selector || "submit-button",
         acknowledged: ack,
       };
@@ -395,6 +538,7 @@ async function runChatGptRobustSendLadder(
 
   const ack = await waitForPromptSendAcknowledged(
     client,
+    prompt,
     beforeCount || 0,
     10000,
   );
@@ -418,7 +562,26 @@ async function forceSubmitChatGptComposerWithCdp(
     ).catch(() => ({ text: "" }));
     const remainingChars = String(state?.text || "").trim().length;
     if (remainingChars < 5) {
-      return { ok: true, mode: "already-empty", attempt };
+      const ownership = await getConversationState(client);
+      if (
+        ownership?.latestUserMessageHash === hashChatGptSnapshotText(prompt)
+      ) {
+        return {
+          ok: true,
+          mode: "already-sent-by-user-message-ownership",
+          attempt,
+        };
+      }
+      await evaluateOnCdpPage(
+        client,
+        `(${focusPromptInputScript.toString()})()`,
+      ).catch(() => null);
+      await evaluateOnCdpPage(
+        client,
+        `(${setPromptInputValueScript.toString()})(${JSON.stringify(prompt)})`,
+      ).catch(() => null);
+      await sleep(500);
+      continue;
     }
     await appendAppLog(null, {
       source: "main",
@@ -452,6 +615,7 @@ async function forceSubmitChatGptComposerWithCdp(
 
     const ack = await waitForPromptSendAcknowledged(
       client,
+      prompt,
       beforeCount || 0,
       8000,
     );
@@ -558,6 +722,16 @@ async function sendPromptViaCdpInput(client, prompt, options = {}) {
   })()`,
   ).catch(() => null);
 
+  if (!finalResult?.ok) {
+    await appendAppLog(null, {
+      source: "main",
+      kind: "error",
+      text: "sendPromptViaCdpInput: Send failed. Skipping Post-Send Padding.",
+      details: finalResult,
+    }).catch(() => null);
+    return finalResult;
+  }
+
   // Post-Send Padding: inject 8000ms delay to let ChatGPT clear internal parsing and layout
   await appendAppLog(null, {
     source: "main",
@@ -616,64 +790,58 @@ async function waitForChatGptComposerIdle(
 
 async function waitForPromptSendAcknowledged(
   client,
+  prompt,
   beforeCount = 0,
   timeoutMs = 15000,
 ) {
   const startedAt = Date.now();
-  let lastComposer = null;
-  let lastAssistant = null;
-  let lastBusy = null;
+  const monitor = require("./chatgpt_runtime_monitor");
+  const expectedPromptHash = hashChatGptSnapshotText(prompt);
+  
+  if (!monitor.page) {
+    await monitor.startMonitoring(client).catch(() => null);
+  }
+
+  let lastSnap = null;
   while (Date.now() - startedAt < timeoutMs) {
     await sleep(700);
-    lastBusy = await evaluateOnCdpPage(
-      client,
-      `(${detectChatGptActiveGenerationScriptStrict.toString()})()`,
-    ).catch(() => ({ generating: false }));
-    if (lastBusy?.generating) {
+    lastSnap = monitor.captureSnapshot();
+    const dom = lastSnap.metrics.dom;
+    const state = await getConversationState(client);
+    const promptOwned =
+      Boolean(expectedPromptHash) &&
+      state?.latestUserMessageHash === expectedPromptHash;
+    const composerCleared = (dom.composerText || "").trim().length < 5;
+    const assistantAdvanced = dom.assistantMessageCount > (beforeCount || 0);
+
+    if (promptOwned) {
+      await appendAppLog(null, {
+        source: "main",
+        kind: "ok",
+        text: `Prompt send verified by user-message ownership (Composer empty: ${composerCleared}, Advanced: ${assistantAdvanced}, State: ${lastSnap.state})`,
+      }).catch(() => null);
+
       return {
         ok: true,
-        composerCleared: false,
-        assistantAdvanced: false,
-        generating: true,
-        activeGeneration: lastBusy,
-      };
-    }
-    lastComposer = await evaluateOnCdpPage(
-      client,
-      `(${getComposerTextScript.toString()})()`,
-    ).catch(() => ({ text: "" }));
-    lastAssistant = await evaluateOnCdpPage(
-      client,
-      `(${readLatestAssistantScript.toString()})()`,
-    ).catch(() => ({ count: beforeCount, generating: false }));
-    const composerCleared =
-      !lastComposer?.text || String(lastComposer.text).trim().length < 5;
-    const assistantAdvanced =
-      Number(lastAssistant?.count || 0) > Number(beforeCount || 0);
-    if (composerCleared || assistantAdvanced || lastAssistant?.generating) {
-      return {
-        ok: true,
+        promptOwned,
+        expectedPromptHash,
         composerCleared,
         assistantAdvanced,
-        generating: Boolean(lastAssistant?.generating),
-        lastComposer,
-        lastAssistant,
+        generating: Boolean(state?.streaming || state?.stopButtonVisible),
       };
     }
   }
+  
   return {
     ok: false,
     error: "Prompt send was not acknowledged by ChatGPT.",
+    expectedPromptHash,
+    latestUserMessageHash:
+      lastSnap?.metrics?.dom?.latestUserMessageHash || "",
     lastComposer: {
-      textLength: String(lastComposer?.text || "").length,
-      selector: lastComposer?.selector || "",
+      textLength: (lastSnap?.metrics?.dom?.composerText || "").length,
     },
-    lastAssistant: {
-      count: lastAssistant?.count || 0,
-      generating: Boolean(lastAssistant?.generating),
-      mode: lastAssistant?.mode || "",
-    },
-    lastBusy,
+    state: lastSnap?.state || "UNKNOWN",
   };
 }
 
@@ -869,17 +1037,36 @@ async function sendNv2PromptViaDeepCdpInput(client, prompt, context = {}) {
     client,
     `(${dispatchNv2ComposerInputEventsScript.toString()})(${JSON.stringify(prompt)})`,
   ).catch(() => null);
-  await sleep(300);
+  let loaded = null;
+  const started = Date.now();
+  while (Date.now() - started < 8000) {
+    loaded = await evaluateOnCdpPage(
+      client,
+      `(${inspectNv2ComposerSubmitStateScript.toString()})(${JSON.stringify(prompt)}, ${beforeCount})`,
+    ).catch((e) => ({ ok: false, error: e.message }));
 
-  let loaded = await evaluateOnCdpPage(
-    client,
-    `(${inspectNv2ComposerSubmitStateScript.toString()})(${JSON.stringify(prompt)}, ${beforeCount})`,
-  ).catch((error) => ({ ok: false, error: error.message }));
+    if (
+      loaded?.activeComposer &&
+      loaded?.fullPromptLoaded &&
+      loaded?.sendReady
+    ) {
+      break;
+    }
+    await sleep(200);
+  }
+
   if (
     !loaded?.activeComposer ||
     !loaded?.fullPromptLoaded ||
     !loaded?.sendReady
   ) {
+    await appendAppLog(null, {
+      source: "main",
+      kind: "warning",
+      text: "NV2 composer not ready",
+      details: loaded,
+    }).catch(() => null);
+
     return {
       ok: false,
       error: "nv2-composer-not-ready-for-submit",
@@ -975,6 +1162,9 @@ async function sendNv2PromptViaDeepCdpInput(client, prompt, context = {}) {
     state = guarded.state;
   }
 
+  if (context.sceneId) {
+    setChatGptSendState(context.sceneId, "SENT");
+  }
   return {
     ok: true,
     mode: state?.mode || "generation-acknowledged",

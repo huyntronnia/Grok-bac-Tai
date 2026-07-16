@@ -1,0 +1,2707 @@
+{
+  "logChatGptStage": [
+    "isPipelineCancelledError"
+  ],
+  "setChatGptSendState": [
+    "logChatGptStage",
+    "assertPipelineRunActive",
+    "waitForHeavyChatGptPromptDomCooldown",
+    "sendPromptViaCdpInput",
+    "sendNv2PromptViaDeepCdpInput",
+    "verifyAttachmentsReady"
+  ],
+  "loginRequiredMessage": [
+    "sendPromptViaWeb",
+    "validateGeneratedVideoFile",
+    "waitForNewVideoUrl",
+    "isPipelineCancelledError",
+    "waitForLatestChatGPTGeneratedImage",
+    "resendImagePrompt"
+  ],
+  "sanitizeProjectValue": [
+    "saveProjectSessionFile",
+    "openProjectSessionFile"
+  ],
+  "assertNoProjectSecrets": [
+    "validateProjectPayload"
+  ],
+  "assertObjectField": [
+    "validateProjectPayload"
+  ],
+  "validateProjectPayload": [
+    "saveProjectSessionFile",
+    "openProjectSessionFile",
+    "forceCleanChatGptNewChatRotation"
+  ],
+  "resolveProjectPrepromptFolder": [],
+  "importCharacterPresetsHandler": [],
+  "newProjectSession": [],
+  "saveProjectSessionFile": [],
+  "openProjectSessionFile": [],
+  "embedProjectAssets": [
+    "saveProjectSessionFile"
+  ],
+  "restoreEmbeddedProjectAssets": [
+    "openProjectSessionFile"
+  ],
+  "normalizeCredentialProvider": [
+    "readWebAccountStore",
+    "safeWebAccount",
+    "listWebAccountsSafe",
+    "saveWebAccount",
+    "deleteWebAccount",
+    "pickWebAccount",
+    "clearProviderSession"
+  ],
+  "maskEmail": [
+    "safeWebAccount",
+    "saveWebAccount",
+    "clearProviderSession"
+  ],
+  "ensureCredentialEncryptionAvailable": [
+    "readWebAccountStore",
+    "writeWebAccountStore"
+  ],
+  "readWebAccountStore": [
+    "listWebAccountsSafe",
+    "saveWebAccount",
+    "deleteWebAccount",
+    "pickWebAccount"
+  ],
+  "writeWebAccountStore": [
+    "saveWebAccount",
+    "deleteWebAccount",
+    "pickWebAccount"
+  ],
+  "safeWebAccount": [],
+  "listWebAccountsSafe": [
+    "deleteWebAccount",
+    "norm"
+  ],
+  "saveWebAccount": [],
+  "deleteWebAccount": [],
+  "pickWebAccount": [
+    "clearProviderSession"
+  ],
+  "sanitizeChatTitleForLog": [
+    "pickWebAccount",
+    "updateChatGptConversationIdentity",
+    "selectChatGptConversationByTitle",
+    "maybeRenameChatGptCurrentConversationUntilTitle",
+    "renameChatGptCurrentConversationUntilTitle",
+    "checkChatGptCurrentConversationTitle"
+  ],
+  "checkProactiveMemoryGuard": [
+    "isPipelineCancelledError"
+  ],
+  "getChatGptLocationState": [
+    "updateChatGptConversationIdentity",
+    "selectChatGptConversationByTitle",
+    "isPipelineCancelledError",
+    "maybeRenameChatGptCurrentConversationUntilTitle",
+    "checkChatGptCurrentConversationTitle"
+  ],
+  "invalidateChatGptConversationIdentity": [
+    "getChatGptLocationState",
+    "updateChatGptConversationIdentity",
+    "isPipelineCancelledError",
+    "maybeRenameChatGptCurrentConversationUntilTitle",
+    "forceCleanChatGptNewChatRotation"
+  ],
+  "forceCleanChatGptNewChatRotation": [
+    "getChatGptLocationState",
+    "assertPipelineRunActive",
+    "runScenePipelineLocked"
+  ],
+  "isChatGptRequestRotationEligible": [
+    "getChatGptLocationState",
+    "runScenePipelineLocked"
+  ],
+  "captureChatGptDiagnosticSnapshotScript": [],
+  "captureAndLogChatGptDiagnostics": [
+    "waitForLatestChatGPTGeneratedImage",
+    "isValidChatGptConversationUrl"
+  ],
+  "updateChatGptConversationIdentity": [
+    "selectChatGptConversationByTitle",
+    "maybeRenameChatGptCurrentConversationUntilTitle",
+    "checkChatGptCurrentConversationTitle"
+  ],
+  "getSafeGrokAccounts": [
+    "getGrokRouterStatus",
+    "selectGrokAccount",
+    "listGrokAccountsSafe"
+  ],
+  "getGrokRouterStatus": [
+    "selectGrokAccount",
+    "setAccountRouterEnabled",
+    "writeGrokRouterCheckpoint",
+    "resumeFromRouterCheckpoint",
+    "refreshGrokRouterStatus",
+    "runScenePipelineLockedInternal"
+  ],
+  "setGrokAccountState": [
+    "writeGrokRouterCheckpoint"
+  ],
+  "selectGrokAccount": [
+    "runScenePipelineLockedInternal"
+  ],
+  "setAccountRouterEnabled": [
+    "runScenePipelineLockedInternal"
+  ],
+  "classifyGrokRouterError": [
+    "runScenePipelineLockedInternal"
+  ],
+  "writeGrokRouterCheckpoint": [
+    "runScenePipelineLockedInternal"
+  ],
+  "resumeFromRouterCheckpoint": [],
+  "notifyRenderer": [
+    "writeGrokRouterCheckpoint",
+    "notifyChatGptPolicyRefusal",
+    "clearProviderSession",
+    "waitForNewVideoUrl",
+    "waitForLatestChatGPTGeneratedImage",
+    "resendImagePrompt"
+  ],
+  "notifyChatGptPolicyRefusal": [
+    "resendImagePrompt",
+    "retryMotionPrompt"
+  ],
+  "ensureAndMigratePrompts": [
+    "loadHardPromptTasks",
+    "clickNode",
+    "initializeApplication"
+  ],
+  "sanitizePromptSourcePathForLog": [
+    "ensureUserPromptFile"
+  ],
+  "findBundledPromptTemplate": [
+    "ensureUserPromptFile"
+  ],
+  "ensureUserPromptFile": [
+    "resolveEditablePromptPath"
+  ],
+  "readHardPromptConfig": [
+    "resolveEditablePromptPath",
+    "getHardPromptFileInfo"
+  ],
+  "writeHardPromptConfig": [
+    "chooseHardPromptFile"
+  ],
+  "resolveEditablePromptPath": [
+    "getHardPromptFileInfo"
+  ],
+  "getHardPromptFileInfo": [],
+  "chooseHardPromptFile": [],
+  "openHardPromptFile": [],
+  "loadHardPromptTasks": [
+    "runScenePipelineLockedInternal"
+  ],
+  "collectPrepromptRequestFiles": [
+    "isValidChatGptConversationUrl"
+  ],
+  "openGrokRouterFolder": [],
+  "listGrokAccountsSafe": [
+    "refreshGrokRouterStatus"
+  ],
+  "broadcastPipelineLogVisibility": [
+    "buildAppMenu"
+  ],
+  "sendProjectMenuCommand": [
+    "buildAppMenu"
+  ],
+  "buildAppMenu": [
+    "initializeApplication"
+  ],
+  "getPipelineLogVisibility": [],
+  "openWebLogin": [
+    "getPipelineLogVisibility",
+    "waitForProviderReady"
+  ],
+  "normalizeWebProvider": [
+    "loginRequiredMessage",
+    "getPipelineLogVisibility",
+    "checkWebLogin",
+    "sendPromptViaWeb"
+  ],
+  "closeChromeDebug": [
+    "scanProjectAndRunVeoUpHandler"
+  ],
+  "ensureChromeDebug": [
+    "validateGeneratedVideoFile"
+  ],
+  "isChromeDebugReady": [
+    "ensureChromeDebug"
+  ],
+  "openCdpTab": [
+    "validateGeneratedVideoFile"
+  ],
+  "findChromeExecutable": [
+    "ensureChromeDebug"
+  ],
+  "chooseFolder": [],
+  "scanFolder": [
+    "getPreviousFrame",
+    "mergeVideos"
+  ],
+  "collectFromDir": [],
+  "getSceneNumber": [
+    "collectFromDir"
+  ],
+  "extractLastFrameToPathHandler": [],
+  "extractLastFrame": [],
+  "extractLastFrameFromVideo": [
+    "extractLastFrame",
+    "getPreviousFrame"
+  ],
+  "getContinuityReferenceDir": [
+    "validateLocalVideoFile"
+  ],
+  "formatFfmpegTimestamp": [
+    "probeVideoDurationSeconds"
+  ],
+  "probeVideoDurationSeconds": [
+    "extractLastFrameToPath",
+    "validateLocalVideoFile",
+    "validateGeneratedVideoFile"
+  ],
+  "extractLastFrameToPath": [
+    "extractLastFrameToPathHandler",
+    "validateLocalVideoFile",
+    "runFullPipeline"
+  ],
+  "getSceneMediaPaths": [
+    "isValidChatGptConversationUrl",
+    "runScenePipelineLockedInternal"
+  ],
+  "isTemporaryDownloadPath": [
+    "validateLocalVideoFile"
+  ],
+  "waitForStableFileSize": [
+    "validateLocalVideoFile"
+  ],
+  "validateLocalVideoFile": [
+    "runScenePipelineLockedInternal",
+    "startNextSceneChatGptPrefetch"
+  ],
+  "copyImageToClipboard": [],
+  "getPreviousFrame": [],
+  "mergeVideos": [
+    "mergeAndShowFinalPreview"
+  ],
+  "exportFinalVideo": [],
+  "mergeVideoFiles": [],
+  "runFfmpeg": [
+    "extractLastFrameFromVideo",
+    "probeVideoDurationSeconds",
+    "extractLastFrameToPath",
+    "mergeVideoFiles"
+  ],
+  "splitPromptWithAI": [],
+  "readJsonResponse": [
+    "splitPromptWithAI"
+  ],
+  "parseJsonFromModel": [
+    "splitPromptWithAI",
+    "generateScenePrompts"
+  ],
+  "generateScenePrompts": [
+    "generateWithProvider"
+  ],
+  "chooseOutputFolder": [
+    "generateScenePrompts",
+    "recoverWorkflowRun",
+    "sendCurrentBatchViaWeb",
+    "runFullPipeline",
+    "autoRunRoute"
+  ],
+  "chooseProjectRootFolder": [],
+  "checkWebLogin": [
+    "checkSelectedWebLogin",
+    "waitForProviderReady"
+  ],
+  "clearProviderSession": [],
+  "sendPromptViaWeb": [
+    "sendCurrentBatchViaWeb"
+  ],
+  "isValidChatGptConversationUrl": [
+    "sendPromptViaWeb"
+  ],
+  "openFreshChatGptRootPage": [],
+  "assertChatGptNotExistingConversation": [],
+  "summarizeGrokGenerationError": [
+    "validateGeneratedVideoFile"
+  ],
+  "waitForGrokImagineReady": [],
+  "sanitizeGrokUrlForLog": [
+    "getGrokRouteState",
+    "summarizeGrokSendState"
+  ],
+  "isGrokImagineAgentUrl": [
+    "ensureGrokImagineAgentPage"
+  ],
+  "isGrokImagineReadyRoute": [
+    "waitForGrokImagineAgentReady",
+    "ensureGrokImagineAgentPage",
+    "assertGrokImagineAgentReady"
+  ],
+  "getGrokRouteState": [
+    "waitForGrokImagineAgentReady",
+    "ensureGrokImagineAgentPage",
+    "assertGrokImagineAgentReady"
+  ],
+  "waitForGrokImagineAgentReady": [
+    "ensureGrokImagineAgentPage"
+  ],
+  "forceGrokNormalImagineVideoMode": [],
+  "visible": [
+    "getGrokReadyStateScript",
+    "closeGrokTemplateModalScript",
+    "getGrokTemplateViewportFallbackPointsScript",
+    "forceHideGrokTemplateModalScript",
+    "isExactDismissText",
+    "detectChatGptResponseChoiceUiScript",
+    "normalize",
+    "deepFocusNv2ComposerScript",
+    "isSendButton",
+    "isStrictSendButton",
+    "getActiveButtonType"
+  ],
+  "textOf": [
+    "forceGrokNormalImagineVideoMode",
+    "validateGeneratedVideoFile",
+    "clickByText",
+    "forceGrokNormalImagineMode",
+    "clickButton",
+    "getGrokRouteStateScript",
+    "closeGrokTemplateModalScript",
+    "getGrokTemplateViewportFallbackPointsScript",
+    "scanGrokTemplateModalScript",
+    "selectGrokPhotoVideoTemplateScript",
+    "findClickable",
+    "clickExact",
+    "boxOf",
+    "dismissGrokConnectorsScript",
+    "forceGrokVideoModeScript",
+    "isExactDismissText",
+    "clickNode",
+    "clickUploadButtonScript"
+  ],
+  "ensureGrokImagineAgentPage": [
+    "closeGrokTemplateModal",
+    "validateGeneratedVideoFile",
+    "clickGrokSendButtonOnce",
+    "uploadFileViaCdp",
+    "submitGrokVideoPrompt"
+  ],
+  "assertGrokImagineAgentReady": [
+    "validateGeneratedVideoFile",
+    "uploadFileViaCdp",
+    "submitGrokVideoPrompt"
+  ],
+  "closeGrokTemplateModal": [],
+  "validateGeneratedVideoFile": [
+    "validateLocalVideoFile"
+  ],
+  "clickByText": [
+    "validateGeneratedVideoFile"
+  ],
+  "getCdpPage": [
+    "getChatGptLocationState",
+    "getPipelineLogVisibility",
+    "checkWebLogin",
+    "sendPromptViaWeb",
+    "validateGeneratedVideoFile",
+    "isPipelineCancelledError",
+    "isValidChatGptConversationUrl",
+    "assertPipelineRunActive",
+    "forceCleanChatGptNewChatRotation",
+    "runScenePipelineLocked",
+    "runScenePipelineLockedInternal"
+  ],
+  "closeUnexpectedProviderTabs": [
+    "validateGeneratedVideoFile",
+    "recoverChatGptBlockingUi"
+  ],
+  "forceGrokNormalImagineMode": [],
+  "ensureGrokEmptyCanvas": [
+    "recoverGrokCanvasAfterLimit"
+  ],
+  "collectExistingProjectVideos": [],
+  "restoreProjectKeyframesToChatGPT": [],
+  "waitForGrokUploadSettled": [
+    "closeGrokTemplateModal",
+    "validateGeneratedVideoFile"
+  ],
+  "summarizeGrokSendState": [
+    "waitForGrokSendPreflight",
+    "submitGrokVideoPrompt"
+  ],
+  "waitForGrokSendPreflight": [
+    "clickGrokSendButtonOnce",
+    "submitGrokVideoPrompt"
+  ],
+  "clickGrokSendButtonOnce": [
+    "submitGrokVideoPrompt"
+  ],
+  "clearGrokCanvasSelection": [],
+  "buildGrokSafeMotionPrompt": [
+    "recoverGrokAfterContentPolicy"
+  ],
+  "recoverGrokAfterContentPolicy": [
+    "waitForNewVideoUrl"
+  ],
+  "recoverGrokCanvasAfterLimit": [
+    "recoverGrokAfterContentPolicy"
+  ],
+  "addMediaFileToGrokCanvas": [
+    "collectExistingProjectVideos"
+  ],
+  "labelGrokCanvas": [
+    "validateGeneratedVideoFile"
+  ],
+  "clearGrokCanvasChat": [
+    "validateGeneratedVideoFile",
+    "recoverGrokAfterContentPolicy",
+    "recoverGrokCanvasAfterLimit"
+  ],
+  "confirmGrokVideoGenerationIfAsked": [
+    "validateGeneratedVideoFile",
+    "recoverGrokAfterContentPolicy",
+    "recoverGrokCanvasAfterLimit"
+  ],
+  "sendGrokConfirmationText": [
+    "confirmGrokVideoGenerationIfAsked"
+  ],
+  "waitForCdpAssistantResponse": [
+    "sendPromptViaWeb"
+  ],
+  "waitForNewImageUrl": [],
+  "selectChatGptConversationByTitle": [
+    "updateChatGptConversationIdentity"
+  ],
+  "norm": [
+    "selectChatGptConversationByTitle",
+    "autoRunRoute",
+    "isSendButton",
+    "isStopButton",
+    "checkChatGptCurrentConversationTitle"
+  ],
+  "getChatTitleStableKey": [
+    "selectChatGptConversationByTitle",
+    "markChatTitleStable",
+    "isChatTitleStable"
+  ],
+  "markChatTitleStable": [
+    "selectChatGptConversationByTitle",
+    "renameChatGptCurrentConversationUntilTitle"
+  ],
+  "isChatTitleStable": [
+    "selectChatGptConversationByTitle",
+    "renameChatGptCurrentConversationUntilTitle"
+  ],
+  "renameChatGptCurrentConversation": [
+    "renameChatGptCurrentConversationUntilTitle"
+  ],
+  "waitForNewVideoUrl": [
+    "validateGeneratedVideoFile"
+  ],
+  "downloadBrowserAsset": [
+    "validateGeneratedVideoFile"
+  ],
+  "captureLatestImageElement": [],
+  "checkAssetExists": [],
+  "getAssetStat": [],
+  "waitForGrokUploadedAsset": [
+    "addMediaFileToGrokCanvas",
+    "uploadFileViaCdp"
+  ],
+  "clickGrokUploadAndChooseFile": [
+    "addMediaFileToGrokCanvas",
+    "uploadFileViaCdp"
+  ],
+  "handler": [
+    "safeIpcHandler"
+  ],
+  "setFirstFileInput": [
+    "handler"
+  ],
+  "uploadFileViaCdp": [
+    "closeGrokTemplateModal",
+    "validateGeneratedVideoFile",
+    "restoreProjectKeyframesToChatGPT",
+    "clickGrokSendButtonOnce",
+    "recoverGrokCanvasAfterLimit",
+    "retryMotionPrompt"
+  ],
+  "pasteImageViaClipboard": [
+    "uploadFileViaCdp"
+  ],
+  "submitPixVersePrompt": [
+    "validateGeneratedVideoFile"
+  ],
+  "submitGrokVideoPrompt": [
+    "validateGeneratedVideoFile",
+    "recoverGrokAfterContentPolicy",
+    "recoverGrokCanvasAfterLimit"
+  ],
+  "pressEnterToSubmit": [],
+  "sleep": [
+    "getChatGptLocationState",
+    "ensureChromeDebug",
+    "waitForStableFileSize",
+    "checkWebLogin",
+    "clearProviderSession",
+    "waitForGrokImagineReady",
+    "waitForGrokImagineAgentReady",
+    "ensureGrokImagineAgentPage",
+    "closeGrokTemplateModal",
+    "validateGeneratedVideoFile",
+    "ensureGrokEmptyCanvas",
+    "collectExistingProjectVideos",
+    "restoreProjectKeyframesToChatGPT",
+    "waitForGrokUploadSettled",
+    "waitForGrokSendPreflight",
+    "clickGrokSendButtonOnce",
+    "clearGrokCanvasSelection",
+    "labelGrokCanvas",
+    "clearGrokCanvasChat",
+    "confirmGrokVideoGenerationIfAsked",
+    "sendGrokConfirmationText",
+    "waitForCdpAssistantResponse",
+    "waitForNewImageUrl",
+    "selectChatGptConversationByTitle",
+    "waitForNewVideoUrl",
+    "waitForGrokUploadedAsset",
+    "handler",
+    "uploadFileViaCdp",
+    "pasteImageViaClipboard",
+    "submitPixVersePrompt",
+    "submitGrokVideoPrompt",
+    "pressEnterToSubmit",
+    "findClickable",
+    "clickExact",
+    "pipelineDelay",
+    "waitForCdpLoad",
+    "isPipelineCancelledError",
+    "initChatGptPipeline",
+    "refreshChatGptPageBeforeImageExtract",
+    "waitForLatestChatGPTGeneratedImage",
+    "resendImagePrompt",
+    "retryMotionPrompt",
+    "renameChatGptCurrentConversationUntilTitle",
+    "waitForChatGptRecentItem",
+    "isValidChatGptConversationUrl",
+    "assertPipelineRunActive",
+    "detectLoginWithRetry",
+    "recoverChatGptBlockingUi",
+    "forceCleanChatGptNewChatRotation",
+    "waitForHeavyChatGptPromptDomCooldown",
+    "sendPromptViaCdpInput",
+    "sendPromptViaCdpInputSingle",
+    "focusNv2ComposerWithCdp",
+    "sendNv2PromptViaDeepCdpInput",
+    "vidoraClickChatGptRealSendButton",
+    "vidoraChatGptInputGate",
+    "verifyAttachmentsReady",
+    "uploadFileToChatGptDirectly",
+    "runScenePipelineLocked",
+    "runScenePipelineLockedInternal"
+  ],
+  "onCancel": [],
+  "downloadAssetInPageScript": [],
+  "fillProviderLoginScript": [],
+  "setValue": [
+    "clickButton"
+  ],
+  "clickButton": [],
+  "detectVideoCapabilityScript": [],
+  "getPromptInputCandidates": [],
+  "clickChatGptStartNewChatScript": [
+    "getPromptInputCandidates",
+    "sendPromptScript"
+  ],
+  "fold": [
+    "getPromptInputCandidates",
+    "isUnsafeDismissTarget",
+    "isExactDismissText"
+  ],
+  "collectVideoUrlsScript": [],
+  "detectGrokPageFailureScript": [],
+  "getGrokReadyStateScript": [],
+  "getGrokRouteStateScript": [],
+  "detectGrokTemplateModalScript": [],
+  "closeGrokTemplateModalScript": [],
+  "getGrokTemplateViewportFallbackPointsScript": [],
+  "scanGrokTemplateModalScript": [],
+  "selectGrokPhotoVideoTemplateScript": [],
+  "forceHideGrokTemplateModalScript": [],
+  "prepareGrokVideoComposerScript": [],
+  "clickNode": [
+    "findClickable",
+    "clickExact",
+    "isExactDismissText"
+  ],
+  "findClickable": [
+    "clickExact"
+  ],
+  "clickExact": [],
+  "preparePixVerseComposerScript": [],
+  "setPixVersePromptScript": [],
+  "setGrokComposerTextScript": [],
+  "focusGrokComposerScript": [],
+  "labelGrokCanvasScript": [],
+  "clearGrokCanvasChatScript": [],
+  "clickGrokUploadImageMenuItemScript": [],
+  "clickGrokCanvasUploadImageScript": [],
+  "focusGrokWorkspaceScript": [],
+  "setGrokVideoPromptScript": [],
+  "detectGrokConfirmationQuestionScript": [],
+  "getGrokSendPreflightScript": [],
+  "boxOf": [],
+  "normalize": [
+    "getPromptInputCandidates",
+    "boxOf",
+    "findChatGptConversationScript",
+    "autoRunRoute",
+    "dismissChatGptBlockingUiScript",
+    "fold",
+    "detectChatGptResponseChoiceUiScript",
+    "nearComposer",
+    "inspectAndClickChatGptSendButtonSafely",
+    "isLikelyChatGptSendButtonText",
+    "normalizeChatGptRetryText"
+  ],
+  "detectGrokUploadStateScript": [],
+  "clickGrokComposerAreaScript": [],
+  "dismissGrokConnectorsScript": [],
+  "forceGrokVideoModeScript": [],
+  "captureGrokSubmitStateScript": [],
+  "detectGrokGeneratingStateScript": [],
+  "detectGrokGenerationProblemScript": [],
+  "clickGrokRetryButton": [
+    "clickGrokSendButtonOnce"
+  ],
+  "clickGrokGenerateScript": [],
+  "clickPixVerseCreateScript": [],
+  "readLatestAssistantScript": [],
+  "readAssistantAfterIndexScript": [],
+  "findChatGptConversationScript": [],
+  "runVeoUpAutomation": [
+    "maybeRunVeoUpAutomationAfterPipeline"
+  ],
+  "exportProject": [
+    "runVeoUpAutomation"
+  ],
+  "getVeoUpCoordinateConfigHandler": [],
+  "startVeoUpCoordinateSetupHandler": [],
+  "captureVeoUpCoordinateHandler": [],
+  "saveVeoUpCoordinateConfigHandler": [],
+  "deleteVeoUpCoordinateConfigHandler": [],
+  "cancelVeoUpCoordinateSetupHandler": [],
+  "scanProjectAndRunVeoUpHandler": [],
+  "listener": [],
+  "normalizeSceneDuration": [
+    "applySceneDurationValue",
+    "getVideoProviderConfig",
+    "getPreviewTimeline",
+    "getProjectSessionPayload",
+    "normalizeProjectSessionForRenderer"
+  ],
+  "applySceneDurationValue": [
+    "createProject",
+    "applyProjectSessionPayload",
+    "createBlankProjectFromName",
+    "restore"
+  ],
+  "getReviewSettings": [
+    "shouldSkipReview",
+    "getProjectSessionPayload",
+    "persist"
+  ],
+  "shouldSkipReview": [
+    "runFullPipeline",
+    "getProjectSessionPayload"
+  ],
+  "applyReviewSettings": [
+    "applyProjectSessionPayload",
+    "restore"
+  ],
+  "isKeyframeMotionPromptOnlyModeEnabled": [
+    "createProject",
+    "sceneHasRequiredOutputForCurrentMode",
+    "forceResumeFirstIncompleteSceneIfNeeded",
+    "runFullPipeline",
+    "maybeRunVeoUpAutomationAfterPipeline",
+    "autoRunRoute",
+    "getProjectSessionPayload",
+    "persist",
+    "restore"
+  ],
+  "applyPipelineModeSettings": [
+    "applyProjectSessionPayload",
+    "restore"
+  ],
+  "getContinuityReferenceSettings": [
+    "createProject",
+    "runFullPipeline",
+    "getRuntimeSnapshot",
+    "getProjectSessionPayload",
+    "persist"
+  ],
+  "applyContinuityReferenceSettings": [
+    "applyProjectSessionPayload",
+    "restore"
+  ],
+  "getGrokRecoverySettings": [
+    "getVideoProviderConfig",
+    "getProjectSessionPayload",
+    "persist"
+  ],
+  "applyGrokRecoverySettings": [
+    "applyProjectSessionPayload",
+    "restore"
+  ],
+  "getChatGptStabilitySettings": [
+    "recoverWorkflowRun",
+    "runFullPipeline",
+    "getProjectSessionPayload",
+    "persist"
+  ],
+  "applyChatGptStabilitySettings": [
+    "applyProjectSessionPayload",
+    "restore"
+  ],
+  "getProjectTargetSceneDefault": [
+    "getChatGptStabilitySettings",
+    "applyChatGptStabilitySettings",
+    "syncTargetSceneCountToProjectDefault",
+    "startPipelineFromClick",
+    "restore"
+  ],
+  "syncTargetSceneCountToProjectDefault": [
+    "createProject",
+    "applyProjectSessionPayload"
+  ],
+  "buildRecentScenesForHydration": [
+    "runFullPipeline"
+  ],
+  "getImageGenerationSettings": [
+    "runFullPipeline",
+    "getRuntimeSnapshot",
+    "getProjectSessionPayload",
+    "persist"
+  ],
+  "applyImageGenerationSettings": [
+    "applyProjectSessionPayload",
+    "restore"
+  ],
+  "embedRouterPanelInSettings": [
+    "openSettingsDialog",
+    "refreshLabel"
+  ],
+  "moveProjectActionsOutsideSettings": [
+    "openSettingsDialog",
+    "refreshLabel"
+  ],
+  "openSettingsDialog": [
+    "refreshLabel"
+  ],
+  "saveSettingsDialog": [],
+  "createPipelineRunId": [
+    "beginPipelineRun"
+  ],
+  "getActivePipelineRunId": [
+    "isPipelineRunActive",
+    "pipelineDelay",
+    "schedulePipelineTimer",
+    "finishPipelineRun",
+    "stopPipelineFromClick",
+    "queueAutoContinue",
+    "runFullPipeline",
+    "maybeRunVeoUpAutomationAfterPipeline",
+    "waitForProviderReady",
+    "autoRunRoute"
+  ],
+  "isPipelineRunActive": [
+    "pipelineDelay",
+    "schedulePipelineTimer",
+    "queueAutoContinue"
+  ],
+  "makePipelineCancelledError": [
+    "isPipelineRunActive",
+    "clearPipelineTimers",
+    "pipelineDelay",
+    "assertPipelineRunActive",
+    "cancelPipelineRun"
+  ],
+  "assertPipelineRunActive": [
+    "getChatGptLocationState",
+    "extractLastFrameToPathHandler",
+    "waitForStableFileSize",
+    "validateLocalVideoFile",
+    "runFfmpeg",
+    "isValidChatGptConversationUrl",
+    "pressEnterToSubmit",
+    "onCancel",
+    "runVeoUpAutomation",
+    "isPipelineRunActive",
+    "pipelineDelay",
+    "schedulePipelineTimer",
+    "queueAutoContinue",
+    "runFullPipeline",
+    "maybeRunVeoUpAutomationAfterPipeline",
+    "waitForProviderReady",
+    "autoRunRoute",
+    "isPipelineCancelledError",
+    "initChatGptPipeline",
+    "waitForLatestChatGPTGeneratedImage",
+    "retryMotionPrompt",
+    "forceCleanChatGptNewChatRotation",
+    "focusNv2ComposerWithCdp",
+    "runScenePipeline",
+    "runScenePipelineLocked",
+    "runScenePipelineLockedInternal",
+    "startNextSceneChatGptPrefetch",
+    "isVeoUpStageError"
+  ],
+  "clearPipelineTimers": [
+    "finishPipelineRun",
+    "stopPipelineFromClick"
+  ],
+  "hasPipelineTimers": [
+    "autoRunRoute"
+  ],
+  "pipelineDelay": [
+    "runFullPipeline",
+    "waitForProviderReady"
+  ],
+  "schedulePipelineTimer": [
+    "queueAutoContinue",
+    "runFullPipeline"
+  ],
+  "updateStopPipelineControls": [
+    "beginPipelineRun",
+    "finishPipelineRun",
+    "stopPipelineFromClick",
+    "setRunning"
+  ],
+  "beginPipelineRun": [
+    "runFullPipeline",
+    "startPipelineFromClick",
+    "autoRunRoute"
+  ],
+  "finishPipelineRun": [
+    "stopPipelineFromClick",
+    "autoRunRoute"
+  ],
+  "isPipelineCancelledError": [
+    "runVeoUpAutomation",
+    "finishPipelineRun",
+    "queueAutoContinue",
+    "runFullPipeline",
+    "autoRunRoute",
+    "refreshChatGptPageBeforeImageExtract",
+    "waitForLatestChatGPTGeneratedImage",
+    "retryMotionPrompt",
+    "runScenePipelineLocked"
+  ],
+  "stopPipelineFromClick": [
+    "restore"
+  ],
+  "queueAutoContinue": [
+    "runFullPipeline",
+    "approveCurrentReviewScene",
+    "resolveChatAndContinue"
+  ],
+  "createProject": [
+    "autoRunRoute",
+    "submitNewProjectDialog"
+  ],
+  "parseScenes": [
+    "createProject"
+  ],
+  "runNextBatch": [
+    "resumeRun",
+    "autoRunRoute",
+    "restore"
+  ],
+  "syncProjectSceneFolders": [
+    "runNextBatch",
+    "runFullPipeline",
+    "applyProjectSessionPayload",
+    "saveProjectSessionFlow",
+    "openProjectSessionFlow"
+  ],
+  "generateWithProvider": [],
+  "buildImagePrompt": [
+    "runNextBatch",
+    "sendCurrentBatchViaWeb",
+    "runFullPipeline"
+  ],
+  "buildMotionPrompt": [
+    "runNextBatch",
+    "sendCurrentBatchViaWeb"
+  ],
+  "approveBatch": [],
+  "pauseRun": [],
+  "resumeRun": [],
+  "findFirstIncompleteSceneForWorkflow": [
+    "recoverWorkflowRun"
+  ],
+  "recoverWorkflowRun": [],
+  "openChatGptWindow": [],
+  "openFreshChatGptWindow": [],
+  "clearChatGptCache": [],
+  "importCharacterPresetsFlow": [],
+  "checkSelectedWebLogin": [
+    "sendCurrentBatchViaWeb"
+  ],
+  "sendCurrentBatchViaWeb": [],
+  "ensureChatChoiceFields": [
+    "runFullPipeline"
+  ],
+  "shouldAskChatGptChatChoice": [],
+  "requireChatGptChatChoiceBeforeRun": [
+    "runFullPipeline"
+  ],
+  "getSceneVideoPathValue": [],
+  "getSceneKeyframePathValue": [],
+  "hasValidSceneOutputPath": [
+    "sceneHasRequiredOutputForCurrentMode"
+  ],
+  "sceneHasRequiredOutputForCurrentMode": [
+    "findFirstIncompleteSceneBefore",
+    "sceneHasVideoOutput"
+  ],
+  "findFirstIncompleteSceneBefore": [
+    "shouldBlockSceneBecausePreviousVideoMissing"
+  ],
+  "shouldBlockSceneBecausePreviousVideoMissing": [
+    "runFullPipeline"
+  ],
+  "safeAddPipelineLog": [
+    "forceResumeFirstIncompleteSceneIfNeeded",
+    "runFullPipeline"
+  ],
+  "sceneHasVideoOutput": [
+    "findFirstIncompleteSceneForWorkflow",
+    "findFirstSceneMissingVideo",
+    "forceResumeFirstIncompleteSceneIfNeeded",
+    "getCompletedScenesCount",
+    "getNextBatchForSegment",
+    "runFullPipeline",
+    "isSceneCompleteForVeoUp",
+    "autoRunRoute",
+    "handleTableClick",
+    "renderAssetReviewModal"
+  ],
+  "findFirstSceneMissingVideo": [
+    "forceResumeFirstIncompleteSceneIfNeeded"
+  ],
+  "forceResumeFirstIncompleteSceneIfNeeded": [
+    "runFullPipeline"
+  ],
+  "getCompletedScenesCount": [
+    "runFullPipeline"
+  ],
+  "getNextBatchForSegment": [
+    "runFullPipeline"
+  ],
+  "runFullPipeline": [
+    "autoRunRoute"
+  ],
+  "isSceneCompleteForVeoUp": [
+    "runFullPipeline"
+  ],
+  "isProjectCompleteForVeoUp": [
+    "maybeRunVeoUpAutomationAfterPipeline"
+  ],
+  "maybeRunVeoUpAutomationAfterPipeline": [
+    "runFullPipeline"
+  ],
+  "getSelectedWebProvider": [
+    "checkSelectedWebLogin",
+    "sendCurrentBatchViaWeb"
+  ],
+  "getSelectedVideoPlatform": [
+    "runFullPipeline",
+    "getSelectedVideoAccount",
+    "autoRunRoute"
+  ],
+  "getSelectedVideoAccount": [],
+  "getVideoProviderConfig": [
+    "runFullPipeline",
+    "estimatePixVerseEnergy",
+    "isPixVerseProConfig",
+    "updatePixVerseConfigAdvice"
+  ],
+  "syncVideoPlatformConfig": [
+    "applyProjectSessionPayload",
+    "restore",
+    "refreshLabel"
+  ],
+  "estimatePixVerseEnergy": [
+    "suggestPixVerseConfig",
+    "updatePixVerseConfigAdvice"
+  ],
+  "isPixVerseProConfig": [
+    "suggestPixVerseConfig",
+    "updatePixVerseConfigAdvice"
+  ],
+  "suggestPixVerseConfig": [
+    "updatePixVerseConfigAdvice"
+  ],
+  "updatePixVerseConfigAdvice": [
+    "syncVideoPlatformConfig",
+    "applyProjectSessionPayload",
+    "restore"
+  ],
+  "waitForProviderReady": [
+    "recoverLoginAndRetryScene",
+    "autoRunRoute"
+  ],
+  "isRetryableChatGptWorkflowError": [
+    "runFullPipeline"
+  ],
+  "parseLoginRequiredError": [
+    "runFullPipeline"
+  ],
+  "recoverLoginAndRetryScene": [
+    "runFullPipeline"
+  ],
+  "startPipelineFromClick": [
+    "restore"
+  ],
+  "autoRunRoute": [
+    "queueAutoContinue",
+    "resumeRun",
+    "recoverWorkflowRun",
+    "startPipelineFromClick"
+  ],
+  "buildCsv": [
+    "exportProject"
+  ],
+  "render": [
+    "stopPipelineFromClick",
+    "queueAutoContinue",
+    "createProject",
+    "runNextBatch",
+    "approveBatch",
+    "pauseRun",
+    "recoverWorkflowRun",
+    "chooseOutputFolder",
+    "checkSelectedWebLogin",
+    "sendCurrentBatchViaWeb",
+    "runFullPipeline",
+    "recoverLoginAndRetryScene",
+    "autoRunRoute",
+    "handleTableClick",
+    "saveEdit",
+    "approveCurrentReviewScene",
+    "regenerateCurrentReviewScene",
+    "applyProjectSessionPayload",
+    "resolveChatAndContinue",
+    "createInitialProjectFileInOutputFolder",
+    "newProjectSessionFlow",
+    "saveProjectSessionFlow",
+    "openProjectSessionFlow",
+    "restore"
+  ],
+  "handleTableClick": [],
+  "openEditor": [
+    "handleTableClick",
+    "restore"
+  ],
+  "saveEdit": [],
+  "copyText": [
+    "handleTableClick"
+  ],
+  "setStatus": [
+    "saveSettingsDialog",
+    "stopPipelineFromClick",
+    "queueAutoContinue",
+    "createProject",
+    "runNextBatch",
+    "approveBatch",
+    "pauseRun",
+    "recoverWorkflowRun",
+    "openChatGptWindow",
+    "openFreshChatGptWindow",
+    "clearChatGptCache",
+    "openWebLogin",
+    "chooseOutputFolder",
+    "importCharacterPresetsFlow",
+    "sendCurrentBatchViaWeb",
+    "runFullPipeline",
+    "maybeRunVeoUpAutomationAfterPipeline",
+    "waitForProviderReady",
+    "recoverLoginAndRetryScene",
+    "startPipelineFromClick",
+    "autoRunRoute",
+    "exportProject",
+    "handleTableClick",
+    "showPipelineNotice",
+    "copyPipelineLog",
+    "loadTextFileToTextarea",
+    "openAssetReview",
+    "approveCurrentReviewScene",
+    "regenerateCurrentReviewScene",
+    "mergeAndShowFinalPreview",
+    "openChatResolveDialog",
+    "resolveChatAndContinue",
+    "createInitialProjectFileInOutputFolder",
+    "newProjectSessionFlow",
+    "submitNewProjectDialog",
+    "saveProjectSessionFlow",
+    "openProjectSessionFlow",
+    "saveSessionForNextLaunch",
+    "restore",
+    "refreshLabel",
+    "cleanupSetupUI"
+  ],
+  "summarizeLogDetails": [
+    "appendPipelineLog"
+  ],
+  "appendPipelineLog": [
+    "setStatus",
+    "showPipelineNotice"
+  ],
+  "showPipelineNotice": [],
+  "formatPipelineLogsForCopy": [
+    "copyPipelineLog"
+  ],
+  "copyPipelineLog": [],
+  "renderPipelineLog": [
+    "appendPipelineLog",
+    "setPipelineLogVisible",
+    "restore",
+    "refreshLabel"
+  ],
+  "setPipelineLogVisible": [
+    "refreshLabel"
+  ],
+  "loadTextFileToTextarea": [
+    "restore"
+  ],
+  "setRunning": [
+    "finishPipelineRun",
+    "stopPipelineFromClick",
+    "runNextBatch",
+    "autoRunRoute"
+  ],
+  "statusLabel": [
+    "renderAssetReviewModal"
+  ],
+  "renderAssetReview": [],
+  "renderImagePreview": [
+    "renderAssetReview"
+  ],
+  "renderVideoPreview": [],
+  "getCurrentReviewScene": [
+    "render",
+    "openAssetReview",
+    "renderAssetReviewModal",
+    "approveCurrentReviewScene",
+    "regenerateCurrentReviewScene",
+    "restore"
+  ],
+  "isReviewable": [],
+  "openAssetReview": [
+    "runFullPipeline",
+    "restore"
+  ],
+  "renderAssetReviewModal": [
+    "render",
+    "openAssetReview",
+    "setReviewZoom"
+  ],
+  "renderFocusedMedia": [
+    "renderAssetReviewModal"
+  ],
+  "setReviewZoom": [
+    "handleReviewWheelZoom",
+    "handleReviewShortcut",
+    "restore"
+  ],
+  "handleReviewWheelZoom": [],
+  "isAssetReviewOpen": [
+    "handleReviewWheelZoom",
+    "startReviewPan",
+    "handleReviewShortcut"
+  ],
+  "startReviewPan": [],
+  "moveReviewPan": [],
+  "stopReviewPan": [
+    "releaseReviewShortcut"
+  ],
+  "handleReviewShortcut": [],
+  "releaseReviewShortcut": [],
+  "approveCurrentReviewScene": [],
+  "regenerateCurrentReviewScene": [],
+  "escapeHtml": [
+    "renderPipelineLog",
+    "renderImagePreview",
+    "renderVideoPreview",
+    "renderAssetReviewModal",
+    "renderFocusedMedia",
+    "renderFinalPreview"
+  ],
+  "fileUrl": [
+    "renderFinalPreview"
+  ],
+  "mergeAndShowFinalPreview": [
+    "runFullPipeline",
+    "restore"
+  ],
+  "renderFinalPreview": [
+    "render",
+    "mergeAndShowFinalPreview"
+  ],
+  "clamp": [
+    "getGrokRecoverySettings",
+    "applyGrokRecoverySettings",
+    "getChatGptStabilitySettings",
+    "applyChatGptStabilitySettings",
+    "getProjectTargetSceneDefault",
+    "createProject",
+    "runNextBatch",
+    "getNextBatchForSegment",
+    "startPipelineFromClick",
+    "setReviewZoom",
+    "getProjectSessionPayload",
+    "normalizeProjectSessionForRenderer",
+    "createBlankProjectFromName",
+    "restore"
+  ],
+  "getGrokRouterSettings": [
+    "getProjectSessionPayload",
+    "persist"
+  ],
+  "renderGrokRouterStatus": [
+    "refreshGrokRouterStatus"
+  ],
+  "refreshGrokRouterStatus": [
+    "restore",
+    "refreshLabel"
+  ],
+  "getSelectedText": [
+    "getRouterMetadata",
+    "getProjectSessionPayload"
+  ],
+  "getSceneRef": [
+    "runNextBatch",
+    "runFullPipeline",
+    "findSceneByRuntimeRef",
+    "getOrderedResumeScenes",
+    "getNextResumeAction",
+    "getRuntimeSnapshot",
+    "getSceneFileRecord",
+    "getPreviewTimeline",
+    "getProjectAssets",
+    "getCurrentSceneRef",
+    "applyProjectSessionPayload"
+  ],
+  "isVideoCompleteForResume": [
+    "hasKeyframeForResume",
+    "getNextResumeAction"
+  ],
+  "hasKeyframeForResume": [
+    "getNextResumeAction"
+  ],
+  "findSceneByRuntimeRef": [
+    "normalizeActiveBatchIdsForRuntime",
+    "getCurrentResumeScene"
+  ],
+  "normalizeActiveBatchIdsForRuntime": [
+    "syncProjectSceneFolders",
+    "getOrderedResumeScenes",
+    "getRuntimeSnapshot",
+    "applyProjectSessionPayload",
+    "restore"
+  ],
+  "getOrderedResumeScenes": [
+    "getNextResumeAction"
+  ],
+  "getNextResumeAction": [
+    "runFullPipeline",
+    "getCurrentResumeScene",
+    "getRuntimeSnapshot"
+  ],
+  "getCurrentResumeScene": [
+    "getRuntimeSnapshot",
+    "getCurrentSceneRef"
+  ],
+  "getRuntimeSnapshot": [
+    "getProjectSessionPayload"
+  ],
+  "getSceneFileRecord": [],
+  "getPreviewTimeline": [
+    "getProjectAssets",
+    "getProjectSessionPayload"
+  ],
+  "getProjectAssets": [
+    "getProjectSessionPayload"
+  ],
+  "getCurrentSceneRef": [],
+  "stripObsoleteProjectModeFields": [
+    "getSceneFileRecord",
+    "getProjectSessionPayload"
+  ],
+  "getRouterMetadata": [
+    "getRuntimeSnapshot",
+    "getProjectSessionPayload"
+  ],
+  "getProjectSessionPayload": [
+    "createInitialProjectFileInOutputFolder",
+    "saveProjectSessionFlow"
+  ],
+  "normalizeRendererScene": [],
+  "normalizeProjectSessionForRenderer": [
+    "applyProjectSessionPayload"
+  ],
+  "setControlValue": [
+    "applyProjectSessionPayload"
+  ],
+  "migrateProjectAssetPathsToOutputFolder": [
+    "applyProjectSessionPayload"
+  ],
+  "applyProjectSessionPayload": [
+    "openProjectSessionFlow"
+  ],
+  "renderProjectSessionStatus": [
+    "render",
+    "markProjectDirty"
+  ],
+  "markProjectDirty": [
+    "createProject",
+    "pauseRun",
+    "chooseOutputFolder",
+    "handleTableClick",
+    "saveEdit",
+    "loadTextFileToTextarea",
+    "resolveChatAndContinue",
+    "restore"
+  ],
+  "confirmUnsavedProjectAction": [
+    "newProjectSessionFlow",
+    "openProjectSessionFlow"
+  ],
+  "openChatResolveDialog": [
+    "runFullPipeline"
+  ],
+  "closeChatResolveDialog": [
+    "resolveChatAndContinue"
+  ],
+  "resolveChatAndContinue": [
+    "restore"
+  ],
+  "forceCloseNewProjectDialog": [
+    "submitNewProjectDialog"
+  ],
+  "createBlankProjectFromName": [],
+  "createInitialProjectFileInOutputFolder": [
+    "submitNewProjectDialog"
+  ],
+  "newProjectSessionFlow": [
+    "refreshLabel"
+  ],
+  "submitNewProjectDialog": [],
+  "saveProjectSessionFlow": [
+    "confirmUnsavedProjectAction",
+    "restore",
+    "refreshLabel"
+  ],
+  "openProjectSessionFlow": [
+    "refreshLabel"
+  ],
+  "persist": [
+    "saveSettingsDialog",
+    "stopPipelineFromClick",
+    "queueAutoContinue",
+    "createProject",
+    "runNextBatch",
+    "approveBatch",
+    "pauseRun",
+    "recoverWorkflowRun",
+    "chooseOutputFolder",
+    "sendCurrentBatchViaWeb",
+    "runFullPipeline",
+    "maybeRunVeoUpAutomationAfterPipeline",
+    "recoverLoginAndRetryScene",
+    "autoRunRoute",
+    "handleTableClick",
+    "saveEdit",
+    "loadTextFileToTextarea",
+    "approveCurrentReviewScene",
+    "regenerateCurrentReviewScene",
+    "renderFinalPreview",
+    "applyProjectSessionPayload",
+    "resolveChatAndContinue",
+    "createInitialProjectFileInOutputFolder",
+    "newProjectSessionFlow",
+    "saveProjectSessionFlow",
+    "openProjectSessionFlow",
+    "saveSessionForNextLaunch",
+    "restore"
+  ],
+  "reconcileSavedAssets": [
+    "saveProjectSessionFlow",
+    "openProjectSessionFlow",
+    "saveSessionForNextLaunch"
+  ],
+  "missingPath": [
+    "statPath"
+  ],
+  "statPath": [],
+  "saveSessionForNextLaunch": [],
+  "restore": [
+    "refreshLabel"
+  ],
+  "ensureHardPromptFilePickerUi": [
+    "refreshLabel"
+  ],
+  "refreshLabel": [],
+  "updateVeoUpSetupUI": [
+    "openSettingsDialog",
+    "autoRunRoute",
+    "runCalibrationLoop",
+    "cleanupSetupUI"
+  ],
+  "updateScanButtonVisibility": [
+    "render"
+  ],
+  "setStepActive": [
+    "runCalibrationLoop"
+  ],
+  "runCalibrationLoop": [
+    "cleanupSetupUI"
+  ],
+  "cleanupSetupUI": [
+    "runCalibrationLoop"
+  ],
+  "initBootstrap": [
+    "scanProjectAndRunVeoUpHandler"
+  ],
+  "initializeApplication": [
+    "scanProjectAndRunVeoUpHandler"
+  ],
+  "createMainWindow": [
+    "scanProjectAndRunVeoUpHandler"
+  ],
+  "constructor": [],
+  "on": [
+    "probeVideoDurationSeconds",
+    "runFfmpeg",
+    "validateGeneratedVideoFile",
+    "runVeoUpAutomation",
+    "scanProjectAndRunVeoUpHandler",
+    "listener",
+    "constructor",
+    "onFinished",
+    "getReqId",
+    "subscribe",
+    "checkCondition",
+    "checkTransition",
+    "checkIntent",
+    "checkSignal",
+    "initIpcHandlers",
+    "findRunningVeoUpExecutablePaths",
+    "findRunningVeoUpWindow",
+    "foreach",
+    "runPowerShell",
+    "handleExit",
+    "validateBlueBoxCoordinate",
+    "previewStartButtonCoordinate",
+    "captureVeoUpCoordinate"
+  ],
+  "off": [
+    "stop",
+    "stopMonitoring",
+    "subscribe",
+    "waitUntil",
+    "waitForTransition",
+    "waitForIntent",
+    "waitForSignal"
+  ],
+  "connect": [
+    "validateGeneratedVideoFile"
+  ],
+  "evaluate": [
+    "constructor",
+    "evaluateOnCdpPage",
+    "runEvaluate",
+    "getReqId"
+  ],
+  "setInputFiles": [
+    "verifyAttachmentsReady",
+    "uploadFileToChatGptDirectly"
+  ],
+  "disconnect": [
+    "close"
+  ],
+  "close": [
+    "getPipelineLogVisibility",
+    "closeChromeDebug",
+    "checkWebLogin",
+    "validateGeneratedVideoFile",
+    "waitForCdpAssistantResponse",
+    "waitForProviderReady",
+    "autoRunRoute",
+    "saveEdit",
+    "approveCurrentReviewScene",
+    "closeChatResolveDialog",
+    "forceCloseNewProjectDialog",
+    "disconnect",
+    "isPipelineCancelledError",
+    "recoverChatGptBlockingUi"
+  ],
+  "getChatGptSendState": [
+    "getChatGptLocationState",
+    "validateGeneratedVideoFile",
+    "scanProjectAndRunVeoUpHandler",
+    "isReloadBlocked",
+    "detectLoginWithRetry",
+    "recoverChatGptBlockingUi",
+    "forceCleanChatGptNewChatRotation",
+    "initIpcHandlers"
+  ],
+  "getConversationState": [
+    "isPipelineCancelledError",
+    "performDurableRecovery",
+    "verifyAttachmentsReady"
+  ],
+  "waitForCdpLoad": [
+    "getChatGptLocationState",
+    "clearProviderSession",
+    "ensureGrokImagineAgentPage",
+    "validateGeneratedVideoFile",
+    "ensureGrokEmptyCanvas",
+    "selectChatGptConversationByTitle",
+    "isPipelineCancelledError",
+    "refreshChatGptPageBeforeImageExtract",
+    "waitForLatestChatGPTGeneratedImage",
+    "resendImagePrompt",
+    "retryMotionPrompt",
+    "isValidChatGptConversationUrl",
+    "assertPipelineRunActive",
+    "detectLoginWithRetry",
+    "forceCleanChatGptNewChatRotation",
+    "runScenePipelineLocked"
+  ],
+  "evaluateOnCdpPage": [
+    "getChatGptLocationState",
+    "captureAndLogChatGptDiagnostics",
+    "checkWebLogin",
+    "clearProviderSession",
+    "sendPromptViaWeb",
+    "assertChatGptNotExistingConversation",
+    "waitForGrokImagineReady",
+    "getGrokRouteState",
+    "forceGrokNormalImagineVideoMode",
+    "ensureGrokImagineAgentPage",
+    "closeGrokTemplateModal",
+    "validateGeneratedVideoFile",
+    "forceGrokNormalImagineMode",
+    "ensureGrokEmptyCanvas",
+    "waitForGrokUploadSettled",
+    "waitForGrokSendPreflight",
+    "clickGrokSendButtonOnce",
+    "clearGrokCanvasSelection",
+    "recoverGrokCanvasAfterLimit",
+    "labelGrokCanvas",
+    "clearGrokCanvasChat",
+    "confirmGrokVideoGenerationIfAsked",
+    "sendGrokConfirmationText",
+    "waitForCdpAssistantResponse",
+    "waitForNewImageUrl",
+    "selectChatGptConversationByTitle",
+    "waitForNewVideoUrl",
+    "downloadBrowserAsset",
+    "captureLatestImageElement",
+    "waitForGrokUploadedAsset",
+    "handler",
+    "uploadFileViaCdp",
+    "pasteImageViaClipboard",
+    "submitPixVersePrompt",
+    "submitGrokVideoPrompt",
+    "pressEnterToSubmit",
+    "clickGrokRetryButton",
+    "getConversationState",
+    "waitForCdpLoad",
+    "isPipelineCancelledError",
+    "hasVisibleChatGptImageCandidate",
+    "refreshChatGptPageBeforeImageExtract",
+    "waitForLatestChatGPTGeneratedImage",
+    "resendImagePrompt",
+    "extractLatestChatGPTGeneratedImageBytes",
+    "verifyCanvas",
+    "adoptExistingSceneImage",
+    "retryMotionPrompt",
+    "renameChatGptCurrentConversationUntilTitle",
+    "waitForChatGptRecentItem",
+    "checkChatGptCurrentConversationTitle",
+    "isValidChatGptConversationUrl",
+    "assertPipelineRunActive",
+    "detectLoginWithRetry",
+    "recoverChatGptBlockingUi",
+    "recoverChatGptResponseChoiceChat",
+    "forceCleanChatGptNewChatRotation",
+    "clickSendButtonViaCdp",
+    "forceClickChatGptComposerSubmit",
+    "waitForHeavyChatGptPromptDomCooldown",
+    "sendPromptViaCdpInput",
+    "sendPromptViaCdpInputSingle",
+    "focusNv2ComposerWithCdp",
+    "sendNv2PromptViaDeepCdpInput",
+    "vidoraReadChatGptComposerStateReal",
+    "vidoraClearChatGptInputBeforePaste",
+    "verifyAttachmentsReady",
+    "uploadFileToChatGptDirectly",
+    "runScenePipelineLockedInternal"
+  ],
+  "__safe": [
+    "evaluateOnCdpPage"
+  ],
+  "runEvaluate": [
+    "__safe"
+  ],
+  "detectLoginScript": [],
+  "detectBrowserCrashPageScript": [],
+  "dismissChatGptBlockingUiScript": [],
+  "isUnsafeDismissTarget": [
+    "isExactDismissText"
+  ],
+  "isExactDismissText": [],
+  "detectChatGptResponseChoiceUiScript": [],
+  "detectChatGptActiveGenerationScript": [],
+  "detectChatGptActiveGenerationScriptStrict": [],
+  "nearComposer": [
+    "detectChatGptActiveGenerationScriptStrict"
+  ],
+  "getComposerTextScript": [],
+  "getActiveComposerTextScript": [],
+  "inspectNv2ComposerSubmitStateScript": [],
+  "clickChatGptStopGeneratingScript": [],
+  "clickUploadButtonScript": [],
+  "detectUploadedAssetScript": [],
+  "focusPromptInputScript": [],
+  "setPromptInputValueScript": [],
+  "deepFocusNv2ComposerScript": [],
+  "clearNv2ComposerScript": [],
+  "dispatchNv2ComposerInputEventsScript": [],
+  "forceSubmitChatGptComposerScript": [],
+  "isSendButton": [],
+  "inspectAndClickChatGptSendButton": [],
+  "inspectAndClickChatGptSendButtonSafely": [],
+  "labelOf": [
+    "isStopButton",
+    "isRejectedToolButton",
+    "isStrictSendButton"
+  ],
+  "isStopButton": [
+    "isStrictSendButton",
+    "extractNodeInfo",
+    "getActiveButtonType"
+  ],
+  "isRejectedToolButton": [
+    "isStrictSendButton"
+  ],
+  "isStrictSendButton": [],
+  "extractNodeInfo": [
+    "getActiveButtonType"
+  ],
+  "getActiveButtonType": [
+    "sleepMs"
+  ],
+  "sleepMs": [],
+  "clickSendButtonScript": [],
+  "sendPromptScript": [],
+  "prepareChatGptCreateImageScript": [
+    "fold"
+  ],
+  "extractConversationSnapshot": [
+    "collectMetrics"
+  ],
+  "hashText": [
+    "readAssistantText",
+    "onBindingCalled",
+    "processIncomingEvent"
+  ],
+  "readStableId": [
+    "readAssistantText"
+  ],
+  "readAssistantText": [],
+  "nearComposerButton": [],
+  "createOptimizedWrapper": [
+    "fn"
+  ],
+  "fn": [],
+  "initChatGptPipeline": [
+    "initializeApplication"
+  ],
+  "sanitizeAssetUrlForLog": [
+    "onResponse"
+  ],
+  "startChatGptImageNetworkCapture": [
+    "isPipelineCancelledError"
+  ],
+  "isLikelyImage": [
+    "onResponse"
+  ],
+  "onResponse": [],
+  "onFinished": [],
+  "candidates": [
+    "summary",
+    "tryExtractChatGptNetworkImage"
+  ],
+  "summary": [],
+  "stop": [
+    "isPipelineCancelledError"
+  ],
+  "tryExtractChatGptNetworkImage": [
+    "waitForLatestChatGPTGeneratedImage"
+  ],
+  "chatGptImageCandidateSignature": [
+    "waitForLatestChatGPTGeneratedImage"
+  ],
+  "countVisibleChatGptImageCandidates": [
+    "hasVisibleChatGptImageCandidate"
+  ],
+  "hasVisibleChatGptImageCandidate": [
+    "waitForLatestChatGPTGeneratedImage"
+  ],
+  "saveChatGPTGeneratedImageAsset": [
+    "isPipelineCancelledError"
+  ],
+  "isLikelyChatGptLoadingPlaceholderImage": [
+    "isPreferredChatGptRealImageAsset"
+  ],
+  "isPreferredChatGptRealImageAsset": [],
+  "isFalseChatGptImageGeneratingState": [
+    "waitForLatestChatGPTGeneratedImage"
+  ],
+  "refreshChatGptPageBeforeImageExtract": [
+    "waitForLatestChatGPTGeneratedImage"
+  ],
+  "waitForLatestChatGPTGeneratedImage": [
+    "saveChatGPTGeneratedImageAsset"
+  ],
+  "resendImagePrompt": [
+    "waitForLatestChatGPTGeneratedImage"
+  ],
+  "extractLatestChatGPTGeneratedImageBytes": [
+    "waitForLatestChatGPTGeneratedImage",
+    "verifyCanvas"
+  ],
+  "decodeImageBufferToPng": [
+    "isPipelineCancelledError",
+    "tryExtractChatGptNetworkImage",
+    "hasVisibleChatGptImageCandidate",
+    "waitForLatestChatGPTGeneratedImage",
+    "norm",
+    "runScenePipelineLockedInternal"
+  ],
+  "validateSavedImageFile": [
+    "isPipelineCancelledError",
+    "waitForLatestChatGPTGeneratedImage",
+    "norm",
+    "runScenePipelineLockedInternal"
+  ],
+  "collectGeneratedImageUrlsScript": [],
+  "checkExistingCompletedImageScript": [],
+  "findAssistantMessageWithImage": [
+    "checkExistingCompletedImageScript"
+  ],
+  "verifyImg": [
+    "checkExistingCompletedImageScript",
+    "verifyCanvas",
+    "tryClickScrollBtn"
+  ],
+  "verifyCanvas": [
+    "checkExistingCompletedImageScript",
+    "tryClickScrollBtn"
+  ],
+  "hasPlaceholder": [
+    "checkExistingCompletedImageScript",
+    "tryClickScrollBtn"
+  ],
+  "ensureChatGptImageLoadedAndHydratedScript": [],
+  "findTarget": [
+    "tryClickScrollBtn"
+  ],
+  "tryClickScrollBtn": [],
+  "adoptExistingSceneImage": [
+    "isPipelineCancelledError",
+    "waitForLatestChatGPTGeneratedImage",
+    "runScenePipelineLockedInternal"
+  ],
+  "findTargetAssistant": [],
+  "sanitizeUrl": [
+    "pushUrlCandidate"
+  ],
+  "rectInfo": [
+    "pushUrlCandidate"
+  ],
+  "isVisible": [
+    "rootsFrom",
+    "dedupeRoots",
+    "pushUrlCandidate"
+  ],
+  "nodeText": [
+    "hasSpinner",
+    "pushUrlCandidate"
+  ],
+  "hasSpinner": [
+    "pushUrlCandidate"
+  ],
+  "sourceFromSrcset": [
+    "pushUrlCandidate"
+  ],
+  "rootsFrom": [
+    "dedupeRoots"
+  ],
+  "toRoots": [
+    "dedupeRoots"
+  ],
+  "dedupeRoots": [],
+  "addElementId": [
+    "pushUrlCandidate"
+  ],
+  "pushUrlCandidate": [],
+  "readBlobBase64": [],
+  "getChatGptImageCandidateBoxScript": [],
+  "getLatestImageBoxScript": [],
+  "isImageNode": [],
+  "waitForChatGptResponse": [
+    "isPipelineCancelledError"
+  ],
+  "retryMotionPrompt": [],
+  "maybeRenameChatGptCurrentConversationUntilTitle": [],
+  "renameChatGptCurrentConversationUntilTitle": [
+    "maybeRenameChatGptCurrentConversationUntilTitle"
+  ],
+  "waitForChatGptRecentItem": [
+    "selectChatGptConversationByTitle",
+    "renameChatGptCurrentConversationUntilTitle"
+  ],
+  "checkChatGptCurrentConversationTitle": [
+    "selectChatGptConversationByTitle",
+    "renameChatGptCurrentConversationUntilTitle"
+  ],
+  "clearAllChatGptPipelineLocks": [
+    "cancelPipelineRun"
+  ],
+  "waitForImageReady": [
+    "refreshChatGptPageBeforeImageExtract"
+  ],
+  "waitForResponseReady": [
+    "retryMotionPrompt"
+  ],
+  "isDraftRecovered": [],
+  "tryAutoLoginWithStoredAccount": [
+    "checkWebLogin",
+    "clearProviderSession",
+    "isPipelineCancelledError",
+    "detectLoginWithRetry"
+  ],
+  "resetSessionSceneCounter": [
+    "forceCleanChatGptNewChatRotation"
+  ],
+  "shouldRecoverFromCacheOrChallenge": [
+    "checkWebLogin",
+    "detectLoginWithRetry"
+  ],
+  "initChatGptRecovery": [
+    "logChatGptStage"
+  ],
+  "isReloadBlocked": [
+    "getChatGptLocationState",
+    "validateGeneratedVideoFile",
+    "scanProjectAndRunVeoUpHandler",
+    "requestReloadWithReason",
+    "forceCleanChatGptNewChatRotation",
+    "initIpcHandlers"
+  ],
+  "requestReloadWithReason": [
+    "getChatGptLocationState",
+    "isPipelineCancelledError",
+    "refreshChatGptPageBeforeImageExtract",
+    "waitForLatestChatGPTGeneratedImage",
+    "resendImagePrompt",
+    "isValidChatGptConversationUrl",
+    "assertPipelineRunActive",
+    "forceCleanChatGptNewChatRotation"
+  ],
+  "performDurableRecovery": [],
+  "isCdpCrashError": [
+    "detectLoginWithRetry"
+  ],
+  "detectLoginWithRetry": [
+    "validateGeneratedVideoFile"
+  ],
+  "recoverChatGptBlockingUi": [
+    "waitForLatestChatGPTGeneratedImage"
+  ],
+  "recoverChatGptResponseChoiceChat": [
+    "retryMotionPrompt"
+  ],
+  "reset": [
+    "startMonitoring"
+  ],
+  "startMonitoring": [
+    "waitForLatestChatGPTGeneratedImage",
+    "retryMotionPrompt",
+    "sendPromptViaCdpInput"
+  ],
+  "getReqId": [],
+  "stopMonitoring": [
+    "waitForLatestChatGPTGeneratedImage",
+    "retryMotionPrompt"
+  ],
+  "getCurrentState": [
+    "checkCondition",
+    "checkTransition",
+    "checkIntent",
+    "checkSignal"
+  ],
+  "getHealth": [],
+  "getDiagnostics": [],
+  "captureSnapshot": [
+    "refreshChatGptPageBeforeImageExtract",
+    "waitForLatestChatGPTGeneratedImage",
+    "constructor",
+    "checkSignal",
+    "assertPipelineRunActive",
+    "sendPromptViaCdpInput"
+  ],
+  "setIntentOverride": [],
+  "replay": [],
+  "subscribe": [],
+  "waitUntil": [
+    "waitForImageReady",
+    "waitForResponseReady"
+  ],
+  "cleanup": [
+    "onCancel",
+    "checkCondition",
+    "checkTransition",
+    "checkIntent",
+    "checkSignal",
+    "trigger"
+  ],
+  "checkCondition": [],
+  "waitForTransition": [],
+  "checkTransition": [],
+  "waitForIntent": [],
+  "checkIntent": [],
+  "waitForSignal": [],
+  "checkSignal": [],
+  "onResponseReceived": [
+    "getReqId"
+  ],
+  "onLoadingFinished": [
+    "getReqId"
+  ],
+  "onBindingCalled": [
+    "startMonitoring"
+  ],
+  "onConsoleAPICalled": [
+    "getReqId"
+  ],
+  "onExceptionThrown": [
+    "getReqId"
+  ],
+  "onFrameNavigated": [
+    "getReqId"
+  ],
+  "processIncomingEvent": [
+    "replay"
+  ],
+  "clearStabilityTimer": [
+    "stopMonitoring",
+    "scheduleStateReevaluation"
+  ],
+  "scheduleStateReevaluation": [
+    "triggerStateUpdate"
+  ],
+  "triggerStateUpdate": [
+    "onResponseReceived",
+    "onLoadingFinished",
+    "onBindingCalled",
+    "onConsoleAPICalled",
+    "onExceptionThrown",
+    "onFrameNavigated",
+    "processIncomingEvent",
+    "scheduleStateReevaluation"
+  ],
+  "runIntentDetector": [
+    "triggerStateUpdate"
+  ],
+  "runStateMachine": [
+    "triggerStateUpdate"
+  ],
+  "computeConfidence": [
+    "triggerStateUpdate"
+  ],
+  "manageWatchdogs": [
+    "triggerStateUpdate"
+  ],
+  "clearAllWatchdogs": [
+    "stopMonitoring"
+  ],
+  "logEvent": [
+    "startMonitoring",
+    "getReqId",
+    "stopMonitoring",
+    "replay",
+    "onResponseReceived",
+    "onLoadingFinished",
+    "onBindingCalled",
+    "onConsoleAPICalled",
+    "onExceptionThrown",
+    "onFrameNavigated",
+    "triggerStateUpdate",
+    "manageWatchdogs"
+  ],
+  "getBrowserScriptCode": [
+    "getReqId"
+  ],
+  "emitEvent": [
+    "collectMetrics",
+    "wrapHistory"
+  ],
+  "collectMetrics": [
+    "wrapHistory"
+  ],
+  "triggerDebounce": [],
+  "wrapHistory": [],
+  "initChatGptSend": [
+    "logChatGptStage"
+  ],
+  "isLikelyChatGptSendButtonText": [],
+  "clickSendButtonViaCdp": [
+    "isPipelineCancelledError",
+    "assertPipelineRunActive"
+  ],
+  "forceClickChatGptComposerSubmit": [],
+  "waitForHeavyChatGptPromptDomCooldown": [
+    "assertPipelineRunActive"
+  ],
+  "sendPromptViaCdpInput": [
+    "sendPromptViaWeb",
+    "validateGeneratedVideoFile",
+    "isPipelineCancelledError",
+    "waitForLatestChatGPTGeneratedImage",
+    "resendImagePrompt",
+    "retryMotionPrompt",
+    "isValidChatGptConversationUrl"
+  ],
+  "sendPromptViaCdpInputSingle": [],
+  "focusNv2ComposerWithCdp": [
+    "sendNv2PromptViaDeepCdpInput"
+  ],
+  "sendNv2PromptViaDeepCdpInput": [
+    "isPipelineCancelledError"
+  ],
+  "vidoraReadChatGptComposerStateReal": [
+    "logChatGptStage",
+    "vidoraChatGptInputGate",
+    "vidoraClearChatGptInputBeforePaste"
+  ],
+  "vidoraClickChatGptRealSendButton": [
+    "vidoraChatGptInputGate"
+  ],
+  "vidoraChatGptInputGate": [
+    "waitForLatestChatGPTGeneratedImage"
+  ],
+  "vidoraClearChatGptInputBeforePaste": [
+    "sendPromptViaCdpInput"
+  ],
+  "initChatGptUpload": [
+    "logChatGptStage"
+  ],
+  "verifyAttachmentsReady": [
+    "performDurableRecovery"
+  ],
+  "uploadFileToChatGptDirectly": [
+    "waitForLatestChatGPTGeneratedImage"
+  ],
+  "initIpcHandlers": [
+    "initializeApplication"
+  ],
+  "__vidoraCompactConsoleArg": [],
+  "maskRouterText": [
+    "sanitizeProjectValue",
+    "safeWebAccount",
+    "pickWebAccount",
+    "sanitizeChatTitleForLog",
+    "getSafeGrokAccounts",
+    "writeGrokRouterCheckpoint",
+    "validateGeneratedVideoFile",
+    "sanitizeLogString",
+    "runScenePipelineLockedInternal",
+    "ensureContinuityReferencesForSceneVideo"
+  ],
+  "sanitizeLogString": [
+    "validateGeneratedVideoFile",
+    "sanitizeLogValue",
+    "sanitizeIpcValue",
+    "safeIpcHandler",
+    "appendAppLog"
+  ],
+  "sanitizeLogValue": [
+    "notifyRenderer",
+    "appendAppLog"
+  ],
+  "sanitizeIpcValue": [
+    "notifyRenderer",
+    "safeIpcHandler",
+    "appendAppLog"
+  ],
+  "safeIpcHandler": [
+    "initIpcHandlers"
+  ],
+  "vidoraCompactLogDetails": [
+    "waitForLatestChatGPTGeneratedImage"
+  ],
+  "vidoraShouldThrottleLog": [],
+  "appendAppLog": [
+    "logChatGptStage",
+    "importCharacterPresetsHandler",
+    "saveWebAccount",
+    "checkProactiveMemoryGuard",
+    "getChatGptLocationState",
+    "captureAndLogChatGptDiagnostics",
+    "updateChatGptConversationIdentity",
+    "notifyRenderer",
+    "notifyChatGptPolicyRefusal",
+    "ensureAndMigratePrompts",
+    "ensureUserPromptFile",
+    "resolveEditablePromptPath",
+    "chooseHardPromptFile",
+    "validateLocalVideoFile",
+    "mergeVideos",
+    "checkWebLogin",
+    "clearProviderSession",
+    "isValidChatGptConversationUrl",
+    "openFreshChatGptRootPage",
+    "waitForGrokImagineReady",
+    "waitForGrokImagineAgentReady",
+    "forceGrokNormalImagineVideoMode",
+    "ensureGrokImagineAgentPage",
+    "assertGrokImagineAgentReady",
+    "closeGrokTemplateModal",
+    "validateGeneratedVideoFile",
+    "forceGrokNormalImagineMode",
+    "ensureGrokEmptyCanvas",
+    "summarizeGrokSendState",
+    "waitForGrokSendPreflight",
+    "clickGrokSendButtonOnce",
+    "labelGrokCanvas",
+    "clearGrokCanvasChat",
+    "confirmGrokVideoGenerationIfAsked",
+    "sendGrokConfirmationText",
+    "selectChatGptConversationByTitle",
+    "waitForNewVideoUrl",
+    "waitForGrokUploadedAsset",
+    "uploadFileViaCdp",
+    "pasteImageViaClipboard",
+    "submitGrokVideoPrompt",
+    "pressEnterToSubmit",
+    "clickNode",
+    "runVeoUpAutomation",
+    "exportProject",
+    "scanProjectAndRunVeoUpHandler",
+    "initializeApplication",
+    "connect",
+    "__safe",
+    "isPipelineCancelledError",
+    "hasVisibleChatGptImageCandidate",
+    "saveChatGPTGeneratedImageAsset",
+    "refreshChatGptPageBeforeImageExtract",
+    "waitForLatestChatGPTGeneratedImage",
+    "resendImagePrompt",
+    "verifyCanvas",
+    "retryMotionPrompt",
+    "maybeRenameChatGptCurrentConversationUntilTitle",
+    "renameChatGptCurrentConversationUntilTitle",
+    "waitForChatGptRecentItem",
+    "checkChatGptCurrentConversationTitle",
+    "norm",
+    "assertPipelineRunActive",
+    "requestReloadWithReason",
+    "performDurableRecovery",
+    "detectLoginWithRetry",
+    "recoverChatGptBlockingUi",
+    "recoverChatGptResponseChoiceChat",
+    "forceCleanChatGptNewChatRotation",
+    "waitForHeavyChatGptPromptDomCooldown",
+    "sendPromptViaCdpInput",
+    "sendPromptViaCdpInputSingle",
+    "focusNv2ComposerWithCdp",
+    "sendNv2PromptViaDeepCdpInput",
+    "vidoraChatGptInputGate",
+    "vidoraClearChatGptInputBeforePaste",
+    "verifyAttachmentsReady",
+    "uploadFileToChatGptDirectly",
+    "initIpcHandlers",
+    "formatDelta",
+    "cancelPipelineRun",
+    "stopPipeline",
+    "runScenePipeline",
+    "writePipelineSceneState",
+    "clearMismatchedPath",
+    "runScenePipelineLocked",
+    "runScenePipelineLockedInternal",
+    "startNextSceneChatGptPrefetch",
+    "ensureContinuityReferencesForSceneVideo",
+    "ensureContinuityReferencesForPreviousScene",
+    "maybeResetChatGptPageForLongRun",
+    "scanProjectAndRunVeoUp"
+  ],
+  "getAppLogPath": [],
+  "writeCrashLog": [
+    "runVeoUpAutomation",
+    "scanProjectAndRunVeoUpHandler"
+  ],
+  "vidoraTraceExit": [
+    "runVeoUpAutomation"
+  ],
+  "getCdpPageMemoryMetrics": [
+    "logMemoryMilestone"
+  ],
+  "logMemoryMilestone": [
+    "saveChatGPTGeneratedImageAsset",
+    "waitForLatestChatGPTGeneratedImage",
+    "runScenePipelineLocked"
+  ],
+  "formatBytes": [
+    "formatDelta"
+  ],
+  "formatDelta": [],
+  "initPipelineRunner": [
+    "initializeApplication"
+  ],
+  "getScopedPipelineRunId": [
+    "probeVideoDurationSeconds",
+    "waitForStableFileSize",
+    "validateLocalVideoFile",
+    "runFfmpeg",
+    "isValidChatGptConversationUrl",
+    "pressEnterToSubmit",
+    "runVeoUpAutomation",
+    "makePipelineCancelledError",
+    "isPipelineRunCancelled",
+    "assertPipelineRunActive",
+    "trackPipelineChildProcess",
+    "writePipelineSceneState",
+    "runScenePipelineLocked",
+    "runScenePipelineLockedInternal",
+    "isVeoUpStageError"
+  ],
+  "isPipelineRunCancelled": [
+    "runVeoUpAutomation",
+    "assertPipelineRunActive",
+    "isVeoUpStageError"
+  ],
+  "registerPipelineWaiter": [
+    "onCancel"
+  ],
+  "trackPipelineChildProcess": [
+    "probeVideoDurationSeconds",
+    "runFfmpeg",
+    "runVeoUpAutomation",
+    "isVeoUpStageError"
+  ],
+  "cancelPipelineRun": [
+    "stopPipeline"
+  ],
+  "stopPipeline": [],
+  "sanitizeScenePipelineResult": [],
+  "safeText": [
+    "safePaths"
+  ],
+  "safePaths": [],
+  "runScenePipeline": [
+    "runFullPipeline"
+  ],
+  "checkIfAllScenesComplete": [
+    "scanProjectAndRunVeoUpHandler"
+  ],
+  "readPipelineSceneState": [
+    "writePipelineSceneState",
+    "runScenePipelineLocked",
+    "runScenePipelineLockedInternal"
+  ],
+  "writePipelineSceneState": [
+    "isValidChatGptConversationUrl",
+    "runScenePipelineLockedInternal"
+  ],
+  "assertDurableSceneSuccess": [
+    "runScenePipelineLocked"
+  ],
+  "isSceneScopedFilePath": [
+    "clearMismatchedPath",
+    "runScenePipelineLockedInternal"
+  ],
+  "prepareSceneContext": [
+    "runScenePipelineLocked"
+  ],
+  "clearMismatchedPath": [],
+  "runScenePipelineLocked": [
+    "runScenePipeline"
+  ],
+  "runScenePipelineLockedInternal": [
+    "runScenePipelineLocked",
+    "startNextSceneChatGptPrefetch"
+  ],
+  "startNextSceneChatGptPrefetch": [
+    "runScenePipelineLockedInternal"
+  ],
+  "imageFileToDataUrl": [
+    "runScenePipelineLockedInternal",
+    "appendContinuityGuidanceToMotionPrompt"
+  ],
+  "ensureContinuityReferencesForSceneVideo": [
+    "ensureContinuityReferencesForPreviousScene"
+  ],
+  "ensureContinuityReferencesForPreviousScene": [
+    "runScenePipelineLockedInternal"
+  ],
+  "buildContinuityPromptInstruction": [],
+  "appendContinuityGuidanceToMotionPrompt": [],
+  "maybeResetChatGptPageForLongRun": [
+    "maybeRotateChatGptConversation"
+  ],
+  "maybeRotateChatGptConversation": [],
+  "getDurablePipelineBackoffMs": [
+    "runScenePipelineLocked"
+  ],
+  "normalizeChatGptRetryText": [
+    "retryMotionPrompt",
+    "isRetryableChatGptToolErrorText"
+  ],
+  "isRetryableChatGptToolErrorText": [
+    "retryMotionPrompt"
+  ],
+  "isChatGptPolicyRefusalText": [
+    "resendImagePrompt",
+    "retryMotionPrompt"
+  ],
+  "normalizeGrokResultRetryLimit": [
+    "validateGeneratedVideoFile"
+  ],
+  "makeRetryableGrokGenerationError": [
+    "closeGrokTemplateModal",
+    "validateGeneratedVideoFile",
+    "waitForNewVideoUrl"
+  ],
+  "isRetryableGrokGenerationError": [
+    "validateGeneratedVideoFile"
+  ],
+  "getChatGptContextFresh": [
+    "isPipelineCancelledError",
+    "isValidChatGptConversationUrl",
+    "runScenePipelineLocked",
+    "runScenePipelineLockedInternal"
+  ],
+  "setChatGptContextFresh": [
+    "logChatGptStage",
+    "getChatGptLocationState",
+    "isValidChatGptConversationUrl",
+    "forceCleanChatGptNewChatRotation",
+    "runScenePipelineLocked"
+  ],
+  "getPipelineStateFile": [
+    "readPipelineSceneState"
+  ],
+  "hashChatGptSnapshotText": [
+    "isPipelineCancelledError",
+    "performDurableRecovery"
+  ],
+  "normalizeChatTitleValue": [
+    "isSameChatTitle"
+  ],
+  "normalizeChatGptPromptCompareText": [],
+  "getChatGptConversationIdFromPath": [
+    "updateChatGptConversationIdentity"
+  ],
+  "isSameChatTitle": [
+    "updateChatGptConversationIdentity",
+    "selectChatGptConversationByTitle",
+    "maybeRenameChatGptCurrentConversationUntilTitle",
+    "checkChatGptCurrentConversationTitle"
+  ],
+  "verifyDraftOwnership": [
+    "isPipelineCancelledError"
+  ],
+  "writeSceneSnapshot": [
+    "isPipelineCancelledError",
+    "isValidChatGptConversationUrl",
+    "assertPipelineRunActive"
+  ],
+  "readSceneSnapshot": [
+    "isPipelineCancelledError",
+    "isValidChatGptConversationUrl"
+  ],
+  "writeActionJournal": [],
+  "readActionJournal": [],
+  "isChatGptActivelyGenerating": [
+    "hasVisibleChatGptImageCandidate",
+    "waitForLatestChatGPTGeneratedImage",
+    "recoverChatGptResponseChoiceChat"
+  ],
+  "sanitizeChatGptImageSnapshot": [
+    "refreshChatGptPageBeforeImageExtract",
+    "waitForLatestChatGPTGeneratedImage",
+    "recoverChatGptResponseChoiceChat"
+  ],
+  "isNv2SnapshotGenerationActive": [
+    "extractCompletedNv2ResponseFromSnapshot",
+    "selectLatestCompletedAssistantMessage"
+  ],
+  "extractCompletedNv2ResponseFromSnapshot": [],
+  "selectLatestCompletedAssistantMessage": [],
+  "selectNewAssistantMessageAfterBaseline": [
+    "extractCompletedNv2ResponseFromSnapshot"
+  ],
+  "afterCurrentNv2User": [],
+  "looksLikeCollapsedUserPrompt": [
+    "waitForLatestChatGPTGeneratedImage",
+    "resendImagePrompt"
+  ],
+  "isChatGptLimitText": [
+    "resendImagePrompt"
+  ],
+  "isChatGptDotLoadingCanvasAsset": [
+    "waitForLatestChatGPTGeneratedImage",
+    "norm"
+  ],
+  "sanitizeFileName": [
+    "saveProjectSessionFile",
+    "openProjectSessionFile",
+    "restoreEmbeddedProjectAssets",
+    "sendPromptViaWeb",
+    "runVeoUpAutomation",
+    "isValidChatGptConversationUrl"
+  ],
+  "normalizeVideoProvider": [
+    "writeGrokRouterCheckpoint",
+    "runScenePipelineLockedInternal"
+  ],
+  "normalizeContinuityReferenceSettings": [
+    "validateLocalVideoFile",
+    "closeGrokTemplateModal",
+    "validateGeneratedVideoFile",
+    "runScenePipelineLockedInternal",
+    "ensureContinuityReferencesForPreviousScene",
+    "appendContinuityGuidanceToMotionPrompt"
+  ],
+  "findSceneKeyframePathSafe": [
+    "sendPromptViaWeb",
+    "scanProjectAndRunVeoUpHandler",
+    "checkIfAllScenesComplete"
+  ],
+  "validateContinuityReferenceImage": [
+    "probeVideoDurationSeconds",
+    "extractLastFrameToPath",
+    "validateLocalVideoFile",
+    "runScenePipelineLockedInternal"
+  ],
+  "pathExists": [
+    "embedProjectAssets",
+    "restoreEmbeddedProjectAssets",
+    "readWebAccountStore",
+    "resumeFromRouterCheckpoint",
+    "ensureAndMigratePrompts",
+    "findBundledPromptTemplate",
+    "ensureUserPromptFile",
+    "collectFromDir",
+    "validateLocalVideoFile",
+    "sendPromptViaWeb",
+    "collectExistingProjectVideos",
+    "checkAssetExists",
+    "normalize",
+    "isPipelineCancelledError",
+    "waitForLatestChatGPTGeneratedImage",
+    "isValidChatGptConversationUrl",
+    "readPipelineSceneState",
+    "writePipelineSceneState",
+    "runScenePipelineLocked",
+    "runScenePipelineLockedInternal",
+    "writeSceneSnapshot",
+    "readSceneSnapshot",
+    "writeActionJournal",
+    "readActionJournal",
+    "validateContinuityReferenceImage",
+    "listPngFiles",
+    "collectKeyframes",
+    "readPromptFile",
+    "prepareVeoUpKeyframesFolder",
+    "throwIfCancelled"
+  ],
+  "getFileStat": [
+    "getAssetStat"
+  ],
+  "getFfmpegBinaryPath": [
+    "probeVideoDurationSeconds",
+    "runFfmpeg"
+  ],
+  "ensureProjectFilePath": [
+    "saveProjectSessionFile",
+    "forceCleanChatGptNewChatRotation"
+  ],
+  "hasFullPrivateEmail": [
+    "assertNoProjectSecrets"
+  ],
+  "getUserPromptDir": [
+    "ensureAndMigratePrompts",
+    "ensureUserPromptFile",
+    "loadHardPromptTasks",
+    "clickNode"
+  ],
+  "getHardPromptConfigPath": [
+    "readHardPromptConfig",
+    "writeHardPromptConfig"
+  ],
+  "initVeoUp": [
+    "initializeApplication"
+  ],
+  "findRunningVeoUpExecutablePaths": [
+    "findVeoupExecutable",
+    "resolveVeoUpLauncher"
+  ],
+  "findVeoupExecutable": [
+    "resolveVeoUpLauncher",
+    "startCoordinateSetup"
+  ],
+  "searchExesInDir": [
+    "findVeoupExecutable"
+  ],
+  "parseVersion": [
+    "findVeoupExecutable"
+  ],
+  "compareVersions": [
+    "findVeoupExecutable"
+  ],
+  "isProcessRunning": [
+    "startCoordinateSetup"
+  ],
+  "findRunningVeoUpWindow": [
+    "throwIfCancelled"
+  ],
+  "foreach": [
+    "findRunningVeoUpWindow",
+    "buildPowerShellScript"
+  ],
+  "findWindowsShortcutLaunchers": [
+    "resolveVeoUpLauncher"
+  ],
+  "walk": [],
+  "resolveVeoUpLauncher": [
+    "throwIfCancelled"
+  ],
+  "normalizeWhitespace": [
+    "collectMotionPrompts",
+    "exportVeoUpPromptFile"
+  ],
+  "sceneNumberFrom": [
+    "sortBySceneNumber",
+    "collectMotionPrompts",
+    "prepareVeoUpKeyframesFolder"
+  ],
+  "sortBySceneNumber": [
+    "collectKeyframes",
+    "collectMotionPrompts",
+    "prepareVeoUpKeyframesFolder",
+    "exportVeoUpPromptFile"
+  ],
+  "sceneFileToken": [
+    "prepareVeoUpKeyframesFolder"
+  ],
+  "listPngFiles": [
+    "collectKeyframes"
+  ],
+  "collectKeyframes": [
+    "throwIfCancelled"
+  ],
+  "readPromptFile": [
+    "collectMotionPrompts"
+  ],
+  "isSavedPromptPlaceholder": [
+    "collectMotionPrompts"
+  ],
+  "collectMotionPrompts": [
+    "throwIfCancelled"
+  ],
+  "quoteForFileDialog": [
+    "throwIfCancelled"
+  ],
+  "convertVeoUpClientPointToScreen": [],
+  "prepareVeoUpKeyframesFolder": [
+    "throwIfCancelled"
+  ],
+  "exportVeoUpPromptFile": [
+    "throwIfCancelled"
+  ],
+  "buildPowerShellScript": [
+    "throwIfCancelled"
+  ],
+  "EnumWindows": [
+    "buildPowerShellScript",
+    "startCoordinateSetup"
+  ],
+  "runPowerShell": [
+    "throwIfCancelled"
+  ],
+  "handleExit": [],
+  "readJsonFileStripBom": [
+    "throwIfCancelled",
+    "getVeoUpCoordinateConfig"
+  ],
+  "executeVeoUpAutomation": [
+    "runVeoUpAutomation",
+    "scanProjectAndRunVeoUp",
+    "isVeoUpStageError"
+  ],
+  "throwIfCancelled": [],
+  "startCoordinateSetup": [
+    "startVeoUpCoordinateSetupHandler"
+  ],
+  "waitForHotkey": [
+    "captureVeoUpCoordinate"
+  ],
+  "trigger": [],
+  "cancelCoordinateSetup": [
+    "cancelVeoUpCoordinateSetupHandler"
+  ],
+  "validateBlueBoxCoordinate": [
+    "captureVeoUpCoordinate"
+  ],
+  "previewStartButtonCoordinate": [
+    "captureVeoUpCoordinate"
+  ],
+  "captureVeoUpCoordinate": [
+    "captureVeoUpCoordinateHandler"
+  ],
+  "saveVeoUpCoordinateConfig": [
+    "saveVeoUpCoordinateConfigHandler"
+  ],
+  "getVeoUpCoordinateConfig": [
+    "getVeoUpCoordinateConfigHandler",
+    "scanProjectAndRunVeoUpHandler"
+  ],
+  "deleteVeoUpCoordinateConfig": [
+    "deleteVeoUpCoordinateConfigHandler"
+  ],
+  "scanProjectAndRunVeoUp": [],
+  "getVeoUpVideoSourcePath": [
+    "isValidChatGptConversationUrl"
+  ],
+  "isVeoUpStageError": [
+    "assertDurableSceneSuccess",
+    "runScenePipelineLocked"
+  ]
+}

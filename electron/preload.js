@@ -6,12 +6,6 @@ contextBridge.exposeInMainWorld('videoPlannerAPI', {
   openHardPromptFile: (key) => ipcRenderer.invoke('prompt:open-hard-file', key),
   getHardPromptFile: () => ipcRenderer.invoke('prompt:get-hard-file'),
   chooseHardPromptFile: () => ipcRenderer.invoke('prompt:choose-hard-file'),
-  openGrokRouterFolder: () => ipcRenderer.invoke('router:open-grok-folder'),
-  getGrokRouterStatus: () => ipcRenderer.invoke('router:get-status'),
-  listGrokAccountsSafe: () => ipcRenderer.invoke('router:list-accounts-safe'),
-  selectGrokAccount: (accountId) => ipcRenderer.invoke('router:select-account', accountId),
-  setAccountRouterEnabled: (enabled) => ipcRenderer.invoke('router:set-enabled', enabled),
-  resumeFromRouterCheckpoint: () => ipcRenderer.invoke('router:resume-checkpoint'),
   listWebAccountsSafe: (provider) => ipcRenderer.invoke('accounts:list-safe', provider),
   saveWebAccount: (account) => ipcRenderer.invoke('accounts:save', account),
   deleteWebAccount: (accountId) => ipcRenderer.invoke('accounts:delete', accountId),
@@ -39,7 +33,7 @@ contextBridge.exposeInMainWorld('videoPlannerAPI', {
   stopPipeline: (options) => ipcRenderer.invoke('pipeline:stop', options),
   clearChatGptCache: () => ipcRenderer.invoke('chatgpt:clear-cache'),
   openFreshChatGpt: () => ipcRenderer.invoke('chatgpt:open-fresh-chat'),
-  importCharacterPresets: (projectPath) => ipcRenderer.invoke('project:import-character-presets', projectPath),
+  openProjectPrepromptFolder: (projectPath) => ipcRenderer.invoke('project:open-preprompt-folder', projectPath),
   runVeoUpAutomation: (options) => ipcRenderer.invoke('veoup:run-automation', options),
   getVeoUpCoordinateConfig: () => ipcRenderer.invoke('veoup:get-coordinate-config'),
   startVeoUpCoordinateSetup: () => ipcRenderer.invoke('veoup:start-coordinate-setup'),
@@ -57,6 +51,18 @@ contextBridge.exposeInMainWorld('videoPlannerAPI', {
   chooseProjectRootFolder: () => ipcRenderer.invoke('project:choose-root-folder'),
   ensureProjectSceneFolders: (options) => ipcRenderer.invoke('project:ensure-scene-folders', options),
   openProjectSession: () => ipcRenderer.invoke('project:open-session-file'),
+  openLastProjectSession: () => ipcRenderer.invoke('project:open-last-session-file'),
+  onProjectFlushBeforeClose: (callback) => {
+    const listener = async (_event, token) => {
+      let ok = false;
+      try {
+        ok = (await callback(token)) !== false;
+      } catch (_error) {}
+      ipcRenderer.send('project:flush-before-close-complete', { token, ok });
+    };
+    ipcRenderer.on('project:flush-before-close', listener);
+    return () => ipcRenderer.removeListener('project:flush-before-close', listener);
+  },
   renameChatGptCurrentChat: (title) => ipcRenderer.invoke('chatgpt:rename-current-chat', title),
   onProjectMenuCommand: (callback) => {
     const allowed = new Set(['new', 'open', 'save', 'settings']);

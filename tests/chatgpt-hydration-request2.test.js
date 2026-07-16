@@ -3,63 +3,60 @@ const fs = require('fs');
 const path = require('path');
 
 const root = path.resolve(__dirname, '..');
-const main = fs.readFileSync(path.join(root, 'electron/main.js'), 'utf8');
+const pipeline = fs.readFileSync(
+  path.join(root, 'electron/main/chatgpt/chatgpt_pipeline.js'),
+  'utf8',
+);
 
-const start = main.indexOf('async function hydrateFreshChatGptContextAfterRotation(options = {}, sceneId = 0)');
+const start = pipeline.indexOf('async function hydrateFreshChatGptContextAfterRotation(');
 assert(start >= 0, 'hydrateFreshChatGptContextAfterRotation missing');
-const end = main.indexOf('function updateChatGptConversationIdentity', start);
+const end = pipeline.indexOf('\nfunction clearAllChatGptPipelineLocks', start);
 assert(end > start, 'hydrateFreshChatGptContextAfterRotation block end missing');
-const block = main.slice(start, end);
+const block = pipeline.slice(start, end);
 
 assert(
-  block.includes('uploadFilesToChatGptSequentially(page, recentKeyframes, sceneId, { rotationHydration: true, request: 2'),
+  block.includes('collectRecentProjectKeyframes(projectDir, 5, sceneId)'),
+  'Request 2 must collect only 5 recent keyframes'
+);
+assert(
+  block.includes('uploadFilesToChatGptSequentially') &&
+    block.includes('request: 2'),
   'Request 2 must still upload recent keyframes'
 );
 assert(
-  block.includes("if (!uploadKeyframes?.ok) throw new Error(`chatgpt-hydration-keyframes-upload-failed: ${uploadKeyframes?.error || 'unknown'}`);"),
+  block.includes('chatgpt-hydration-keyframes-upload-failed'),
   'Request 2 upload verification must remain'
 );
 assert(
-  block.includes("const sentScenes = await sendPromptViaCdpInput(page, 'Request 2: read and remember the attached keyframes"),
-  'Request 2 must still use sendPromptViaCdpInput'
+  block.includes('const sentScenes = await sendPromptWithSameChatRefreshRecovery('),
+  'Request 2 must use same-chat send recovery'
 );
 assert(
-  block.includes("if (!sentScenes?.ok) throw new Error(`chatgpt-hydration-keyframes-message-failed: ${sentScenes?.error || 'unknown'}`);"),
+  block.includes('Request 2: read and remember the attached keyframes from up to 5 previous project scenes.'),
+  'Request 2 prompt must describe 5 previous scenes'
+);
+assert(
+  block.includes('chatgpt-hydration-keyframes-message-failed'),
   'Request 2 send acknowledgement gate must remain'
 );
 assert(
-  block.includes('ChatGPT hydrate request 2 sent; skipping assistant completion wait because keyframes are context-only.'),
-  'Request 2 must explicitly skip assistant completion wait'
-);
-assert(
-  !block.includes('waitForChatGptHydrationResponse(page, beforeScenes?.count || 0, { sceneId, request: 2 })'),
-  'Request 2 must not wait for full assistant completion'
+  /await waitForChatGptHydrationResponse\(\s*page,\s*beforeScenes\?\.count \|\| 0,\s*{[\s\S]*?request: 2,/.test(block),
+  'Request 2 must wait for assistant completion'
 );
 
-const request2SendIndex = block.indexOf('const sentScenes = await sendPromptViaCdpInput');
+const request2SendIndex = block.indexOf('const sentScenes = await sendPromptWithSameChatRefreshRecovery');
 const request2AckIndex = block.indexOf('if (!sentScenes?.ok)', request2SendIndex);
-const freshFalseIndex = block.indexOf('isChatGptContextFresh = false;', request2AckIndex);
+const request2WaitIndex = block.indexOf('const request2Text = await waitForChatGptHydrationResponse', request2AckIndex);
+const freshFalseIndex = block.indexOf('setChatGptContextFresh(false);', request2WaitIndex);
 const newChatFalseIndex = block.indexOf('globalThis.__vidoraChatGptNewChatMode = false;', freshFalseIndex);
 assert(request2SendIndex >= 0 && request2AckIndex > request2SendIndex, 'Request 2 must check send acknowledgement after send');
-assert(freshFalseIndex > request2AckIndex, 'Pipeline must mark context fresh false immediately after Request 2 send acknowledgement');
-assert(newChatFalseIndex > freshFalseIndex, 'Pipeline must leave new-chat hydration mode after Request 2 send acknowledgement');
-assert(
-  block.slice(request2AckIndex, freshFalseIndex).includes('waitForChatGptHydrationResponse') === false,
-  'No assistant completion wait may occur between Request 2 acknowledgement and NV1-ready state'
-);
+assert(request2WaitIndex > request2AckIndex, 'Request 2 must wait after send acknowledgement');
+assert(freshFalseIndex > request2WaitIndex, 'Pipeline must mark context fresh false after Request 2 completion');
+assert(newChatFalseIndex > freshFalseIndex, 'Pipeline must leave new-chat hydration mode after Request 2 completion');
 
 assert(
-  block.includes('await waitForChatGptHydrationResponse(page, beforePreprompt?.count || 0, { sceneId, request: 1 });'),
+  /await waitForChatGptHydrationResponse\(\s*page,\s*beforePreprompt\?\.count \|\| 0,\s*{[\s\S]*?request: 1,/.test(block),
   'Request 1 must still wait for assistant completion'
-);
-
-const runSceneStart = main.indexOf('async function runScenePipelineLocked');
-assert(runSceneStart >= 0, 'runScenePipelineLocked missing');
-const runSceneBlock = main.slice(runSceneStart, main.indexOf('async function runScenePipelineLockedInternal', runSceneStart));
-assert(
-  runSceneBlock.includes('await hydrateFreshChatGptContextAfterRotation(options, sceneId);') &&
-    runSceneBlock.includes('const result = await runScenePipelineLockedInternal(_event, options);'),
-  'Pipeline must proceed to NV1/NV2 scene pipeline after hydration returns'
 );
 
 console.log('chatgpt hydration request 2 tests passed');

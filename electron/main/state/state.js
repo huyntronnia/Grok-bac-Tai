@@ -185,11 +185,15 @@ function isNv2SnapshotGenerationActive(snapshot = {}) {
   return Boolean(snapshot?.generationActive && !hasAssistantText);
 }
 
-function extractCompletedNv2ResponseFromSnapshot(snapshot = {}, baseline = {}) {
+function extractCompletedNv2ResponseFromSnapshot(
+  snapshot = {},
+  baseline = {},
+  options = {},
+) {
   if (isNv2SnapshotGenerationActive(snapshot)) {
     return { ok: false, error: "nv2-response-still-generating", snapshot };
   }
-  return selectNewAssistantMessageAfterBaseline(snapshot, baseline);
+  return selectNewAssistantMessageAfterBaseline(snapshot, baseline, options);
 }
 
 function selectLatestCompletedAssistantMessage(snapshot = {}) {
@@ -220,7 +224,11 @@ function selectLatestCompletedAssistantMessage(snapshot = {}) {
   };
 }
 
-function selectNewAssistantMessageAfterBaseline(snapshot = {}, baseline = {}) {
+function selectNewAssistantMessageAfterBaseline(
+  snapshot = {},
+  baseline = {},
+  options = {},
+) {
   const messages = Array.isArray(snapshot.messages) ? snapshot.messages : [];
   const baselineIds = new Set((baseline.ids || []).filter(Boolean));
   const baselineHashes = new Set((baseline.hashes || []).filter(Boolean));
@@ -253,7 +261,31 @@ function selectNewAssistantMessageAfterBaseline(snapshot = {}, baseline = {}) {
   const hashCandidate = eligibleMessages
     .filter((message) => message.hash && !baselineHashes.has(message.hash))
     .at(-1);
-  const candidate = idCandidate || countCandidate || hashCandidate || null;
+  // ChatGPT can stream NV2 text by mutating the latest logical assistant node
+  // in place. In that DOM shape the assistant count/id/turnIndex do not
+  // advance, so accept the changed latest node only when the caller has
+  // independently confirmed that the latest user message is the owned NV2.
+  const latestTextCandidate = messages
+    .filter((message) => String(message?.text || "").trim())
+    .at(-1);
+  const latestCandidateText = String(latestTextCandidate?.text || "").trim();
+  const baselineLatestText = String(baseline?.text || "").trim();
+  const latestHashIsNew =
+    !latestTextCandidate?.hash ||
+    !baselineHashes.has(latestTextCandidate.hash);
+  const inPlaceMutationCandidate =
+    options.allowInPlaceMutation === true &&
+    latestTextCandidate &&
+    latestCandidateText !== baselineLatestText &&
+    latestHashIsNew
+      ? latestTextCandidate
+      : null;
+  const candidate =
+    idCandidate ||
+    countCandidate ||
+    hashCandidate ||
+    inPlaceMutationCandidate ||
+    null;
   const text = String(candidate?.text || "").trim();
   if (!candidate || !text)
     return { ok: false, error: "no-new-assistant", snapshot };
@@ -269,6 +301,8 @@ function selectNewAssistantMessageAfterBaseline(snapshot = {}, baseline = {}) {
         ? "assistant-role-new-id"
         : hashCandidate === candidate
           ? "assistant-role-new-hash"
+          : inPlaceMutationCandidate === candidate
+            ? "assistant-role-in-place-mutation"
           : "assistant-role-count-advance",
     hasNewAssistant: true,
   };

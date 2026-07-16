@@ -47,6 +47,11 @@ async function getConversationState(page) {
 }
 
 async function waitForCdpLoad(client) {
+  if (client && client.clientType === "playwright" && client.page) {
+    await client.page.waitForLoadState("domcontentloaded").catch(() => null);
+    return;
+  }
+
   const startedAt = Date.now();
   while (Date.now() - startedAt < 30000) {
     const readyState = await evaluateOnCdpPage(
@@ -59,6 +64,111 @@ async function waitForCdpLoad(client) {
 }
 
 async function evaluateOnCdpPage(client, expression) {
+  if (client && client.clientType === "playwright") {
+    try {
+      return await client.evaluate(expression);
+    } catch (error) {
+      const message = String(error?.message || error || "");
+      if (!/circular|serialize|Object reference chain|converting circular/i.test(message)) {
+        throw error;
+      }
+      
+      const safeExpression = `
+        (async () => {
+          const __seen = new WeakSet();
+          const __maxDepth = 6;
+          const __maxArray = 80;
+          const __maxKeys = 80;
+
+          function __safe(value, depth = 0) {
+            if (value == null) return value;
+
+            const type = typeof value;
+            if (type === 'string') return value.length > 20000 ? value.slice(0, 20000) + '…[truncated]' : value;
+            if (type === 'number' || type === 'boolean') return value;
+            if (type === 'bigint') return String(value);
+            if (type === 'function' || type === 'symbol' || type === 'undefined') return undefined;
+
+            if (depth >= __maxDepth) return '[MaxDepth]';
+
+            if (value instanceof ArrayBuffer) return { type: 'ArrayBuffer', byteLength: value.byteLength };
+            if (ArrayBuffer.isView(value)) {
+              return {
+                type: value.constructor && value.constructor.name || 'TypedArray',
+                length: value.length,
+                byteLength: value.byteLength,
+                sample: Array.from(value.slice ? value.slice(0, 32) : []).slice(0, 32),
+              };
+            }
+
+            if (value instanceof Element) {
+              const rect = value.getBoundingClientRect?.();
+              return {
+                type: 'Element',
+                tag: value.tagName,
+                id: value.id || '',
+                className: String(value.className || '').slice(0, 200),
+                text: String(value.innerText || value.textContent || '').slice(0, 500),
+                box: rect ? { x: rect.x, y: rect.y, w: rect.width, h: rect.height } : null,
+              };
+            }
+
+            if (value instanceof Node) {
+              return {
+                type: 'Node',
+                nodeType: value.nodeType,
+                nodeName: value.nodeName,
+                text: String(value.textContent || '').slice(0, 500),
+              };
+            }
+
+            if (Array.isArray(value)) {
+              if (__seen.has(value)) return '[Circular]';
+              __seen.add(value);
+              return value.slice(0, __maxArray).map((item) => __safe(item, depth + 1));
+            }
+
+            if (type === 'object') {
+              if (__seen.has(value)) return '[Circular]';
+              __seen.add(value);
+
+              const out = {};
+              const keys = Object.keys(value).slice(0, __maxKeys);
+              for (const key of keys) {
+                try {
+                  out[key] = __safe(value[key], depth + 1);
+                } catch (_err) {
+                  out[key] = '[Unreadable]';
+                }
+              }
+              if (Object.keys(value).length > __maxKeys) out.__truncatedKeys = Object.keys(value).length - __maxKeys;
+              return out;
+            }
+
+            return String(value);
+          }
+
+          try {
+            const __value = await (${expression});
+            return JSON.stringify({ ok: true, value: __safe(__value) });
+          } catch (__error) {
+            return JSON.stringify({
+              ok: false,
+              error: String(__error && (__error.stack || __error.message) || __error),
+            });
+          }
+        })()
+      `;
+
+      const json = await client.evaluate(safeExpression);
+      const parsed = JSON.parse(String(json || "{}"));
+      if (!parsed?.ok) {
+        throw new Error(parsed?.error || message);
+      }
+      return parsed.value;
+    }
+  }
+
   async function runEvaluate(expr, returnByValue = true) {
     const result = await client.Runtime.evaluate({
       expression: expr,

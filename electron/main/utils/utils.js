@@ -20,8 +20,6 @@ function sleep(ms) {
 }
 
 function normalizeVideoProvider(provider) {
-  if (provider === "grok") return "grok";
-  if (provider === "pixverse") return "pixverse";
   return 'veoup';
 }
 
@@ -35,7 +33,6 @@ function normalizeContinuityReferenceSettings(settings = {}) {
     includeLastFrame: settings.includeLastFrame !== false,
     maxKeyFrames,
     sendToChatGPT: settings.sendToChatGPT !== false,
-    sendToGrok: settings.sendToGrok === true,
   };
 }
 

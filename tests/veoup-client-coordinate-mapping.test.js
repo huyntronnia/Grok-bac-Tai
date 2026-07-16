@@ -1,12 +1,25 @@
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
+const Module = require('module');
+const originalLoad = Module._load;
+Module._load = function (request, parent, isMain) {
+  if (request === 'electron') {
+    return {
+      globalShortcut: {},
+      app: { getPath: () => '' },
+      BrowserWindow: { getAllWindows: () => [] },
+    };
+  }
+  return originalLoad.call(this, request, parent, isMain);
+};
 const {
   convertVeoUpClientPointToScreen,
 } = require('../electron/veoupAutomation');
+Module._load = originalLoad;
 
 const root = path.resolve(__dirname, '..');
-const veoupSource = fs.readFileSync(path.join(root, 'electron/veoupAutomation.js'), 'utf8');
+const veoupSource = fs.readFileSync(path.join(root, 'electron/main/veoup/veoup.js'), 'utf8');
 
 const maximizedWindow = { left: -9, top: -9, right: 1937, bottom: 1049 };
 const clientScreenOrigin = { x: 0, y: 31 };

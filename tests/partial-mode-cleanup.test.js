@@ -60,9 +60,11 @@ assert(files.renderer.includes("videoProvider: 'veoup'"), 'renderer scene pipeli
 assert(!files.renderer.includes('videoProvider: videoPlatform.value'), 'renderer scene pipeline still sends selected video provider');
 assert(!scenePipelinePayload.includes('accountRouterEnabled:'), 'renderer scene payload still sends Grok router flag');
 assert(files.main.includes("return 'veoup';"), 'main video provider default must be VeoUp');
-assert(files.main.includes("if (provider === 'veoup')"), 'main scene pipeline must handle VeoUp provider');
+assert(files.main.includes('async function generateVideoWithProvider({'), 'main scene pipeline must expose VeoUp generation adapter');
+assert(files.main.includes('runVeoUpScriptAsPromise('), 'main scene pipeline must call VeoUp automation');
+assert(!/provider\s*===\s*["'](?:grok|pixverse|veoup)["']/.test(files.main), 'main video generation must not branch by legacy provider');
 assert(!files.main.includes("return generateVideoWithGenericProvider({ provider: 'grok'"), 'main still falls back to Grok video generation');
-assert(files.main.includes("status: 'video-validated'"), 'VeoUp scene status must require validated video');
+assert(/status:\s*["']video-validated["']/.test(files.main), 'VeoUp scene status must require validated video');
 assert(files.renderer.includes('await window.videoPlannerAPI.extractLastFrameToPath(prevVideoPath, prevLastFramePath, { runId })'), 'previous-scene final-frame extraction guard missing');
 assert(files.renderer.includes('if (scene.id > 1)'), 'sequential previous-video guard missing');
 assert(files.renderer.includes('if (!hasVideoOutput) {'), 'video-output gate missing');
@@ -71,8 +73,8 @@ assert(files.main.includes('videoResult = await generateVideoWithProvider'), 'ma
 assert(files.main.includes('await forceCleanChatGptNewChatRotation()'), 'ChatGPT rotation recovery missing');
 
 assert(files.renderer.includes('stripObsoleteProjectModeFields'), 'save sanitizer missing');
-assert(files.renderer.includes('...stripObsoleteProjectModeFields(scene)'), 'scene save sanitizer not applied');
-assert(files.renderer.includes('const projectFields = stripObsoleteProjectModeFields(project || {})'), 'project save sanitizer not applied');
+assert(files.renderer.includes('stripObsoleteProjectModeFields(sceneWithoutInlineImageData(scene))'), 'scene save sanitizer and inline-image scrubber not applied');
+assert(files.renderer.includes('stripObsoleteProjectModeFields(projectMetadata)'), 'project save sanitizer not applied to lightweight metadata');
 
 const stripObsoleteProjectModeFields = (value = {}) => {
   const blocked = new Set([

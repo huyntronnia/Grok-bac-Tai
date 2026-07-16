@@ -1,7 +1,19 @@
 "use strict";
 
 const assert = require("assert");
+const Module = require("module");
+const originalLoad = Module._load;
+Module._load = function (request, parent, isMain) {
+  if (request === "electron") {
+    return {
+      app: { getPath: () => "" },
+      BrowserWindow: { getAllWindows: () => [] },
+    };
+  }
+  return originalLoad.call(this, request, parent, isMain);
+};
 const monitor = require("../electron/main/chatgpt/chatgpt_runtime_monitor");
+Module._load = originalLoad;
 
 // Mock CDP Page
 const createMockPage = () => {
@@ -91,6 +103,38 @@ const resetMonitorState = (m) => {
 
 async function runTests() {
   console.log("Starting ChatGPT Runtime Monitor tests...");
+
+  // Test 0: Playwright listeners are removed before a monitor restart/stop.
+  {
+    resetMonitorState(monitor);
+    const listeners = new Map();
+    const rawPage = {
+      async exposeFunction() {},
+      async addInitScript() {},
+      async evaluate() {},
+      on(event, handler) {
+        const handlers = listeners.get(event) || new Set();
+        handlers.add(handler);
+        listeners.set(event, handlers);
+      },
+      off(event, handler) {
+        listeners.get(event)?.delete(handler);
+      },
+    };
+    const playwrightAdapter = { clientType: "playwright", page: rawPage };
+    await monitor.startMonitoring(playwrightAdapter);
+    assert.strictEqual(
+      Array.from(listeners.values()).reduce((count, handlers) => count + handlers.size, 0),
+      5,
+      "Playwright monitor should register five page listeners",
+    );
+    await monitor.stopMonitoring();
+    assert.strictEqual(
+      Array.from(listeners.values()).reduce((count, handlers) => count + handlers.size, 0),
+      0,
+      "Playwright page listeners must be removed on stop",
+    );
+  }
 
   // Test 1: Start and Stop monitoring
   {
@@ -238,7 +282,7 @@ async function runTests() {
         lastMutationTimestamp: Date.now() - 4000, // 4 seconds ago
       }
     });
-    assert.strictEqual(monitor.state, "READY_FOR_EXTRACTION", "State should be READY_FOR_EXTRACTION");
+    assert.strictEqual(monitor.state, "READY", "State should be READY");
     assert.strictEqual(monitor.confidence, 1, "Confidence should be 1.0 since image is complete and DOM stable");
 
     await monitor.stopMonitoring();
@@ -273,7 +317,7 @@ async function runTests() {
     const mockPage = createMockPage();
     await monitor.startMonitoring(mockPage);
 
-    // Simulate active streaming first so it can transition to READY_FOR_EXTRACTION
+    // Simulate active streaming first so it can transition to READY
     monitor.processIncomingEvent({
       type: "DOM_EVENT",
       payload: {
@@ -283,13 +327,13 @@ async function runTests() {
     assert.strictEqual(monitor.state, "STREAMING_TEXT", "State should start at STREAMING_TEXT");
 
     const waitPromise = monitor.waitUntil({
-      state: "READY_FOR_EXTRACTION",
+      state: "READY",
       stableFor: 100,
       timeout: 1000,
     });
 
 
-    // Simulate transitioning to READY_FOR_EXTRACTION
+    // Simulate transitioning to READY
     setTimeout(() => {
       monitor.processIncomingEvent({
         type: "DOM_EVENT",
@@ -301,7 +345,7 @@ async function runTests() {
     }, 50);
 
     const resultState = await waitPromise;
-    assert.strictEqual(resultState.state, "READY_FOR_EXTRACTION", "Wait should resolve to target state");
+    assert.strictEqual(resultState.state, "READY", "Wait should resolve to target state");
     await monitor.stopMonitoring();
   }
 
@@ -342,6 +386,8 @@ async function runTests() {
 
     const snapshot = monitor.captureSnapshot();
     assert.strictEqual(snapshot.metricsVersion, 1, "Snapshot metricsVersion should be 1");
+    assert.strictEqual(Object.isFrozen(snapshot), true, "Snapshot object should be frozen (immutable)");
+    assert.strictEqual(Object.isFrozen(monitor.getCurrentState()), true, "getCurrentState object should be frozen (immutable)");
 
     // test waitForIntent
     const intentPromise = monitor.waitForIntent("IMAGE_GENERATION", 1000);
@@ -377,79 +423,69 @@ async function runTests() {
     await monitor.stopMonitoring();
   }
 
-  // Test 8: Integration Test (MutationObserver -> Binding -> Monitor)
+  // Test 8: injected observer payload contract
+  {
+    const browserCode = monitor.getBrowserScriptCode();
+    assert(browserCode.includes('chatgptUiMonitorBinding'));
+    assert(browserCode.includes('extractConversationSnapshot'));
+    assert(browserCode.includes('composerReady: snap.composerReady'));
+    assert(browserCode.includes('assistantMessageCount: snap.assistantMessageCount'));
+    assert(browserCode.includes('new MutationObserver(triggerDebounce)'));
+  }
+
+  // Test 9: Pipeline Adapter Policy Gates and FNV-1a Hashing
   {
     resetMonitorState(monitor);
     const mockPage = createMockPage();
-    
-    // Set up mock DOM window & document in Node
-    const mockWindow = {
-      location: { href: "https://chatgpt.com/c/test-chat-id" },
-      history: {
-        pushState: () => {},
-        replaceState: () => {},
-      },
-      addEventListener: () => {},
-    };
-    
-    const mockDocument = {
-      documentElement: {},
-      body: { innerText: "" },
-      querySelectorAll: (selector) => {
-        if (selector === "[data-message-author-role='assistant']") {
-          return [{ innerText: "Hello there from assistant" }];
-        }
-        return [];
-      },
-      querySelector: (selector) => {
-        if (selector === "#prompt-textarea, textarea, [contenteditable='true']") {
-          return { tagName: "TEXTAREA" };
-        }
-        return null;
-      }
-    };
-    
-    class MockMutationObserver {
-      constructor(cb) {
-        this.cb = cb;
-      }
-      observe() {
-        this.cb();
-      }
-    }
-    
-    // Inject mock browser environment
-    global.window = mockWindow;
-    global.document = mockDocument;
-    global.MutationObserver = MockMutationObserver;
-    
-    // Create binding target
-    let receivedPayload = null;
-    mockWindow.chatgptUiMonitorBinding = (str) => {
-      receivedPayload = JSON.parse(str);
-    };
-
-    // Run the injected script directly in Node context!
-    const scriptFn = monitor.getBrowserScriptCode;
-    scriptFn();
-
-    // Start monitoring so monitor registers page binding handler
     await monitor.startMonitoring(mockPage);
-    
-    // Emulate CDP trigger of bindingCalled using captured browser metrics payload
-    mockPage.events["Runtime.bindingCalled"]({
-      name: "chatgptUiMonitorBinding",
-      payload: JSON.stringify(receivedPayload)
-    });
-    
-    // Verify monitor state is updated from the browser emulated metrics
-    assert.strictEqual(monitor.metrics.dom.composerReady, true, "Composer should be detected as ready via integration flow");
-    assert.strictEqual(monitor.state, "IDLE", "State should transition to IDLE");
 
-    // Cleanup globals
-    delete global.window;
-    delete global.document;
-    delete global.MutationObserver;
+    const ChatGptPipelineAdapter = require("../electron/main/chatgpt/chatgpt_pipeline_adapter");
+    const adapter = new ChatGptPipelineAdapter(monitor);
+
+    // Verify hash generation in Electron Main on processing DOM_METRICS event
+    monitor.processIncomingEvent({
+      type: "DOM_EVENT",
+      payload: {
+        composerText: "Hello Grok",
+        latestUserText: "Write a story",
+        attachments: [{ text: "scene.png", imgSrc: "data:image/png" }]
+      }
+    });
+
+    assert.ok(monitor.metrics.dom.composerPromptHash, "Main process should compute composerPromptHash");
+    assert.strictEqual(monitor.metrics.dom.attachmentNames[0], "scene.png", "Attachment names mapped");
+    assert.ok(monitor.metrics.dom.attachmentHashes[0], "Attachment hashes computed");
+
+    // Test adapter policy wait transition (correct intent)
+    const imageWaitPromise = adapter.waitForImageReady(1000, 10);
+    // Transition monitor to IMAGE_GENERATION intent and READY state
+    monitor.processIncomingEvent({
+      type: "DOM_EVENT",
+      payload: { dalleActive: true, textStreamingActive: true }
+    });
+    monitor.processIncomingEvent({
+      type: "DOM_EVENT",
+      payload: { textStreamingActive: false, imageElementCount: 1, imageCompleteCount: 1, lastMutationTimestamp: Date.now() - 5000 }
+    });
+
+    const finalImageState = await imageWaitPromise;
+    assert.strictEqual(finalImageState.state, "READY", "Resolved to READY");
+    assert.strictEqual(finalImageState.intent, "IMAGE_GENERATION", "Validated intent");
+
+    // Test adapter policy failure (wrong intent throws violation)
+    resetMonitorState(monitor);
+    const wrongIntentPromise = adapter.waitForImageReady(1000, 10);
+    monitor.processIncomingEvent({
+      type: "DOM_EVENT",
+      payload: { textStreamingActive: true } // TEXT_RESPONSE intent
+    });
+    monitor.processIncomingEvent({
+      type: "DOM_EVENT",
+      payload: { textStreamingActive: false, lastMutationTimestamp: Date.now() - 5000 }
+    });
+
+    await assert.rejects(wrongIntentPromise, /Pipeline Policy Violation: Expected IMAGE_GENERATION intent/, "Should throw policy violation on wrong intent");
+
     await monitor.stopMonitoring();
   }
 

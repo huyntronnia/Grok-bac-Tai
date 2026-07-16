@@ -1,12 +1,12 @@
 {
   "name": "vidora",
   "version": "1.0.0",
-  "description": "Vidora desktop workflow app for AI video scene batching, prompt review, keyframe generation, and Grok video automation.",
+  "description": "Vidora desktop workflow app for AI video scene batching, prompt review, ChatGPT keyframe generation, and VeoUp video automation.",
   "main": "electron/main.js",
   "scripts": {
     "start": "electron .",
     "dev": "electron .",
-    "test": "node -r ./tests/normalize-hook.js tests/partial-mode-cleanup.test.js && node -r ./tests/normalize-hook.js tests/pipeline-stop-cancellation.test.js && node -r ./tests/normalize-hook.js tests/veoup-output-lifecycle.test.js && node -r ./tests/normalize-hook.js tests/chatgpt-stage-isolation.test.js",
+    "test": "node ./tests/run-all-tests.js",
     "dist": "electron-builder --win nsis --x64"
   },
   "keywords": [
@@ -32,10 +32,6 @@
       "node_modules/ffmpeg-static/**/*"
     ],
     "extraResources": [
-      {
-        "from": "2 NHIỆM VỤ BẰNG PROMPT.txt",
-        "to": "prompts/2 NHIỆM VỤ BẰNG PROMPT.txt"
-      },
       {
         "from": "node_modules/ffmpeg-static/ffmpeg.exe",
         "to": "ffmpeg.exe"
@@ -64,7 +60,8 @@
     "electron-builder": "^26.8.1"
   },
   "dependencies": {
-    "chrome-remote-interface": "^0.34.0",
-    "ffmpeg-static": "^5.3.0"
+    "ffmpeg-static": "^5.3.0",
+    "playwright": "^1.61.1",
+    "playwright-core": "^1.61.1"
   }
 }

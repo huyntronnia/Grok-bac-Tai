@@ -3,15 +3,27 @@
 const EventEmitter = require("events");
 const { appendAppLog } = require("../logging");
 
+function hashText(value = "") {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  let hash = 2166136261;
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16);
+}
+
 class ChatGPTRuntimeMonitor extends EventEmitter {
   constructor() {
     super();
     this.page = null;
+    this.playwrightPage = null;
+    this.playwrightListeners = [];
     this.state = "IDLE";
     this.intent = "UNKNOWN";
     this.confidence = 1.0;
     this.metricsVersion = 1;
-    
+
     // Sessions Identities
     this.identity = {
       runId: "",
@@ -26,7 +38,7 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
 
     // Diagnostic timeline log
     this.timeline = [];
-    
+
     // Watchdog Timers
     this.watchdogs = {};
     this.watchdogRules = {
@@ -53,9 +65,15 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
         hasUploadedFiles: false,
         attachmentsCount: 0,
         attachmentsCompleted: 0,
-        assistantMessageCount: 0,
-        latestAssistantTextLength: 0,
+        composerPromptHash: "",
+        attachmentNames: [],
+        attachmentHashes: [],
+        composerState: "READY",
+        latestUserMessageHash: "",
         latestAssistantHash: "",
+        assistantMessageCount: 0,
+        latestAssistantText: "",
+        latestAssistantTextLength: 0,
         textStreamingActive: false,
         dalleActive: false,
         searchBadgeVisible: false,
@@ -65,8 +83,10 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
         placeholderVisible: false,
         imageElementCount: 0,
         imageCompleteCount: 0,
+        imageAgentTurnCount: 0,
         stoppedTextDetected: false,
         policyRefusalDetected: false,
+        loggedOut: false,
         lastMutationTimestamp: Date.now(),
       },
       network: {
@@ -92,15 +112,164 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
     this.onFrameNavigated = this.onFrameNavigated.bind(this);
   }
 
+  reset() {
+    this.state = "IDLE";
+    this.intent = "UNKNOWN";
+    this.confidence = 1.0;
+    this.intentOverride = null;
+
+    this.metrics.dom = {
+      composerReady: false,
+      composerBusy: false,
+      hasUploadedFiles: false,
+      attachmentsCount: 0,
+      attachmentsCompleted: 0,
+      composerPromptHash: "",
+      attachmentNames: [],
+      attachmentHashes: [],
+      composerState: "READY",
+      latestUserMessageHash: "",
+      latestAssistantHash: "",
+      assistantMessageCount: 0,
+      latestAssistantText: "",
+      latestAssistantTextLength: 0,
+      textStreamingActive: false,
+      dalleActive: false,
+      searchBadgeVisible: false,
+      reasoningActive: false,
+      pythonCodeInterpreterActive: false,
+      canvasActive: false,
+      placeholderVisible: false,
+      imageElementCount: 0,
+      imageCompleteCount: 0,
+      imageAgentTurnCount: 0,
+      stoppedTextDetected: false,
+      policyRefusalDetected: false,
+      loggedOut: false,
+      lastMutationTimestamp: Date.now(),
+    };
+
+    this.metrics.network = {
+      dalleUrlsCaptured: [],
+      activeMediaRequests: 0,
+    };
+
+    this.metrics.runtime = {
+      lastConsoleError: "",
+      lastException: "",
+    };
+
+    this.metrics.navigation = {
+      url: "",
+      rotating: false,
+    };
+
+    this.identity = {
+      chatUrl: "",
+      conversationId: "",
+      assistantRootIndex: 0,
+      latestImageUrl: "",
+    };
+  }
+
   // --- Start & Stop Monitoring API ---
   async startMonitoring(page) {
     if (!page) {
       throw new Error("Cannot start monitor: CDP page client is missing.");
     }
+    if (this.page) {
+      await this.stopMonitoring().catch(() => null);
+    }
+    this.reset();
     this.page = page;
     this.health.cdpConnected = true;
 
     this.logEvent("SYSTEM", "Monitoring starting");
+
+    if (page.clientType === "playwright") {
+      try {
+        const rawPage = page.page;
+        this.playwrightPage = rawPage;
+        const onPlaywright = (event, handler) => {
+          rawPage.on(event, handler);
+          this.playwrightListeners.push({ event, handler });
+        };
+
+        await rawPage.exposeFunction("chatgptUiMonitorBinding", (payloadStr) => {
+          this.onBindingCalled({
+            name: "chatgptUiMonitorBinding",
+            payload: payloadStr,
+          });
+        }).catch(() => null);
+
+        const reqIdMap = new WeakMap();
+        const getReqId = (req) => {
+          if (!reqIdMap.has(req)) {
+            reqIdMap.set(req, String(Math.random()));
+          }
+          return reqIdMap.get(req);
+        };
+
+        onPlaywright("response", (response) => {
+          const requestId = getReqId(response.request());
+          this.onResponseReceived({
+            requestId,
+            response: {
+              url: response.url(),
+              mimeType: response.headers()["content-type"] || "",
+            }
+          });
+        });
+
+        onPlaywright("requestfinished", (request) => {
+          const requestId = getReqId(request);
+          this.onLoadingFinished({ requestId });
+        });
+
+        onPlaywright("console", (msg) => {
+          this.onConsoleAPICalled({
+            type: msg.type(),
+            args: msg.args().map(arg => ({ value: String(arg) })),
+          });
+        });
+
+        onPlaywright("pageerror", (error) => {
+          this.onExceptionThrown({
+            exceptionDetails: {
+              text: error.message,
+              exception: {
+                description: error.stack,
+              }
+            }
+          });
+        });
+
+        onPlaywright("framenavigated", (frame) => {
+          this.onFrameNavigated({
+            frame: {
+              parentId: frame.parentFrame() ? "child" : undefined,
+              url: frame.url(),
+            }
+          });
+        });
+
+        const browserCode = this.getBrowserScriptCode();
+        await rawPage.addInitScript(browserCode).catch(() => null);
+        await rawPage.evaluate(browserCode).catch(() => null);
+
+        this.health.observersAlive = true;
+        this.health.mutationObserver = true;
+        this.health.resizeObserver = true;
+        this.health.runtimeBinding = true;
+        this.health.networkEnabled = true;
+
+        this.logEvent("SYSTEM", "Monitoring initialized successfully");
+      } catch (err) {
+        this.logEvent("ERROR", `Failed starting monitor: ${err.message}`);
+        throw err;
+      }
+      return;
+    }
 
     try {
       // 1. Register CDP Listeners
@@ -119,7 +288,7 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
       this.health.runtimeBinding = true;
 
       // 3. Inject DOM Observer Script (on new documents and current context)
-      const browserCode = `(${this.getBrowserScriptCode.toString()})()`;
+      const browserCode = this.getBrowserScriptCode();
       await page.Page.addScriptToEvaluateOnNewDocument({ source: browserCode }).catch(() => null);
       await page.Runtime.evaluate({
         expression: browserCode,
@@ -142,6 +311,14 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
     this.logEvent("SYSTEM", "Monitoring stopping");
     this.clearAllWatchdogs();
 
+    if (this.playwrightPage) {
+      for (const { event, handler } of this.playwrightListeners) {
+        this.playwrightPage.off(event, handler);
+      }
+    }
+    this.playwrightListeners = [];
+    this.playwrightPage = null;
+
     if (this.page && typeof this.page.off === "function") {
       try {
         this.page.off("Network.responseReceived", this.onResponseReceived);
@@ -163,39 +340,46 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
     this.health.runtimeBinding = false;
     this.health.networkEnabled = false;
 
+    this.clearStabilityTimer();
+
     this.logEvent("SYSTEM", "Monitoring stopped");
   }
 
   // --- API Methods ---
   getCurrentState() {
-    return {
+    return Object.freeze({
       state: this.state,
       intent: this.intent,
       confidence: this.confidence,
-      identity: { ...this.identity },
+      identity: Object.freeze({ ...this.identity }),
       timestamp: Date.now(),
-    };
+    });
   }
 
   getHealth() {
-    return { ...this.health };
+    return Object.freeze({ ...this.health });
   }
 
   getDiagnostics() {
-    return [...this.timeline];
+    return Object.freeze([...this.timeline]);
   }
 
   captureSnapshot() {
-    return {
+    return Object.freeze({
       metricsVersion: this.metricsVersion,
       state: this.state,
       intent: this.intent,
       confidence: this.confidence,
-      identity: { ...this.identity },
-      metrics: JSON.parse(JSON.stringify(this.metrics)),
-      health: { ...this.health },
+      identity: Object.freeze({ ...this.identity }),
+      metrics: Object.freeze(JSON.parse(JSON.stringify(this.metrics))),
+      health: Object.freeze({ ...this.health }),
       timestamp: Date.now(),
-    };
+    });
+  }
+
+  setIntentOverride(intent) {
+    this.intentOverride = intent;
+    this.intent = intent;
   }
 
   // --- State Replay Engine ---
@@ -204,18 +388,18 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
       throw new Error("Replay expects a list of event logs.");
     }
     this.logEvent("SYSTEM", `Replay started with ${log.length} records`);
-    
+
     // Reset internal state
     this.state = "IDLE";
     this.intent = "UNKNOWN";
     this.confidence = 1.0;
-    
+
     for (const record of log) {
       if (!record.type) continue;
       this.logEvent("REPLAY", `Simulating event ${record.type}`, record.payload);
       this.processIncomingEvent(record);
     }
-    
+
     this.logEvent("SYSTEM", "Replay completed");
   }
 
@@ -251,7 +435,7 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
         }
 
         const isMatching = this.state === state && this.confidence >= confidence;
-        
+
         if (isMatching) {
           if (!stableTimer) {
             stableTimer = setTimeout(() => {
@@ -276,7 +460,7 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
       }, timeout);
 
       this.on("event", checkCondition);
-      
+
       // Check initial conditions immediately
       checkCondition();
     });
@@ -405,7 +589,7 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
         requestId: event.requestId,
         timestamp: Date.now(),
       });
-      
+
       this.logEvent("NETWORK_EVENT", `Image response received: ${url.slice(0, 100)}`, { url });
       this.triggerStateUpdate("Network image response");
     }
@@ -428,17 +612,55 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
       try {
         const payload = JSON.parse(event.payload);
         if (payload.type === "DOM_METRICS") {
-          // Merge DOM metrics
-          Object.assign(this.metrics.dom, payload.data);
-          
+          const raw = payload.data || {};
+
+          // Merge flat metrics
+          this.metrics.dom.composerReady = Boolean(raw.composerReady);
+          this.metrics.dom.composerBusy = Boolean(raw.composerBusy);
+          this.metrics.dom.hasUploadedFiles = Boolean(raw.hasUploadedFiles);
+          this.metrics.dom.attachmentsCount = Number(raw.attachmentsCount || 0);
+          this.metrics.dom.attachmentsCompleted = Number(raw.attachmentsCompleted || 0);
+          this.metrics.dom.assistantMessageCount = Number(raw.assistantMessageCount || 0);
+          this.metrics.dom.latestAssistantTextLength = Number(raw.latestAssistantTextLength || 0);
+          this.metrics.dom.textStreamingActive = Boolean(raw.textStreamingActive);
+          this.metrics.dom.dalleActive = Boolean(raw.dalleActive);
+          this.metrics.dom.searchBadgeVisible = Boolean(raw.searchBadgeVisible);
+          this.metrics.dom.reasoningActive = Boolean(raw.reasoningActive);
+          this.metrics.dom.pythonCodeInterpreterActive = Boolean(raw.pythonCodeInterpreterActive);
+          this.metrics.dom.canvasActive = Boolean(raw.canvasActive);
+          this.metrics.dom.placeholderVisible = Boolean(raw.placeholderVisible);
+          this.metrics.dom.imageElementCount = Number(raw.imageElementCount || 0);
+          this.metrics.dom.imageCompleteCount = Number(raw.imageCompleteCount || 0);
+          this.metrics.dom.imageAgentTurnCount = Number(
+            raw.imageAgentTurnCount || 0,
+          );
+          this.metrics.dom.stoppedTextDetected = Boolean(raw.stoppedTextDetected);
+          this.metrics.dom.policyRefusalDetected = Boolean(raw.policyRefusalDetected);
+          this.metrics.dom.loggedOut = Boolean(raw.loggedOut);
+          this.metrics.dom.lastMutationTimestamp = Number(raw.lastMutationTimestamp || Date.now());
+
+          // Compute FNV-1a hashes in Main process
+          const composerText = raw.composerText || "";
+          const latestUserText = raw.latestUserText || "";
+          const latestAssistantText = raw.latestAssistantText || "";
+          const rawAttachments = raw.attachments || [];
+
+          this.metrics.dom.latestAssistantText = latestAssistantText;
+          this.metrics.dom.composerPromptHash = hashText(composerText);
+          this.metrics.dom.latestUserMessageHash = hashText(latestUserText);
+          this.metrics.dom.latestAssistantHash = hashText(latestAssistantText);
+          this.metrics.dom.attachmentNames = rawAttachments.map(a => a.text);
+          this.metrics.dom.attachmentHashes = rawAttachments.map(a => hashText(a.text + ":" + a.imgSrc));
+          this.metrics.dom.composerState = (raw.progressBarsCount > 0) ? "ATTACHING_FILES" : "READY";
+
           // Sync navigation state
-          if (payload.data.url) {
-            this.metrics.navigation.url = payload.data.url;
-            this.identity.chatUrl = payload.data.url;
-            
+          if (raw.url) {
+            this.metrics.navigation.url = raw.url;
+            this.identity.chatUrl = raw.url;
+
             // Extract conversationId from url path: e.g. /c/xxxxx
             try {
-              const urlObj = new URL(payload.data.url);
+              const urlObj = new URL(raw.url);
               const pathParts = urlObj.pathname.split("/");
               const cIndex = pathParts.indexOf("c");
               if (cIndex !== -1 && pathParts[cIndex + 1]) {
@@ -451,11 +673,11 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
 
           // Sync identity variables
           this.identity.assistantRootIndex = this.metrics.dom.assistantMessageCount;
-          if (payload.data.latestImageUrl) {
-            this.identity.latestImageUrl = payload.data.latestImageUrl;
+          if (raw.latestImageUrl) {
+            this.identity.latestImageUrl = raw.latestImageUrl;
           }
 
-          this.logEvent("DOM_EVENT", "DOM mutations updated metrics", payload.data);
+          this.logEvent("DOM_EVENT", "DOM mutations updated metrics", raw);
           this.triggerStateUpdate("DOM mutation update");
         } else if (payload.type === "NAVIGATION") {
           this.metrics.navigation.url = payload.url;
@@ -483,7 +705,7 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
     const errorMsg = errorDetails.text || "Uncaught JS Exception";
     this.metrics.runtime.lastException = errorMsg;
     this.logEvent("RUNTIME_EVENT", `Exception Thrown: ${errorMsg}`, errorDetails);
-    
+
     // Exceptions can transition to ERROR state
     this.triggerStateUpdate("Exception thrown");
   }
@@ -501,6 +723,27 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
   processIncomingEvent(record) {
     if (record.type === "DOM_EVENT") {
       Object.assign(this.metrics.dom, record.payload);
+
+      // Compute FNV-1a hashes in Main process during simulation
+      if (record.payload.composerText !== undefined) {
+        this.metrics.dom.composerPromptHash = hashText(record.payload.composerText);
+      }
+      if (record.payload.latestUserText !== undefined) {
+        this.metrics.dom.latestUserMessageHash = hashText(record.payload.latestUserText);
+      }
+      if (record.payload.latestAssistantText !== undefined) {
+        this.metrics.dom.latestAssistantText = record.payload.latestAssistantText;
+        this.metrics.dom.latestAssistantHash = hashText(record.payload.latestAssistantText);
+      }
+      if (record.payload.loggedOut !== undefined) {
+        this.metrics.dom.loggedOut = Boolean(record.payload.loggedOut);
+      }
+      if (record.payload.attachments !== undefined) {
+        const rawAttachments = record.payload.attachments || [];
+        this.metrics.dom.attachmentNames = rawAttachments.map(a => a.text);
+        this.metrics.dom.attachmentHashes = rawAttachments.map(a => hashText(a.text + ":" + a.imgSrc));
+        this.metrics.dom.composerState = (record.payload.progressBarsCount > 0) ? "ATTACHING_FILES" : "READY";
+      }
     } else if (record.type === "NETWORK_EVENT") {
       if (record.payload && record.payload.dalleCaptured) {
         this.metrics.network.dalleUrlsCaptured.push(record.payload.dalleCaptured);
@@ -512,11 +755,49 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
     } else if (record.type === "NAVIGATION_EVENT") {
       Object.assign(this.metrics.navigation, record.payload);
     }
-    
+
     this.triggerStateUpdate(record.type);
   }
 
   // --- Core Processing Loop ---
+  clearStabilityTimer() {
+    if (!this.stabilityTimeout) return;
+    clearTimeout(this.stabilityTimeout);
+    this.stabilityTimeout = null;
+  }
+
+  scheduleStateReevaluation(reason, targetIdleMs = 3100) {
+    if (!this.page) return;
+
+    const STABILIZABLE_STATES = new Set([
+      "STREAMING_TEXT",
+      "STREAMING_IMAGE",
+      "IMAGE_PLACEHOLDER",
+      "NETWORK_IMAGE",
+      "IMAGE_DECODE",
+      "WAITING_ASSISTANT",
+      "IDLE"
+    ]);
+
+    if (!STABILIZABLE_STATES.has(this.state)) {
+      this.clearStabilityTimer();
+      return;
+    }
+
+    const ts = this.metrics.dom.lastMutationTimestamp;
+    if (!ts) return;
+
+    const idlePeriod = Date.now() - ts;
+    const remainingMs = Math.max(100, targetIdleMs - idlePeriod);
+
+    this.clearStabilityTimer();
+
+    this.stabilityTimeout = setTimeout(() => {
+      this.stabilityTimeout = null;
+      this.triggerStateUpdate(`State re-evaluation: ${reason}`);
+    }, remainingMs);
+  }
+
   triggerStateUpdate(reason) {
     const oldState = this.state;
     const oldIntent = this.intent;
@@ -527,8 +808,10 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
 
     this.manageWatchdogs();
 
+    this.scheduleStateReevaluation("DOM idle");
+
     const stateChanged = oldState !== this.state || oldIntent !== this.intent;
-    
+
     const eventObj = {
       type: stateChanged ? "STATE_CHANGED" : "METRICS_UPDATE",
       oldState,
@@ -551,6 +834,10 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
 
   // --- Intent Detector Engine ---
   runIntentDetector() {
+    if (this.intentOverride) {
+      this.intent = this.intentOverride;
+      return;
+    }
     const dom = this.metrics.dom;
     const network = this.metrics.network;
 
@@ -580,9 +867,9 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
     const exception = this.metrics.runtime.lastException;
 
     // Strict state prioritization
-    
+
     // 1. Crash/Refusal -> ERROR
-    if (exception || dom.policyRefusalDetected) {
+    if (dom.policyRefusalDetected) {
       this.state = "ERROR";
       return;
     }
@@ -594,7 +881,13 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
     }
 
     // 3. Hydration state
-    if (!dom.composerReady && dom.assistantMessageCount === 0) {
+    if (
+      !dom.composerReady &&
+      dom.assistantMessageCount === 0 &&
+      !dom.textStreamingActive &&
+      this.intent !== "IMAGE_GENERATION" &&
+      (this.state === "IDLE" || this.state === "HYDRATING")
+    ) {
       this.state = "HYDRATING";
       return;
     }
@@ -637,17 +930,11 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
       }
     }
 
-    // 8. Silent stabilization window
+    // 8. READY state (combines finished streaming, complete images, and DOM stability)
     const idlePeriod = Date.now() - dom.lastMutationTimestamp;
-    if (idlePeriod > 800 && idlePeriod < 3000 && (this.state === "STREAMING_TEXT" || this.state === "IMAGE_DECODE")) {
-      this.state = "DOM_STABLE";
-      return;
-    }
-
-    // 9. READY_FOR_EXTRACTION
     const isCompletedAndStable = !dom.textStreamingActive && !dom.placeholderVisible && (idlePeriod >= 3000 || dom.stoppedTextDetected);
-    if (isCompletedAndStable && (this.state === "DOM_STABLE" || this.state === "STREAMING_TEXT" || this.state === "IMAGE_DECODE" || this.state === "NETWORK_IMAGE" || this.state === "IMAGE_PLACEHOLDER")) {
-      this.state = "READY_FOR_EXTRACTION";
+    if (isCompletedAndStable && (this.state === "READY" || this.state === "STREAMING_TEXT" || this.state === "STREAMING_IMAGE" || this.state === "IMAGE_DECODE" || this.state === "NETWORK_IMAGE" || this.state === "IMAGE_PLACEHOLDER" || this.state === "IDLE")) {
+      this.state = "READY";
       return;
     }
 
@@ -700,7 +987,7 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
     const activeState = this.state;
     const dom = this.metrics.dom;
     const idlePeriod = Date.now() - dom.lastMutationTimestamp;
-    
+
     // Clear other state watchdogs (excluding metrics watchdogs)
     for (const stateName of Object.keys(this.watchdogs)) {
       if (stateName !== activeState && stateName !== "METRICS_WATCHDOG_NET" && stateName !== "METRICS_WATCHDOG_DOM") {
@@ -790,7 +1077,7 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
   logEvent(source, text, payload = null) {
     const date = new Date();
     const timestampStr = `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}:${String(date.getSeconds()).padStart(2, "0")}.${String(date.getMilliseconds()).padStart(3, "0")}`;
-    
+
     const logItem = {
       timestamp: timestampStr,
       source,
@@ -800,7 +1087,7 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
     };
 
     this.timeline.push(logItem);
-    
+
     // Cap diagnostics timeline to 1000 items
     if (this.timeline.length > 1000) {
       this.timeline.shift();
@@ -809,90 +1096,62 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
 
   // --- Injected Browser Observers Script ---
   getBrowserScriptCode() {
-    if (window.__chatgptUiMonitorInjected) return;
-    window.__chatgptUiMonitorInjected = true;
+    const { extractConversationSnapshot } = require("./chatgpt_dom");
+    return `
+      if (window.__chatgptUiMonitorInjected) return;
+      window.__chatgptUiMonitorInjected = true;
 
-    let debounceTimer = null;
-    let observer = null;
-    let resizeObserver = null;
-    let intersectionObserver = null;
+      const extractConversationSnapshot = ${extractConversationSnapshot.toString()};
 
-    const emitEvent = (type, data) => {
-      if (typeof window.chatgptUiMonitorBinding === "function") {
-        window.chatgptUiMonitorBinding(JSON.stringify({ type, data }));
-      }
-    };
+      let debounceTimer = null;
+      let observer = null;
+      let resizeObserver = null;
+      let intersectionObserver = null;
 
-    const collectMetrics = () => {
-      try {
-        const bodyText = document.body?.innerText || "";
-        const bodyTail = bodyText.slice(-3000);
+      const emitEvent = (type, data) => {
+        if (typeof window.chatgptUiMonitorBinding === "function") {
+          window.chatgptUiMonitorBinding(JSON.stringify({ type, data }));
+        }
+      };
 
-        // 1. Composer & Upload Elements
-        const composer = document.querySelector("#prompt-textarea, textarea, [contenteditable='true']");
-        const sendBtn = document.querySelector("button[data-testid*='send'], button[aria-label*='Send'], button[aria-label*='Gửi']");
-        const stopBtn = document.querySelector("button[data-testid*='stop'], button[aria-label*='Stop'], button[aria-label*='Dừng']");
-        
-        const attachments = Array.from(document.querySelectorAll("[class*='file-preview'], [class*='attachment']"));
-        const progressBars = Array.from(document.querySelectorAll("[role='progressbar'], [class*='progress']"));
+      const collectMetrics = () => {
+        try {
+          const snap = extractConversationSnapshot({ light: true });
+          const metricsPayload = {
+            composerReady: snap.composerReady,
+            composerBusy: snap.composerBusy,
+            hasUploadedFiles: snap.hasUploadedFiles,
+            attachmentsCount: snap.attachmentsCount,
+            attachmentsCompleted: snap.attachmentsCompleted,
+            progressBarsCount: snap.progressBarsCount,
+            assistantMessageCount: snap.assistantMessageCount,
+            latestAssistantTextLength: snap.latestAssistantTextLength,
+            latestAssistantText: snap.latestAssistantText,
+            composerText: snap.composerText,
+            latestUserText: snap.latestUserText,
+            attachments: snap.attachments,
+            textStreamingActive: snap.textStreamingActive,
+            dalleActive: snap.dalleActive,
+            searchBadgeVisible: snap.searchBadgeVisible,
+            reasoningActive: snap.reasoningActive,
+            pythonCodeInterpreterActive: snap.pythonCodeInterpreterActive,
+            canvasActive: snap.canvasActive,
+            placeholderVisible: snap.placeholderVisible,
+            imageElementCount: snap.imageElementCount,
+            imageCompleteCount: snap.imageCompleteCount,
+            imageAgentTurnCount: snap.imageAgentTurnCount,
+            stoppedTextDetected: snap.stoppedTextDetected,
+            policyRefusalDetected: snap.policyRefusalDetected,
+            loggedOut: snap.loggedOut,
+            lastMutationTimestamp: Date.now(),
+            url: snap.url,
+          };
 
-        // 2. Assistant Message Nodes
-        const assistants = Array.from(document.querySelectorAll("[data-message-author-role='assistant']"));
-        const latestAssistant = assistants.at(-1);
-        const latestText = latestAssistant ? (latestAssistant.innerText || "").trim() : "";
-
-        // 3. Streaming and Generating Clues
-        const isStreaming = Boolean(stopBtn || document.querySelector(".result-streaming, [class*='result-streaming']"));
-        
-        // No regex text matching: Detect DALL-E by looking for Dall-e tool buttons, badges or widget blocks
-        const toolBlocks = Array.from(document.querySelectorAll("[data-message-author-role='assistant'] [class*='tool'], [data-message-author-role='assistant'] [class*='dalle'], .dalle-tool, [data-testid*='dalle']"));
-        const hasDalleTool = toolBlocks.some(block => /dall-e|dalle|image/i.test(block.innerText || block.textContent || block.className || ""));
-        const isDalleActive = hasDalleTool && (isStreaming || progressBars.length > 0 || stopBtn);
-
-        const hasSearchBadge = Boolean(document.querySelector("[class*='search'], [class*='web-search'], .search-badge"));
-        const isReasoning = /\bThinking\b|Đang suy nghĩ/i.test(bodyTail);
-        const isPythonActive = Boolean(document.querySelector("[class*='code-interpreter'], [class*='python']"));
-        const isCanvasActive = Boolean(document.querySelector("[class*='canvas'], #canvas-panel"));
-
-        // 4. Image Placeholders & Canvas Nodes
-        const placeholders = Array.from(document.querySelectorAll("[class*='placeholder'], [class*='loading-image'], .aspect-square div div"));
-        const placeholderVisible = placeholders.some(node => node.getBoundingClientRect().width > 10);
-        
-        const images = latestAssistant ? Array.from(latestAssistant.querySelectorAll("img, canvas")) : [];
-        const completeImages = images.filter(img => img.tagName === "CANVAS" || img.complete);
-
-        const stoppedTextDetected = /stopped creating image|image generation stopped|creation stopped/i.test(bodyTail);
-        const policyRefusalDetected = /policy|refusal|violate|tiêu chuẩn cộng đồng|chính sách/i.test(bodyTail);
-
-        const metricsPayload = {
-          composerReady: Boolean(composer),
-          composerBusy: Boolean(progressBars.length > 0 || stopBtn),
-          hasUploadedFiles: attachments.length > 0,
-          attachmentsCount: attachments.length,
-          attachmentsCompleted: attachments.length - progressBars.length,
-          assistantMessageCount: assistants.length,
-          latestAssistantTextLength: latestText.length,
-          latestAssistantHash: latestText.slice(0, 100),
-          textStreamingActive: isStreaming,
-          dalleActive: isDalleActive,
-          searchBadgeVisible: hasSearchBadge,
-          reasoningActive: isReasoning,
-          pythonCodeInterpreterActive: isPythonActive,
-          canvasActive: isCanvasActive,
-          placeholderVisible: placeholderVisible,
-          imageElementCount: images.length,
-          imageCompleteCount: completeImages.length,
-          stoppedTextDetected,
-          policyRefusalDetected,
-          lastMutationTimestamp: Date.now(),
-          url: window.location.href,
-        };
-
-        emitEvent("DOM_METRICS", metricsPayload);
-      } catch (err) {
-        // Fail silently
-      }
-    };
+          emitEvent("DOM_METRICS", metricsPayload);
+        } catch (err) {
+          // Fail silently
+        }
+      };
 
     const triggerDebounce = () => {
       if (debounceTimer) clearTimeout(debounceTimer);
@@ -945,6 +1204,7 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
 
     // Run initial scan
     collectMetrics();
+    `;
   }
 }
 

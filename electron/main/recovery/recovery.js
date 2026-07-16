@@ -2,10 +2,6 @@ const { appendAppLog } = require("../logging");
 
 let chatGptSceneOrdinal = 0;
 const DURABLE_PIPELINE_BACKOFF_MS = [5000, 10000, 15000, 30000];
-const DEFAULT_GROK_RESULT_RETRY_LIMIT = Math.max(
-  0,
-  Math.min(10, Number(process.env.VIDORA_GROK_RESULT_RETRY_LIMIT || 2) || 2),
-);
 
 async function maybeResetChatGptPageForLongRun(client, rotateEveryScenes = 20) {
   chatGptSceneOrdinal += 1;
@@ -81,41 +77,6 @@ function isChatGptPolicyRefusalText(text = "") {
   );
 }
 
-function normalizeGrokResultRetryLimit(config = {}) {
-  const raw =
-    config.resultRetryLimit ??
-    config.generationRetryLimit ??
-    config.retryLimit ??
-    DEFAULT_GROK_RESULT_RETRY_LIMIT;
-  return Math.max(0, Math.min(10, Number(raw) || 0));
-}
-
-function makeRetryableGrokGenerationError(reason = "unknown", details = {}) {
-  const error = new Error(`grok_retryable_generation_error:${reason}`);
-  error.retryableGrokGeneration = true;
-  error.grokRetryReason = reason;
-  error.details = details;
-  return error;
-}
-
-function isRetryableGrokGenerationError(error) {
-  const message = String(error?.message || error || "");
-  return (
-    Boolean(error?.retryableGrokGeneration) ||
-    /grok_retryable_generation_error|grok_send_failed_external_error|timeout|timed out|request failed|network|fetch|failed to generate|generation failed|couldn'?t generate|unable to generate|error generating|image.*failed|black|blank|no-new-video|manual-download|invalid-video|download/i.test(
-      message,
-    )
-  );
-}
-
-function shouldRecoverFromCacheOrChallenge(state, provider) {
-  if (provider !== "grok") return false;
-  const haystack = `${state?.reason || ""}\n${state?.title || ""}\n${state?.url || ""}\n${state?.sampleText || ""}`;
-  return /cloudflare|security verification|verify you are human|just a moment|checking if the site connection|challenge|ray id|grok\.com\s+performing security/i.test(
-    haystack,
-  );
-}
-
 module.exports = {
   maybeResetChatGptPageForLongRun,
   maybeRotateChatGptConversation,
@@ -123,8 +84,4 @@ module.exports = {
   normalizeChatGptRetryText,
   isRetryableChatGptToolErrorText,
   isChatGptPolicyRefusalText,
-  normalizeGrokResultRetryLimit,
-  makeRetryableGrokGenerationError,
-  isRetryableGrokGenerationError,
-  shouldRecoverFromCacheOrChallenge,
 };
