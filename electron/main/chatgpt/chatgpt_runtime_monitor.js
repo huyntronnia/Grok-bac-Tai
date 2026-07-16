@@ -17,6 +17,8 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
   constructor() {
     super();
     this.page = null;
+    this.playwrightPage = null;
+    this.playwrightListeners = [];
     this.state = "IDLE";
     this.intent = "UNKNOWN";
     this.confidence = 1.0;
@@ -81,6 +83,7 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
         placeholderVisible: false,
         imageElementCount: 0,
         imageCompleteCount: 0,
+        imageAgentTurnCount: 0,
         stoppedTextDetected: false,
         policyRefusalDetected: false,
         loggedOut: false,
@@ -139,6 +142,7 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
       placeholderVisible: false,
       imageElementCount: 0,
       imageCompleteCount: 0,
+      imageAgentTurnCount: 0,
       stoppedTextDetected: false,
       policyRefusalDetected: false,
       loggedOut: false,
@@ -173,6 +177,9 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
     if (!page) {
       throw new Error("Cannot start monitor: CDP page client is missing.");
     }
+    if (this.page) {
+      await this.stopMonitoring().catch(() => null);
+    }
     this.reset();
     this.page = page;
     this.health.cdpConnected = true;
@@ -182,6 +189,11 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
     if (page.clientType === "playwright") {
       try {
         const rawPage = page.page;
+        this.playwrightPage = rawPage;
+        const onPlaywright = (event, handler) => {
+          rawPage.on(event, handler);
+          this.playwrightListeners.push({ event, handler });
+        };
 
         await rawPage.exposeFunction("chatgptUiMonitorBinding", (payloadStr) => {
           this.onBindingCalled({
@@ -198,7 +210,7 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
           return reqIdMap.get(req);
         };
 
-        rawPage.on("response", (response) => {
+        onPlaywright("response", (response) => {
           const requestId = getReqId(response.request());
           this.onResponseReceived({
             requestId,
@@ -209,19 +221,19 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
           });
         });
 
-        rawPage.on("requestfinished", (request) => {
+        onPlaywright("requestfinished", (request) => {
           const requestId = getReqId(request);
           this.onLoadingFinished({ requestId });
         });
 
-        rawPage.on("console", (msg) => {
+        onPlaywright("console", (msg) => {
           this.onConsoleAPICalled({
             type: msg.type(),
             args: msg.args().map(arg => ({ value: String(arg) })),
           });
         });
 
-        rawPage.on("pageerror", (error) => {
+        onPlaywright("pageerror", (error) => {
           this.onExceptionThrown({
             exceptionDetails: {
               text: error.message,
@@ -232,7 +244,7 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
           });
         });
 
-        rawPage.on("framenavigated", (frame) => {
+        onPlaywright("framenavigated", (frame) => {
           this.onFrameNavigated({
             frame: {
               parentId: frame.parentFrame() ? "child" : undefined,
@@ -298,6 +310,14 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
   async stopMonitoring() {
     this.logEvent("SYSTEM", "Monitoring stopping");
     this.clearAllWatchdogs();
+
+    if (this.playwrightPage) {
+      for (const { event, handler } of this.playwrightListeners) {
+        this.playwrightPage.off(event, handler);
+      }
+    }
+    this.playwrightListeners = [];
+    this.playwrightPage = null;
 
     if (this.page && typeof this.page.off === "function") {
       try {
@@ -611,6 +631,9 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
           this.metrics.dom.placeholderVisible = Boolean(raw.placeholderVisible);
           this.metrics.dom.imageElementCount = Number(raw.imageElementCount || 0);
           this.metrics.dom.imageCompleteCount = Number(raw.imageCompleteCount || 0);
+          this.metrics.dom.imageAgentTurnCount = Number(
+            raw.imageAgentTurnCount || 0,
+          );
           this.metrics.dom.stoppedTextDetected = Boolean(raw.stoppedTextDetected);
           this.metrics.dom.policyRefusalDetected = Boolean(raw.policyRefusalDetected);
           this.metrics.dom.loggedOut = Boolean(raw.loggedOut);
@@ -858,7 +881,13 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
     }
 
     // 3. Hydration state
-    if (!dom.composerReady && dom.assistantMessageCount === 0) {
+    if (
+      !dom.composerReady &&
+      dom.assistantMessageCount === 0 &&
+      !dom.textStreamingActive &&
+      this.intent !== "IMAGE_GENERATION" &&
+      (this.state === "IDLE" || this.state === "HYDRATING")
+    ) {
       this.state = "HYDRATING";
       return;
     }
@@ -1110,6 +1139,7 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
             placeholderVisible: snap.placeholderVisible,
             imageElementCount: snap.imageElementCount,
             imageCompleteCount: snap.imageCompleteCount,
+            imageAgentTurnCount: snap.imageAgentTurnCount,
             stoppedTextDetected: snap.stoppedTextDetected,
             policyRefusalDetected: snap.policyRefusalDetected,
             loggedOut: snap.loggedOut,
@@ -1121,7 +1151,7 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
         } catch (err) {
           // Fail silently
         }
-      };`;
+      };
 
     const triggerDebounce = () => {
       if (debounceTimer) clearTimeout(debounceTimer);
@@ -1174,6 +1204,7 @@ class ChatGPTRuntimeMonitor extends EventEmitter {
 
     // Run initial scan
     collectMetrics();
+    `;
   }
 }
 

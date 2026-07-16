@@ -1,12 +1,12 @@
 {
   "name": "vidora",
   "version": "1.0.0",
-  "description": "Vidora desktop workflow app for AI video scene batching, prompt review, keyframe generation, and Grok video automation.",
+  "description": "Vidora desktop workflow app for AI video scene batching, prompt review, ChatGPT keyframe generation, and VeoUp video automation.",
   "main": "electron/main.js",
   "scripts": {
     "start": "electron .",
     "dev": "electron .",
-    "test": "node -r ./tests/normalize-hook.js tests/partial-mode-cleanup.test.js && node -r ./tests/normalize-hook.js tests/pipeline-stop-cancellation.test.js && node -r ./tests/normalize-hook.js tests/veoup-output-lifecycle.test.js && node -r ./tests/normalize-hook.js tests/chatgpt-stage-isolation.test.js && node -r ./tests/normalize-hook.js tests/renderer-legacy-project-migration.test.js && node -r ./tests/normalize-hook.js tests/ipc-parity-manual-chatgpt.test.js && node -r ./tests/normalize-hook.js tests/no-auto-chatgpt-rotation.test.js",
+    "test": "node ./tests/run-all-tests.js",
     "dist": "electron-builder --win nsis --x64"
   },
   "keywords": [
@@ -32,10 +32,6 @@
       "node_modules/ffmpeg-static/**/*"
     ],
     "extraResources": [
-      {
-        "from": "2 NHIỆM VỤ BẰNG PROMPT.txt",
-        "to": "prompts/2 NHIỆM VỤ BẰNG PROMPT.txt"
-      },
       {
         "from": "node_modules/ffmpeg-static/ffmpeg.exe",
         "to": "ffmpeg.exe"

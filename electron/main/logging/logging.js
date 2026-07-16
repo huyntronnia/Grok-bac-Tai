@@ -141,7 +141,7 @@ function sanitizeLogString(value = "") {
         }
         const host = parsed.hostname.toLowerCase();
         const safePath = parsed.pathname || "/";
-        if (host === "grok.com" || host === "chatgpt.com")
+        if (host === "chatgpt.com")
           return `${parsed.origin}${safePath}`;
         return `${parsed.origin}/...`;
       } catch (_error) {
@@ -329,9 +329,9 @@ async function appendAppLog(first, second, third, fourth) {
         .catch(() => null);
       if (processInfo) {
         rendererMemory = {
-          privateBytes: processInfo.privateBytes,
-          sharedBytes: processInfo.sharedBytes,
-          residentSetBytes: processInfo.residentSetBytes,
+          privateBytes: Number(processInfo.private || 0) * 1024,
+          sharedBytes: Number(processInfo.shared || 0) * 1024,
+          residentSetBytes: Number(processInfo.residentSet || 0) * 1024,
         };
       }
     } catch (_err) {}

@@ -80,7 +80,7 @@ async function uploadFilesToChatGptSequentially(
 
     const pageState = await getConversationState(page);
     const existingNames = (pageState.attachmentNames || []).map(n => n.toLowerCase());
-    const characterCount = Number(options.characterCount || 0);
+    const prepromptCount = Number(options.prepromptCount || 0);
 
     for (let index = 0; index < filePaths.length; index += 1) {
       const filePath = filePaths[index];
@@ -96,11 +96,11 @@ async function uploadFilesToChatGptSequentially(
         continue;
       }
 
-      if (index < characterCount) {
+      if (index < prepromptCount) {
         await appendAppLog(null, {
           source: "main",
           kind: "running",
-          text: `Scene ${sceneId}: Uploading character preset ${index + 1}/${characterCount}.`,
+          text: `Scene ${sceneId}: Uploading preprompt file ${index + 1}/${prepromptCount}.`,
         });
       } else {
         await appendAppLog(null, {
@@ -212,7 +212,7 @@ async function uploadFilesToChatGptSequentially(
   const pageState = await getConversationState(page);
   const existingNames = (pageState.attachmentNames || []).map(n => n.toLowerCase());
 
-  const characterCount = Number(options.characterCount || 0);
+  const prepromptCount = Number(options.prepromptCount || 0);
   // Sequentially upload each file with staggered delays
   for (let index = 0; index < filePaths.length; index += 1) {
     const filePath = filePaths[index];
@@ -229,11 +229,11 @@ async function uploadFilesToChatGptSequentially(
       continue;
     }
 
-    if (index < characterCount) {
+    if (index < prepromptCount) {
       await appendAppLog(null, {
         source: "main",
         kind: "running",
-        text: `Scene ${sceneId}: Uploading character preset ${index + 1}/${characterCount}.`,
+        text: `Scene ${sceneId}: Uploading preprompt file ${index + 1}/${prepromptCount}.`,
       });
     } else {
       await appendAppLog(null, {

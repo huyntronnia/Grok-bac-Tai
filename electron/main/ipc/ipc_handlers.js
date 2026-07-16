@@ -15,18 +15,14 @@ function initIpcHandlers(runtime) {
     openHardPromptFile,
     getHardPromptFileInfo,
     chooseHardPromptFile,
-    openGrokRouterFolder,
-    getGrokRouterStatus,
-    listGrokAccountsSafe,
-    selectGrokAccount,
-    setAccountRouterEnabled,
-    resumeFromRouterCheckpoint,
     listWebAccountsSafe,
     saveWebAccount,
     deleteWebAccount,
     getPipelineLogVisibility,
     openWebLogin,
     checkWebLogin,
+    clearChatGptCacheHandler,
+    openFreshChatGptHandler,
     sendPromptViaWeb,
     runScenePipeline,
     stopPipeline,
@@ -51,11 +47,10 @@ function initIpcHandlers(runtime) {
     overwriteProjectSessionFile,
     createProjectSessionFile,
     openProjectSessionFile,
+    openLastProjectSessionFile,
     ensureProjectSceneFolders,
-    importCharacterPresetsHandler,
+    openProjectPrepromptFolderHandler,
     runVeoUpAutomation,
-    clearChatGptCacheHandler,
-    openFreshChatGptHandler,
     getChatGptSendState,
     isReloadBlocked,
   } = runtime;
@@ -94,18 +89,20 @@ function initIpcHandlers(runtime) {
   ipcMain.handle("prompt:open-hard-file", openHardPromptFile);
   ipcMain.handle("prompt:get-hard-file", getHardPromptFileInfo);
   ipcMain.handle("prompt:choose-hard-file", chooseHardPromptFile);
-  ipcMain.handle("router:open-grok-folder", openGrokRouterFolder);
-  ipcMain.handle("router:get-status", getGrokRouterStatus);
-  ipcMain.handle("router:list-accounts-safe", listGrokAccountsSafe);
-  ipcMain.handle("router:select-account", selectGrokAccount);
-  ipcMain.handle("router:set-enabled", setAccountRouterEnabled);
-  ipcMain.handle("router:resume-checkpoint", resumeFromRouterCheckpoint);
   ipcMain.handle("accounts:list-safe", listWebAccountsSafe);
   ipcMain.handle("accounts:save", saveWebAccount);
   ipcMain.handle("accounts:delete", deleteWebAccount);
   ipcMain.handle("view:get-pipeline-log-visible", getPipelineLogVisibility);
   ipcMain.handle("browser:open-login", openWebLogin);
   ipcMain.handle("browser:check-login", checkWebLogin);
+  ipcMain.handle(
+    "chatgpt:clear-cache",
+    safeIpcHandler(clearChatGptCacheHandler),
+  );
+  ipcMain.handle(
+    "chatgpt:open-fresh-chat",
+    safeIpcHandler(openFreshChatGptHandler),
+  );
   ipcMain.handle("browser:send-prompt", sendPromptViaWeb);
   ipcMain.handle("pipeline:run-scene", safeIpcHandler(runScenePipeline));
   ipcMain.handle('pipeline:stop', safeIpcHandler(stopPipeline));
@@ -130,24 +127,17 @@ function initIpcHandlers(runtime) {
     "chatgpt:rename-current-chat",
     renameChatGptCurrentConversation,
   );
-  ipcMain.handle(
-    "chatgpt:clear-cache",
-    safeIpcHandler(clearChatGptCacheHandler),
-  );
-  ipcMain.handle(
-    "chatgpt:open-fresh-chat",
-    safeIpcHandler(openFreshChatGptHandler),
-  );
   ipcMain.handle("project:export", exportProject);
   ipcMain.handle("project:new-session", newProjectSession);
   ipcMain.handle("project:save-session-file", saveProjectSessionFile);
   ipcMain.handle("project:overwrite-session-file", overwriteProjectSessionFile);
   ipcMain.handle("project:create-session-file", createProjectSessionFile);
   ipcMain.handle("project:open-session-file", openProjectSessionFile);
+  ipcMain.handle("project:open-last-session-file", openLastProjectSessionFile);
   ipcMain.handle("project:ensure-scene-folders", ensureProjectSceneFolders);
   ipcMain.handle(
-    "project:import-character-presets",
-    safeIpcHandler(importCharacterPresetsHandler),
+    "project:open-preprompt-folder",
+    safeIpcHandler(openProjectPrepromptFolderHandler),
   );
   ipcMain.handle("veoup:run-automation", safeIpcHandler(runVeoUpAutomation));
 

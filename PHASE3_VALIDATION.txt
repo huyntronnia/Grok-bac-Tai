@@ -1,0 +1,44 @@
+Vidora Phase 3 validation
+=========================
+
+JavaScript syntax: PASS
+npm test: PASS (8 suites, including Phase 1/2/3 guards)
+tests/phase3-veoup-main-cleanup.test.js: PASS
+
+Phase 3 invariants
+------------------
+PASS: pipeline_runner fixes videoProvider to VeoUp.
+PASS: pipeline runner has no Grok/PixVerse/router dependency.
+PASS: generateVideoWithProvider is an unconditional VeoUp adapter.
+PASS: VeoUp submission acknowledgement, association and final video validation remain enforced.
+PASS: runtimePipelineRunner no longer injects Grok router helpers.
+PASS: main.js has no Grok/PixVerse browser-video engine or DOM scripts.
+PASS: ChatGPT DOM, browser recovery and shared recovery helpers contain no Grok/PixVerse behavior.
+PASS: generic account IPC and both manual ChatGPT IPC handlers remain registered.
+PASS: Phase 1 no-auto-rotation, cancellation, migration and Phase 2 IPC/UI guards remain passing.
+
+Compatibility exception
+-----------------------
+The only Grok-named code retained in main.js is the legacy `.grokproj` project schema/filter.
+This is file-format compatibility, not a runtime provider, router, UI or browser engine.
+
+Direct tests/*.test.js: 18 PASS, 10 FAIL
+----------------------------------------
+The pass count increased by one because Phase 3 adds one test. The same ten pre-existing
+worktree/baseline or unavailable-Electron failures remain:
+- character-presets-folder.test.js
+- chatgpt-network-image-extract.test.js
+- chatgpt-nv2-stable-text-response.test.js
+- chatgpt-runtime-monitor.test.js (Electron module unavailable to direct Node)
+- nv2-conversation-url.test.js
+- nv2-text-only-flow.test.js
+- pipeline-durable-recovery.test.js
+- project-characters-folder-lifecycle.test.js
+- veoup-client-coordinate-mapping.test.js (Electron module unavailable to direct Node)
+- veoup-launch-recovery.test.js
+
+Environment note
+----------------
+The container exports an invalid Node proxy URL. Tests pass when HTTP_PROXY, HTTPS_PROXY,
+ALL_PROXY and their lowercase variants are unset for the test process.
+Electron GUI smoke testing was not run in the container.

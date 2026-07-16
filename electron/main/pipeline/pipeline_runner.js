@@ -6,7 +6,7 @@ const fs = require("fs/promises");
 const path = require("path");
 
 const { appendAppLog, maskRouterText } = require("../logging");
-const { pathExists, sleep, getFfmpegBinaryPath, normalizeVideoProvider, normalizeContinuityReferenceSettings, findSceneKeyframePathSafe, validateContinuityReferenceImage } = require("../utils");
+const { pathExists, sleep, getFfmpegBinaryPath, normalizeContinuityReferenceSettings, findSceneKeyframePathSafe, validateContinuityReferenceImage } = require("../utils");
 const { getDurablePipelineBackoffMs } = require("../recovery");
 const { logMemoryMilestone } = require("../memory");
 const {
@@ -38,6 +38,7 @@ const {
   forceCleanChatGptNewChatRotation,
   isChatGptRequestRotationEligible,
   countChatGptAssistantRootsScript,
+  countChatGptImageAgentTurnsScript,
   adoptExistingSceneImage,
   decodeImageBufferToPng,
   validateSavedImageFile,
@@ -74,10 +75,6 @@ let openFreshChatGptRootPage;
 let assertChatGptNotExistingConversation;
 let generateImageWithImageApi;
 let generateVideoWithProvider;
-let selectGrokAccount;
-let setAccountRouterEnabled;
-let getGrokRouterStatus;
-let classifyGrokRouterError;
 let loadHardPromptTasks;
 let buildImageStagePrompt;
 let buildMotionStagePrompt;
@@ -85,8 +82,6 @@ let getSceneMediaPaths;
 let validateLocalVideoFile;
 let extractContinuityReferencesFromVideo;
 let hydrateFreshChatGptContextAfterRotation;
-let writeGrokRouterCheckpoint;
-let pauseGrokRouterForError;
 
 function initPipelineRunner(runtime = {}) {
   getCdpPage = runtime.getCdpPage;
@@ -97,10 +92,6 @@ function initPipelineRunner(runtime = {}) {
   assertChatGptNotExistingConversation = runtime.assertChatGptNotExistingConversation;
   generateImageWithImageApi = runtime.generateImageWithImageApi;
   generateVideoWithProvider = runtime.generateVideoWithProvider;
-  selectGrokAccount = runtime.selectGrokAccount;
-  setAccountRouterEnabled = runtime.setAccountRouterEnabled;
-  getGrokRouterStatus = runtime.getGrokRouterStatus;
-  classifyGrokRouterError = runtime.classifyGrokRouterError;
   loadHardPromptTasks = runtime.loadHardPromptTasks;
   buildImageStagePrompt = runtime.buildImageStagePrompt;
   buildMotionStagePrompt = runtime.buildMotionStagePrompt;
@@ -108,8 +99,6 @@ function initPipelineRunner(runtime = {}) {
   validateLocalVideoFile = runtime.validateLocalVideoFile;
   extractContinuityReferencesFromVideo = runtime.extractContinuityReferencesFromVideo;
   hydrateFreshChatGptContextAfterRotation = runtime.hydrateFreshChatGptContextAfterRotation;
-  writeGrokRouterCheckpoint = runtime.writeGrokRouterCheckpoint;
-  pauseGrokRouterForError = runtime.pauseGrokRouterForError;
 }
 
 // --- Moved State Variables ---
@@ -127,27 +116,104 @@ const chatGptScenePrefetchLocks = new Map();
 const scenePipelineLocks = new Map();
 
 const scenePipelineFailureTracker = {};
+const MAX_SCENE_RECOVERY_CYCLES = 2;
 
 async function readChatGptAssistantCountForInit(sceneId = 0) {
   const page = await getCdpPage("chatgpt", true, { bringToFront: true }).catch(() => null);
   if (!page) return null;
-  const state = await evaluateOnCdpPage(
-    page,
-    `(${countChatGptAssistantRootsScript.toString()})()`,
-  ).catch(() => null);
-  const count = Number(state?.count ?? state ?? 0);
-  if (!Number.isFinite(count)) return null;
-  await appendAppLog(null, {
-    source: "main",
-    kind: "running",
-    text: `ChatGPT chat-init gate: assistantCount=${count}.`,
-    details: { sceneId, assistantCount: count },
-  }).catch(() => null);
-  return count;
+  try {
+    const state = await evaluateOnCdpPage(
+      page,
+      `(${countChatGptAssistantRootsScript.toString()})()`,
+    ).catch(() => null);
+    const count = Number(state?.count ?? state ?? 0);
+    if (!Number.isFinite(count)) return null;
+    await appendAppLog(null, {
+      source: "main",
+      kind: "running",
+      text: `ChatGPT chat-init gate: assistantCount=${count}.`,
+      details: { sceneId, assistantCount: count },
+    }).catch(() => null);
+    return count;
+  } finally {
+    await page.close().catch(() => null);
+  }
+}
+
+async function refreshCurrentChatForLongRunMemory(
+  sceneId,
+  runId,
+  reason = "periodic-long-run-refresh",
+) {
+  let page = null;
+  try {
+    page = await getCdpPage("chatgpt", true, {
+      bringToFront: false,
+      recover: false,
+    });
+    const before = await evaluateOnCdpPage(
+      page,
+      `(() => {
+        const path = location.pathname || "";
+        return {
+          path,
+          conversationId: (path.match(/\\/c\\/([^/?#]+)/) || [])[1] || "",
+        };
+      })()`,
+    ).catch(() => ({}));
+    if (!before?.conversationId) {
+      throw new Error("long-run-memory-refresh-missing-conversation-id");
+    }
+    const state = await getConversationState(page).catch(() => ({}));
+    if (state?.stopButtonVisible || state?.streaming) {
+      throw new Error("long-run-memory-refresh-chat-still-generating");
+    }
+    const reloaded = await requestReloadWithReason(
+      page,
+      "long-run-memory-refresh",
+      sceneId,
+      { allowWaitAcceptAtSafeBoundary: true },
+    );
+    if (!reloaded) {
+      throw new Error("long-run-memory-refresh-blocked");
+    }
+    await waitForCdpLoad(page).catch(() => null);
+    await sleep(4000);
+    assertPipelineRunActive(runId);
+    const after = await evaluateOnCdpPage(
+      page,
+      `(() => {
+        const path = location.pathname || "";
+        return {
+          path,
+          conversationId: (path.match(/\\/c\\/([^/?#]+)/) || [])[1] || "",
+        };
+      })()`,
+    ).catch(() => ({}));
+    if (after?.conversationId !== before.conversationId) {
+      throw new Error(
+        `long-run-memory-refresh-conversation-changed:${before.conversationId}:${after?.conversationId || "none"}`,
+      );
+    }
+    await appendAppLog(null, {
+      source: "main",
+      kind: "ok",
+      text: `ChatGPT long-run memory refresh completed in the same conversation after scene ${sceneId}.`,
+      details: {
+        sceneId,
+        reason,
+        conversationId: before.conversationId,
+      },
+    }).catch(() => null);
+    return { ok: true, conversationId: before.conversationId };
+  } finally {
+    if (page) await page.close().catch(() => null);
+  }
 }
 
 let sessionSceneCounter = 0;
 const CHAT_ROTATION_ENABLED = false;
+const CHAT_MEMORY_REFRESH_EVERY_SCENES = 5;
 
 // --- Moved Functions ---
 function getScopedPipelineRunId() {
@@ -266,26 +332,12 @@ function sanitizeScenePipelineResult(result = {}) {
           paths: safePaths(result.generatedContinuityReferences.paths),
         }
       : null;
-  const router =
-    result.router && typeof result.router === "object"
-      ? {
-          paused: Boolean(result.router.paused),
-          selectedAccountId: safeText(result.router.selectedAccountId, 200),
-          routingPolicy: safeText(result.router.routingPolicy, 200),
-          pauseReason: safeText(result.router.pauseReason, 500),
-          lastErrorClassification: safeText(
-            result.router.lastErrorClassification,
-            300,
-          ),
-        }
-      : null;
   return {
     ok: Boolean(result.ok),
     sceneId: result.sceneId || null,
     sceneDir: safeText(result.sceneDir, 1000),
     phase: safeText(result.phase, 100),
     imagePath: safeText(result.imagePath, 1000),
-    imageDataUrl: safeText(result.imageDataUrl, 8_000_000),
     imagePromptUsed: safeText(result.imagePromptUsed, 50000),
     motionPrompt: safeText(result.motionPrompt, 50000),
     videoPath: safeText(result.videoPath, 1000),
@@ -303,7 +355,6 @@ function sanitizeScenePipelineResult(result = {}) {
     continuityReferenceSourceScene:
       result.continuityReferenceSourceScene || null,
     generatedContinuityReferences: refs,
-    router,
   };
 }
 
@@ -685,7 +736,8 @@ async function runScenePipelineLocked(_event, options) {
         },
       ).catch(() => null);
 
-      // Rotate after 3 fully successful scenes (only increment on active browser actions):
+      // Count only full ChatGPT scenes. The counter drives a same-conversation
+      // refresh, never an automatic conversation rotation.
       const fullChatGptSceneSucceeded = Boolean(
         options?.__nv1Succeeded && options?.__nv2Succeeded,
       );
@@ -698,13 +750,13 @@ async function runScenePipelineLocked(_event, options) {
         await appendAppLog(null, {
           source: "main",
           kind: "ok",
-          text: `Scene ${sceneId} completed successfully (active ChatGPT browser run). Session scene counter: ${sessionSceneCounter}/3.`,
+          text: `Scene ${sceneId} completed successfully (active ChatGPT browser run). Memory refresh counter: ${sessionSceneCounter}/${CHAT_MEMORY_REFRESH_EVERY_SCENES}.`,
         }).catch(() => null);
       } else {
         await appendAppLog(null, {
           source: "main",
           kind: "ok",
-          text: `Scene ${sceneId} completed successfully (cached or partial ChatGPT browser run). Session scene counter: ${sessionSceneCounter}/3 (no increment without NV1+NV2 success).`,
+          text: `Scene ${sceneId} completed successfully (cached or partial ChatGPT browser run). Memory refresh counter: ${sessionSceneCounter}/${CHAT_MEMORY_REFRESH_EVERY_SCENES} (no increment without NV1+NV2 success).`,
           details: {
             nv1Succeeded: Boolean(options?.__nv1Succeeded),
             nv2Succeeded: Boolean(options?.__nv2Succeeded),
@@ -741,6 +793,33 @@ async function runScenePipelineLocked(_event, options) {
         assertPipelineRunActive(runId);
         await hydrateFreshChatGptContextAfterRotation(options, sceneId);
         assertPipelineRunActive(runId);
+        sessionSceneCounter = 0;
+      }
+      const memoryRefreshScheduled = Boolean(
+        globalThis.__vidoraSafeExitRotationScheduled ||
+        globalThis.__vidoraSafeMemoryRefreshScheduled,
+      );
+      const periodicMemoryRefreshDue = Boolean(
+        fullChatGptSceneSucceeded &&
+        sessionSceneCounter >= CHAT_MEMORY_REFRESH_EVERY_SCENES,
+      );
+      if (periodicMemoryRefreshDue || memoryRefreshScheduled) {
+        globalThis.__vidoraSafeExitRotationScheduled = false;
+        globalThis.__vidoraSafeMemoryRefreshScheduled = false;
+        const reason = memoryRefreshScheduled
+          ? "memory-guard-threshold"
+          : `scene-interval-${CHAT_MEMORY_REFRESH_EVERY_SCENES}`;
+        await appendAppLog(null, {
+          source: "main",
+          kind: "running",
+          text: `ChatGPT long-run memory maintenance: refreshing the same conversation after scene ${sceneId}.`,
+          details: {
+            sceneId,
+            reason,
+            sessionSceneCounter,
+          },
+        }).catch(() => null);
+        await refreshCurrentChatForLongRunMemory(sceneId, runId, reason);
         sessionSceneCounter = 0;
       }
       const sceneAlreadyCompleted = Boolean(result?.alreadyCompleted);
@@ -861,9 +940,11 @@ async function runScenePipelineLocked(_event, options) {
             error: error?.message || String(error),
           },
         }).catch(() => null);
-        assertPipelineRunActive(runId);
-        await sleep(1500);
-        continue;
+        if (consecutiveFailures < MAX_SCENE_RECOVERY_CYCLES) {
+          assertPipelineRunActive(runId);
+          await sleep(1500);
+          continue;
+        }
       }
 
       if (
@@ -954,6 +1035,27 @@ async function runScenePipelineLocked(_event, options) {
         lastError: error?.message || String(error),
         lastErrorAt: new Date().toISOString(),
       }).catch(() => null);
+      if (retryCount >= MAX_SCENE_RECOVERY_CYCLES) {
+        await persistDurableStage(projectDir, sceneId, currentStage, {
+          ok: false,
+          paused: true,
+          active: false,
+          waitingForUserStart: true,
+          recoveryLimitReached: true,
+          retryCount,
+          attemptCount: retryCount,
+          lastError: error?.message || String(error),
+          pausedAt: new Date().toISOString(),
+        }).catch(() => null);
+        await notifyRenderer?.(
+          "pipeline-paused",
+          `Scene ${sceneId}: đã dùng đủ ${MAX_SCENE_RECOVERY_CYCLES} chu kỳ phục hồi. Pipeline đã lưu checkpoint và dừng để tránh lặp vô hạn.`,
+          { sceneId, retryCount, currentStage, recoveryLimitReached: true },
+        ).catch(() => null);
+        throw new Error(
+          `PIPELINE_PAUSED_AFTER_RECOVERY_LIMIT:scene-${sceneId}:${error?.message || String(error)}`,
+        );
+      }
       await appendAppLog(null, {
         source: "main",
         kind: "running",
@@ -964,32 +1066,6 @@ async function runScenePipelineLocked(_event, options) {
           error: error?.message || String(error),
         },
       }).catch(() => null);
-      if (!isVeoUpFailure && retryCount >= 3) {
-        await appendAppLog(null, {
-          source: "main",
-          kind: "warning",
-          text: `Scene ${sceneId} [${currentStage}]: retry ${retryCount} reached; refreshing ChatGPT before next attempt.`,
-          details: {
-            retryCount,
-            currentStage,
-            error: error?.message || String(error),
-          },
-        }).catch(() => null);
-        const refreshPage = await getCdpPage("chatgpt", true, {
-          bringToFront: true,
-        }).catch(() => null);
-        if (refreshPage) {
-          if (typeof refreshPage.reload === "function") {
-            await refreshPage.reload().catch(() => null);
-          } else if (refreshPage.Page?.reload) {
-            await refreshPage.Page.reload({ ignoreCache: true }).catch(
-              () => null,
-            );
-          }
-          await waitForCdpLoad(refreshPage).catch(() => null);
-          await sleep(5000);
-        }
-      }
       await sleep(retryDelayMs);
       assertPipelineRunActive(runId);
       continue;
@@ -1084,15 +1160,7 @@ async function runScenePipelineLockedInternal(_event, options) {
   if (motionPrompt)
     await fs.writeFile(existingMotionPromptPath, motionPrompt, "utf8");
 
-  const videoProvider = normalizeVideoProvider(options.videoProvider);
-  const videoAccount =
-    videoProvider === "grok" ? options.videoAccount || "" : "";
-  const requestedRouterEnabled =
-    videoProvider === "grok" && Boolean(options.accountRouterEnabled);
-  const routerActive = requestedRouterEnabled && videoProvider === "grok";
-  const routingPolicy = routerActive
-    ? "round_robin"
-    : options.routingPolicy || "manual";
+  const videoProvider = "veoup";
   const videoConfig = options.videoConfig || {};
   const continuitySettings = normalizeContinuityReferenceSettings(
     options.continuityReferences || options.continuity || {},
@@ -1102,26 +1170,11 @@ async function runScenePipelineLockedInternal(_event, options) {
     sceneId,
     settings: continuitySettings,
   });
-  if (videoProvider === "grok") grokRouterState.routingPolicy = "round_robin";
-  if (
-    videoProvider === "grok" &&
-    requestedRouterEnabled !== grokRouterState.accountRouterEnabled
-  ) {
-    await setAccountRouterEnabled(null, requestedRouterEnabled);
-  }
-  if (routerActive && videoAccount)
-    await selectGrokAccount(null, videoAccount).catch(() => null);
-
   await appendAppLog(null, {
     source: "main",
     kind: "info",
     text: `Scene ${sceneId}: video provider ${videoProvider}`,
-    details: {
-      videoProvider,
-      videoAccount: maskRouterText(videoAccount),
-      routingPolicy,
-      accountRouterEnabled: routerActive,
-    },
+    details: { videoProvider },
   });
 
   const expectedImagePath = path.join(
@@ -1152,47 +1205,94 @@ async function runScenePipelineLockedInternal(_event, options) {
     }
 
     let beforeAssistantCount = existingDurableState.beforeAssistantCount;
-    if (beforeAssistantCount === undefined || beforeAssistantCount === null) {
+    let beforeImageAgentTurnCount =
+      existingDurableState.beforeImageAgentTurnCount;
+    if (
+      beforeAssistantCount === undefined ||
+      beforeAssistantCount === null ||
+      beforeImageAgentTurnCount === undefined ||
+      beforeImageAgentTurnCount === null
+    ) {
       if (imageProvider?.method !== "api") {
         const page = await getCdpPage("chatgpt", true).catch(() => null);
         if (page) {
-          const counts = await evaluateOnCdpPage(
-            page,
-            `(${countChatGptAssistantRootsScript.toString()})()`,
-          ).catch(() => ({ count: 0 }));
-          beforeAssistantCount = counts.count;
+          try {
+            if (beforeAssistantCount === undefined || beforeAssistantCount === null) {
+              const counts = await evaluateOnCdpPage(
+                page,
+                `(${countChatGptAssistantRootsScript.toString()})()`,
+              ).catch(() => ({ count: 0 }));
+              beforeAssistantCount = counts.count;
+            }
+            if (
+              beforeImageAgentTurnCount === undefined ||
+              beforeImageAgentTurnCount === null
+            ) {
+              const imageTurnCounts = await evaluateOnCdpPage(
+                page,
+                `(${countChatGptImageAgentTurnsScript.toString()})()`,
+              ).catch(() => ({ count: 0 }));
+              // A scene state written by an older build already has an assistant
+              // baseline but no image-turn baseline. Use zero for that migration
+              // so a completed current image is not accidentally skipped.
+              beforeImageAgentTurnCount =
+                existingDurableState.beforeAssistantCount === undefined ||
+                existingDurableState.beforeAssistantCount === null
+                  ? Number(imageTurnCounts.count || 0)
+                  : 0;
+            }
+          } finally {
+            await page.close().catch(() => null);
+          }
         }
       }
       if (beforeAssistantCount === undefined || beforeAssistantCount === null) {
         beforeAssistantCount = 0;
       }
-      await writePipelineSceneState(projectDir, sceneId, { beforeAssistantCount }).catch(() => null);
+      if (
+        beforeImageAgentTurnCount === undefined ||
+        beforeImageAgentTurnCount === null
+      ) {
+        beforeImageAgentTurnCount = 0;
+      }
+      await writePipelineSceneState(projectDir, sceneId, {
+        beforeAssistantCount,
+        beforeImageAgentTurnCount,
+      }).catch(() => null);
     }
 
     // Try adopting existing scene image from chat history before starting NV1 requests
     if (imageProvider?.method !== "api" && !getChatGptContextFresh()) {
       const page = await getCdpPage("chatgpt", true).catch(() => null);
       if (page) {
-        const adoptRes = await adoptExistingSceneImage(page, beforeAssistantCount, sceneId).catch(() => null);
-        if (adoptRes?.ok && adoptRes.base64) {
-          const sourceBuffer = Buffer.from(adoptRes.base64, "base64");
-          const decoded = decodeImageBufferToPng(sourceBuffer, adoptRes.contentType);
-          await fs.mkdir(path.dirname(expectedImagePath), { recursive: true });
-          await fs.writeFile(expectedImagePath, decoded.buffer);
-          await validateSavedImageFile(expectedImagePath);
-          
-          imagePath = expectedImagePath;
-          options.__nv1Succeeded = true;
-          await persistDurableStage(projectDir, sceneId, "nv1_image_validated", {
-            keyframePath: imagePath,
-            chatGptConversationUrl: existingDurableState.chatGptConversationUrl || "",
-          }).catch(() => null);
-          
-          await appendAppLog(null, {
-            source: "main",
-            kind: "ok",
-            text: `Scene ${sceneId}: Adopted existing completed image from chat successfully before NV1. Skipping generate.`,
-          });
+        try {
+          const adoptRes = await adoptExistingSceneImage(
+            page,
+            beforeImageAgentTurnCount,
+            sceneId,
+          ).catch(() => null);
+          if (adoptRes?.ok && adoptRes.base64) {
+            const sourceBuffer = Buffer.from(adoptRes.base64, "base64");
+            const decoded = decodeImageBufferToPng(sourceBuffer, adoptRes.contentType);
+            await fs.mkdir(path.dirname(expectedImagePath), { recursive: true });
+            await fs.writeFile(expectedImagePath, decoded.buffer);
+            await validateSavedImageFile(expectedImagePath);
+
+            imagePath = expectedImagePath;
+            options.__nv1Succeeded = true;
+            await persistDurableStage(projectDir, sceneId, "nv1_image_validated", {
+              keyframePath: imagePath,
+              chatGptConversationUrl: existingDurableState.chatGptConversationUrl || "",
+            }).catch(() => null);
+
+            await appendAppLog(null, {
+              source: "main",
+              kind: "ok",
+              text: `Scene ${sceneId}: Adopted existing completed image from chat successfully before NV1. Skipping generate.`,
+            });
+          }
+        } finally {
+          await page.close().catch(() => null);
         }
       }
     }
@@ -1227,6 +1327,7 @@ async function runScenePipelineLockedInternal(_event, options) {
               options: {
                 ...options,
                 beforeAssistantCount,
+                beforeImageAgentTurnCount,
               },
             });
       assertPipelineRunActive(runId);
@@ -1403,9 +1504,6 @@ async function runScenePipelineLockedInternal(_event, options) {
       phase: "motion_prompt",
       keyframeMotionPromptOnly: true,
       imagePath,
-      imageDataUrl: imagePath
-        ? await imageFileToDataUrl(imagePath).catch(() => "")
-        : "",
       imagePromptUsed: finalImagePrompt,
       motionPrompt,
       motionPromptPath: existingMotionPromptPath,
@@ -1430,9 +1528,6 @@ async function runScenePipelineLockedInternal(_event, options) {
       phase: "motion_prompt",
       prefetchOnly: true,
       imagePath,
-      imageDataUrl: imagePath
-        ? await imageFileToDataUrl(imagePath).catch(() => "")
-        : "",
       imagePromptUsed: finalImagePrompt,
       motionPrompt,
       motionPromptPath: existingMotionPromptPath,
@@ -1447,11 +1542,8 @@ async function runScenePipelineLockedInternal(_event, options) {
     imageRef: path.basename(imagePath),
     motionPromptRef: "motion_prompt.txt",
     provider: videoProvider,
-    accountId: grokRouterState.selectedAccountId,
-    profileRef: "grok-web-session",
     currentStatus: "before_generation",
   };
-  if (routerActive) await writeGrokRouterCheckpoint(sceneDir, checkpointFields);
 
   const sceneMediaPaths = getSceneMediaPaths(sceneDir, sceneId, runId);
   const existingVideoPath = sceneMediaPaths.videoPath;
@@ -1501,9 +1593,6 @@ async function runScenePipelineLockedInternal(_event, options) {
         sceneDir,
         phase: "video",
         imagePath,
-        imageDataUrl: imagePath
-          ? await imageFileToDataUrl(imagePath).catch(() => "")
-          : "",
         videoPath: existingVideoPath,
         videoProvider,
         videoStatus: "existing-video-validated",
@@ -1549,9 +1638,6 @@ async function runScenePipelineLockedInternal(_event, options) {
       sceneDir,
       phase: "video",
       imagePath,
-      imageDataUrl: imagePath
-        ? await imageFileToDataUrl(imagePath).catch(() => "")
-        : "",
       videoPath: existingVideoPath,
       videoProvider,
       videoStatus: "existing-video-skip-regenerate",
@@ -1615,46 +1701,16 @@ async function runScenePipelineLockedInternal(_event, options) {
       sourceVideoPath:
         videoResult?.sourceVideoPath || videoResult?.sourceDownloadPath || "",
     }).catch(() => null);
-    if (routerActive)
-      await writeGrokRouterCheckpoint(sceneDir, {
-        ...checkpointFields,
-        currentStatus: "completed",
-      });
   } catch (error) {
     videoError = maskRouterText(error.stack || error.message || String(error));
-    const videoErrorFile =
-      videoProvider === "grok"
-        ? "grok_video_error.txt"
-        : `${videoProvider}_video_error.txt`;
+    const videoErrorFile = `${videoProvider}_video_error.txt`;
     await fs.writeFile(path.join(sceneDir, videoErrorFile), videoError, "utf8");
-    if (routerActive) {
-      const classification = classifyGrokRouterError(error);
-      const safeMessage =
-        classification === "account_limit"
-          ? `Scene ${sceneId}: Grok account reached a quota/plan limit. Generation is paused; select another authorized account or resolve quota before resume.`
-          : classification === "login_required"
-            ? `Scene ${sceneId}: Grok login is required. Generation is paused until the selected account is reconnected.`
-            : classification === "canvas_limit"
-              ? `Scene ${sceneId}: Grok canvas limit was detected. Same account is preserved; retry/resume can recreate canvas context.`
-              : classification === "network_error"
-                ? `Scene ${sceneId}: Network/timeout issue detected. Generation is paused with checkpoint preserved.`
-                : `Scene ${sceneId}: Unknown Grok router error. Generation is paused with checkpoint preserved.`;
-      await pauseGrokRouterForError(
-        sceneDir,
-        classification,
-        safeMessage,
-        checkpointFields,
-      );
-    }
     await appendAppLog(null, {
       source: "main",
       kind: "error",
       text: `Scene ${sceneId}: lỗi tạo video ${videoProvider}: ${maskRouterText(error.message || error)}`,
       details: {
         imagePath: path.basename(imagePath),
-        routerClassification: routerActive
-          ? grokRouterState.lastErrorClassification
-          : "",
         motionPromptRef: "motion_prompt.txt",
       },
     });
@@ -1695,9 +1751,6 @@ async function runScenePipelineLockedInternal(_event, options) {
     sceneDir,
     phase: "video",
     imagePath,
-    imageDataUrl: imagePath
-      ? await imageFileToDataUrl(imagePath).catch(() => "")
-      : "",
     imagePromptUsed: finalImagePrompt,
     videoPath: videoResult?.videoPath || "",
     videoProvider,
@@ -1720,7 +1773,6 @@ async function runScenePipelineLockedInternal(_event, options) {
     continuityReferenceSourceScene:
       continuityReferenceState?.sourceSceneId || null,
     generatedContinuityReferences,
-    router: routerActive ? getGrokRouterStatus() : null,
   };
 }
 
@@ -1856,7 +1908,7 @@ async function ensureContinuityReferencesForPreviousScene({ projectDir = '', sce
 
 function buildContinuityPromptInstruction(referenceCount = 0) {
   if (!referenceCount) return '';
-  return 'Use the attached reference images from the previous video to preserve character identity, outfit, environment, lighting, camera continuity, and visual style. The last-frame reference is the strongest continuity anchor. Generate the new keyframe for the next scene based on the current scene description while keeping continuity with the references. Use them as continuity references only, not exact copies.';
+  return 'Use the attached reference images from the previous video to preserve subject identity, outfit, environment, lighting, camera continuity, and visual style. The last-frame reference is the strongest continuity anchor. Generate the new keyframe for the next scene based on the current scene description while keeping continuity with the references. Use them as continuity references only, not exact copies.';
 }
 
 function appendContinuityGuidanceToMotionPrompt(prompt = '', continuityRefs = {}, settings = {}) {
@@ -1865,7 +1917,7 @@ function appendContinuityGuidanceToMotionPrompt(prompt = '', continuityRefs = {}
   if (!normalized.enabled || !refs.length) return prompt;
   const guidance = [
     'CONTINUITY REFERENCES:',
-    `Use the previous video reference frames available for this scene (source scene ${continuityRefs.sourceSceneId || 'previous'}; ${refs.length} frame(s)). Keep character identity, outfit, environment, lighting, camera direction, and motion continuity consistent. Treat the last frame as the strongest handoff anchor. Do not copy artifacts or frozen poses exactly.`,
+    `Use the previous video reference frames available for this scene (source scene ${continuityRefs.sourceSceneId || 'previous'}; ${refs.length} frame(s)). Keep subject identity, outfit, environment, lighting, camera direction, and motion continuity consistent. Treat the last frame as the strongest handoff anchor. Do not copy artifacts or frozen poses exactly.`,
   ].join('\n');
   return String(prompt || '') + '\n\n' + guidance;
 }
@@ -1884,7 +1936,6 @@ async function buildImageMotionOnlyPipelineResult({
     [ ['image', 'Motion', 'Only', 'Mode'].join('') ]: true,
     [ ['skip', 'Video', 'Generation'].join('') ]: true,
     imagePath,
-    imageDataUrl: imagePath ? await imageFileToDataUrl(imagePath).catch(() => '') : '',
     imagePromptUsed: finalImagePrompt || '',
     motionPrompt,
     motionPromptPath: path.join(sceneDir, 'motion_prompt.txt'),

@@ -1,0 +1,43 @@
+Vidora Phase 2 validation
+=========================
+
+JavaScript syntax: PASS (0 failures)
+npm test: PASS
+tests/phase1-policy-complete.test.js: PASS
+tests/phase2-ui-ipc-cleanup.test.js: PASS
+
+IPC parity
+----------
+Renderer invokes: 47
+Main handlers: 47
+Missing handlers: []
+Unused handlers: []
+router:* channels: []
+
+UI/renderer cleanup
+-------------------
+PASS: no Grok/PixVerse text or controls in index.html.
+PASS: no Grok/PixVerse-only selectors in style.css.
+PASS: removed renderer DOM bindings/functions/listeners are absent.
+PASS: renderer Grok/PixVerse tokens remain only in the explicit Phase 1 legacy-field scrubber.
+PASS: generic account and manual ChatGPT IPC remain registered.
+PASS: Phase 1 no-auto-rotation and migration guards remain passing.
+
+Direct tests/*.test.js: 17 PASS, 10 FAIL
+----------------------------------------
+All Phase 1 and Phase 2-specific tests pass. Remaining failures are the same pre-existing worktree test/baseline mismatches or unavailable Electron runtime recorded in Phase 1:
+- character-presets-folder.test.js
+- chatgpt-network-image-extract.test.js
+- chatgpt-nv2-stable-text-response.test.js
+- chatgpt-runtime-monitor.test.js (Electron module unavailable)
+- nv2-conversation-url.test.js
+- nv2-text-only-flow.test.js
+- pipeline-durable-recovery.test.js
+- project-characters-folder-lifecycle.test.js
+- veoup-client-coordinate-mapping.test.js (Electron module unavailable)
+- veoup-launch-recovery.test.js
+
+Runtime limitation
+------------------
+Electron GUI smoke testing was not run in the container. Static selector checks, syntax, IPC parity and regression suites passed.
+

@@ -38,7 +38,6 @@ let resetSessionSceneCounter = () => null;
 let assertPipelineRunActive = () => null;
 let CHROME_DEBUG_PORT = 9223;
 let PROVIDER_META = {};
-let shouldRecoverFromCacheOrChallenge = () => false;
 
 function initChatGptRecovery(runtime = {}) {
   if (typeof runtime.getCdpPage === "function") {
@@ -65,15 +64,9 @@ function initChatGptRecovery(runtime = {}) {
   if (runtime.PROVIDER_META !== undefined) {
     PROVIDER_META = runtime.PROVIDER_META;
   }
-  if (typeof runtime.shouldRecoverFromCacheOrChallenge === "function") {
-    shouldRecoverFromCacheOrChallenge = runtime.shouldRecoverFromCacheOrChallenge;
-  }
 }
 
-const challengeRecoveryAttempts = new Map();
-const CHALLENGE_RECOVERY_LIMIT = 2;
-
-function isReloadBlocked(sceneId = "unknown") {
+function isReloadBlocked(sceneId = "unknown", policy = {}) {
   if (globalThis.__vidoraActiveActionLock) {
     return `Blocked reload: Active Action Lock [${globalThis.__vidoraActiveActionLock}] is held.`;
   }
@@ -81,7 +74,15 @@ function isReloadBlocked(sceneId = "unknown") {
     return `Blocked reload: Pending Action [${globalThis.__vidoraPendingAction}] is active.`;
   }
   const composerState = globalThis.__vidoraLastComposerState || "EMPTY";
-  if (composerState === "ATTACHING_FILES" || composerState === "READY_TO_SEND" || composerState === "WAIT_ACCEPT") {
+  const allowWaitAccept = Boolean(
+    policy.allowWaitAcceptAtSafeBoundary ||
+    policy.allowStaleNv1WrapperRefresh,
+  );
+  if (
+    composerState === "ATTACHING_FILES" ||
+    composerState === "READY_TO_SEND" ||
+    (composerState === "WAIT_ACCEPT" && !allowWaitAccept)
+  ) {
     return `Blocked reload: Composer is in safe state [${composerState}].`;
   }
   const sendState = getChatGptSendState(sceneId);
@@ -91,14 +92,19 @@ function isReloadBlocked(sceneId = "unknown") {
   return null;
 }
 
-async function requestReloadWithReason(page, reason, sceneId = "unknown") {
+async function requestReloadWithReason(
+  page,
+  reason,
+  sceneId = "unknown",
+  policy = {},
+) {
   await appendAppLog(sceneId, {
     source: "main",
     kind: "warning",
     text: `Scene ${sceneId}: Requesting page reload. Reason: ${reason}`
   }).catch(() => null);
 
-  const blockedReason = isReloadBlocked(sceneId);
+  const blockedReason = isReloadBlocked(sceneId, policy);
   if (blockedReason) {
     await appendAppLog(sceneId, {
       source: "main",
@@ -111,7 +117,10 @@ async function requestReloadWithReason(page, reason, sceneId = "unknown") {
   if (page.reload) {
     await page.reload().catch(() => null);
   } else if (page.Page?.reload) {
-    await page.Page.reload({ ignoreCache: true }).catch(() => null);
+    await page.Page.reload({
+      ignoreCache: true,
+      __vidoraReloadPolicy: policy,
+    }).catch(() => null);
   }
   return true;
 }
@@ -266,30 +275,12 @@ async function performDurableRecovery(page, options, sceneDir, snapshot, stage, 
       return { action: "wait", pageState };
     }
 
-    const rotateAllowed = pageState.rendererOOM || !pageState.rendererAlive || pageState.loggedOut || !pageState.conversationAvailable;
-    if (rotateAllowed) {
-      if (snapshot.rotationBudget && snapshot.rotationBudget <= 0) {
-        await appendAppLog(sceneId, {
-          source: "main",
-          kind: "warning",
-          text: `Recovery Level 8: Rotation budget exhausted.`
-        });
-        return { action: "wait", pageState };
-      }
-      await appendAppLog(sceneId, {
-        source: "main",
-        kind: "warning",
-        text: `Recovery Level 8: automatic chat rotation disabled; waiting for manual recovery.`
-      });
-      return { action: "wait", pageState };
-    } else {
-      await appendAppLog(sceneId, {
-        source: "main",
-        kind: "warning",
-        text: `Recovery Level 8: Chat rotation skipped (chat is not corrupted/OOM).`
-      });
-      return { action: "wait", pageState };
-    }
+    await appendAppLog(sceneId, {
+      source: "main",
+      kind: "warning",
+      text: "Recovery Level 8: automatic chat rotation disabled; waiting for manual recovery."
+    });
+    return { action: "wait", pageState };
   }
 
   if (recoveryLevel === 9) {
@@ -345,16 +336,7 @@ async function detectLoginWithRetry(page, provider, sceneId = "") {
       details: lastState,
     });
     if (lastState?.loggedIn) return lastState;
-    if (shouldRecoverFromCacheOrChallenge(lastState, provider)) {
-      const recovery = await recoverProviderFromCacheOrChallenge(
-        page,
-        provider,
-        `scene-${sceneId || "unknown"}-login-attempt-${attempt}`,
-      ).catch((error) => ({ ok: false, error: error.message }));
-      lastState = { ...lastState, cacheRecovery: recovery };
-      if (recovery?.ok) continue;
-    }
-    if (["chatgpt", "grok"].includes(provider)) {
+    if (provider === "chatgpt") {
       const autoLogin = await tryAutoLoginWithStoredAccount(page, provider, {
         reason: `scene-login-attempt-${attempt}`,
         sceneId,
@@ -443,73 +425,6 @@ async function recoverCdpPageIfCrashed(
     details: { provider, before: state, after },
   });
   return { ok: !after?.crashed, before: state, after };
-}
-
-async function recoverProviderFromCacheOrChallenge(
-  client,
-  provider,
-  reason = "unknown",
-) {
-  const currentSceneId = globalThis.__vidoraLastProcessedSceneId || "unknown";
-  const sendState = getChatGptSendState(currentSceneId);
-  if (sendState === "PREPARING" || sendState === "READY" || sendState === "CLICKING") {
-    await appendAppLog(currentSceneId, {
-      source: "main",
-      kind: "warning",
-      text: `RECOVERY_BLOCKED_BEFORE_SEND: recoverProviderFromCacheOrChallenge blocked during sendState = ${sendState} (reason: ${reason}).`,
-    }).catch(() => null);
-    return { ok: true, skipped: true, reason: "RECOVERY_BLOCKED_BEFORE_SEND" };
-  }
-  if (provider !== "grok")
-    return { ok: false, skipped: true, reason: "provider-not-grok" };
-  const state = await evaluateOnCdpPage(
-    client,
-    `(${detectLoginScript.toString()})(${JSON.stringify(provider)})`,
-  ).catch((error) => ({ loggedIn: false, reason: error.message }));
-  if (!shouldRecoverFromCacheOrChallenge(state, provider))
-    return { ok: false, skipped: true, reason: "no-cache-challenge", state };
-
-  const key = `${provider}:${reason}`;
-  const used = challengeRecoveryAttempts.get(key) || 0;
-  if (used >= CHALLENGE_RECOVERY_LIMIT) {
-    return {
-      ok: false,
-      error:
-        "Đã thử clear cache/hard reload nhiều lần nhưng Grok vẫn đang ở Cloudflare challenge. Cần tick Verify you are human thủ công một lần trong Chrome.",
-      state,
-    };
-  }
-  challengeRecoveryAttempts.set(key, used + 1);
-
-  await appendAppLog(null, {
-    source: "main",
-    kind: "running",
-    text: `Grok dính cache/Cloudflare challenge (${reason}), clear cache + hard reload lần ${used + 1}/${CHALLENGE_RECOVERY_LIMIT}.`,
-    details: state,
-  });
-  await client.Network.clearBrowserCache().catch(() => null);
-  await client.Network.clearBrowserCookies().catch(() => null);
-  await client.Storage.clearDataForOrigin({
-    origin: "https://grok.com",
-    storageTypes:
-      "appcache,cache_storage,service_workers,websql,indexeddb,local_storage",
-  }).catch(() => null);
-  await client.Page.navigate({ url: "about:blank" }).catch(() => null);
-  await sleep(700);
-  await client.Page.navigate({ url: PROVIDER_META.grok.url }).catch(() => null);
-  await waitForCdpLoad(client).catch(() => null);
-  await client.Page.reload({ ignoreCache: true }).catch(() => null);
-  await sleep(2500);
-  const after = await evaluateOnCdpPage(
-    client,
-    `(${detectLoginScript.toString()})(${JSON.stringify(provider)})`,
-  ).catch((error) => ({ loggedIn: false, reason: error.message }));
-  return {
-    ok: !shouldRecoverFromCacheOrChallenge(after, provider),
-    before: state,
-    after,
-    attempt: used + 1,
-  };
 }
 
 async function recoverChatGptBlockingUi(client, context = {}) {
@@ -674,6 +589,14 @@ async function recoverChatGptResponseChoiceChat(client, context = {}) {
 
 async function forceCleanChatGptNewChatRotation() {
   const currentSceneId = globalThis.__vidoraLastProcessedSceneId || "unknown";
+  await appendAppLog(currentSceneId, {
+    source: "main",
+    kind: "warning",
+    text: "Automatic ChatGPT rotation is disabled; preserving the current conversation.",
+  }).catch(() => null);
+  return { ok: false, skipped: true, reason: "chat-rotation-disabled" };
+
+  /* istanbul ignore next -- retained legacy implementation, blocked above */
   const sendState = getChatGptSendState(currentSceneId);
   const timestamp = new Date().toISOString();
 
@@ -856,7 +779,6 @@ module.exports = {
   performDurableRecovery,
   detectLoginWithRetry,
   recoverCdpPageIfCrashed,
-  recoverProviderFromCacheOrChallenge,
   recoverChatGptBlockingUi,
   recoverChatGptResponseChoiceChat,
 };

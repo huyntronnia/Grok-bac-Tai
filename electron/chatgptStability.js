@@ -179,7 +179,8 @@ function getRecoveryDecision(reason, attempt = 0) {
   }
 }
 
-function shouldRotateConversation({ sceneOrdinal = 0, conversationStartedAt = 0, assistantMessageCount = 0, domNodeCount = 0, repeatedComposerBusy = 0, repeatedWrongTarget = 0, rotateEveryScenes = 20 } = {}) {
+function shouldRotateConversation(_state = {}) {
+  // Preserve the current ChatGPT conversation for the entire run.
   return { rotate: false, reason: '' };
 }
 

@@ -149,29 +149,34 @@ class BrowserAdapter {
         text: `BrowserAdapter: Connecting to CDP endpoint: ${cdpEndpoint}`,
       }).catch(() => null);
 
-      this.browser = await chromium.connectOverCDP(cdpEndpoint);
-      const contexts = this.browser.contexts();
-      if (!contexts.length) {
-        throw new Error("No contexts available on remote browser");
+      try {
+        this.browser = await chromium.connectOverCDP(cdpEndpoint);
+        const contexts = this.browser.contexts();
+        if (!contexts.length) {
+          throw new Error("No contexts available on remote browser");
+        }
+        const context = contexts[0];
+
+        // Tìm page phù hợp dựa trên url target
+        const hostname = new URL(target.url).hostname;
+        const pages = context.pages();
+        this.page = pages.find((p) => p.url() && p.url().includes(hostname));
+
+        if (!this.page) {
+          // Tạo page mới nếu không tìm thấy
+          this.page = await context.newPage();
+          await this.page.goto(target.url);
+        }
+
+        await appendAppLog(null, {
+          source: "main",
+          kind: "ok",
+          text: `BrowserAdapter: Playwright connected successfully to tab: ${this.page.url()}`,
+        }).catch(() => null);
+      } catch (error) {
+        await this.disconnect();
+        throw error;
       }
-      const context = contexts[0];
-
-      // Tìm page phù hợp dựa trên url target
-      const hostname = new URL(target.url).hostname;
-      const pages = context.pages();
-      this.page = pages.find((p) => p.url() && p.url().includes(hostname));
-
-      if (!this.page) {
-        // Tạo page mới nếu không tìm thấy
-        this.page = await context.newPage();
-        await this.page.goto(target.url);
-      }
-
-      await appendAppLog(null, {
-        source: "main",
-        kind: "ok",
-        text: `BrowserAdapter: Playwright connected successfully to tab: ${this.page.url()}`,
-      }).catch(() => null);
     } else {
       // Chế độ cdp cũ
       this.client = target.client;
@@ -199,17 +204,23 @@ class BrowserAdapter {
 
   // Đóng/Ngắt kết nối an toàn
   async disconnect() {
-    if (this.clientType === "playwright") {
-      if (this.browser) {
-        // Gọi close() trên CDP-connected browser sẽ đóng kết nối WebSocket mà không tắt Chrome
-        await this.browser.close().catch(() => null);
-        this.browser = null;
-        this.page = null;
+    try {
+      if (this.clientType === "playwright") {
+        if (this.browser) {
+          // Gọi close() trên CDP-connected browser sẽ đóng kết nối WebSocket mà không tắt Chrome
+          await this.browser.close().catch(() => null);
+          this.browser = null;
+          this.page = null;
+        }
+      } else {
+        if (this.client) {
+          await this.client.close().catch(() => null);
+          this.client = null;
+        }
       }
-    } else {
-      if (this.client) {
-        await this.client.close().catch(() => null);
-        this.client = null;
+    } finally {
+      if (globalThis.activeCdpClient === this) {
+        globalThis.activeCdpClient = null;
       }
     }
   }

@@ -28,8 +28,8 @@ assert(
   'Request 2 upload verification must remain'
 );
 assert(
-  block.includes('const sentScenes = await sendPromptViaCdpInput('),
-  'Request 2 must still use sendPromptViaCdpInput'
+  block.includes('const sentScenes = await sendPromptWithSameChatRefreshRecovery('),
+  'Request 2 must use same-chat send recovery'
 );
 assert(
   block.includes('Request 2: read and remember the attached keyframes from up to 5 previous project scenes.'),
@@ -44,7 +44,7 @@ assert(
   'Request 2 must wait for assistant completion'
 );
 
-const request2SendIndex = block.indexOf('const sentScenes = await sendPromptViaCdpInput');
+const request2SendIndex = block.indexOf('const sentScenes = await sendPromptWithSameChatRefreshRecovery');
 const request2AckIndex = block.indexOf('if (!sentScenes?.ok)', request2SendIndex);
 const request2WaitIndex = block.indexOf('const request2Text = await waitForChatGptHydrationResponse', request2AckIndex);
 const freshFalseIndex = block.indexOf('setChatGptContextFresh(false);', request2WaitIndex);

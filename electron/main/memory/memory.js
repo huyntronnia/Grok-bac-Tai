@@ -5,19 +5,50 @@ let sceneMemoryBaseline = null;
 let lastMilestoneMemory = null;
 
 async function getCdpPageMemoryMetrics(client) {
-  if (!client || !client.Performance) return null;
+  if (!client) return null;
+  let playwrightSession = null;
   try {
-    await client.Performance.enable().catch(() => null);
-    const { metrics } = await client.Performance.getMetrics();
+    let metrics = [];
+    let domCounters = null;
+    if (client.clientType === "playwright" && client.page) {
+      playwrightSession = await client.page
+        .context()
+        .newCDPSession(client.page);
+      await playwrightSession.send("Performance.enable").catch(() => null);
+      const performance = await playwrightSession
+        .send("Performance.getMetrics")
+        .catch(() => ({ metrics: [] }));
+      metrics = performance.metrics || [];
+      domCounters = await playwrightSession
+        .send("Memory.getDOMCounters")
+        .catch(() => null);
+    } else if (client.Performance) {
+      await client.Performance.enable().catch(() => null);
+      ({ metrics = [] } = await client.Performance.getMetrics());
+      domCounters = client.Memory?.getDOMCounters
+        ? await client.Memory.getDOMCounters().catch(() => null)
+        : null;
+    } else {
+      return null;
+    }
     const result = {};
     for (const m of metrics) {
       if (["JSHeapUsedSize", "JSHeapTotalSize", "LayoutCount", "RecalcStyleCount", "Timestamp"].includes(m.name)) {
         result[m.name] = m.value;
       }
     }
+    if (domCounters) {
+      result.Documents = Number(domCounters.documents || 0);
+      result.Nodes = Number(domCounters.nodes || 0);
+      result.JSEventListeners = Number(domCounters.jsEventListeners || 0);
+    }
     return result;
   } catch (_e) {
     return null;
+  } finally {
+    if (playwrightSession) {
+      await playwrightSession.detach().catch(() => null);
+    }
   }
 }
 
@@ -34,8 +65,10 @@ async function logMemoryMilestone(sceneId, milestone) {
     try {
       const processInfo = await activeWin.webContents.getProcessMemoryInfo().catch(() => null);
       if (processInfo) {
-        rendererPrivate = processInfo.privateBytes || 0;
-        rendererResident = processInfo.residentSetBytes || 0;
+        // Electron ProcessMemoryInfo is reported in KiB. Convert to bytes so
+        // the formatter and thresholds use the same unit as process.memoryUsage().
+        rendererPrivate = Number(processInfo.private || 0) * 1024;
+        rendererResident = Number(processInfo.residentSet || 0) * 1024;
       }
     } catch (_err) {}
   }
@@ -98,6 +131,9 @@ async function logMemoryMilestone(sceneId, milestone) {
         externalCdpJSHeapTotal: cdpMemory?.JSHeapTotalSize ? formatBytes(cdpMemory.JSHeapTotalSize) : "N/A",
         externalCdpLayoutCount: cdpMemory?.LayoutCount ?? "N/A",
         externalCdpStyleRecalcCount: cdpMemory?.RecalcStyleCount ?? "N/A",
+        externalCdpDomNodes: cdpMemory?.Nodes ?? "N/A",
+        externalCdpDocuments: cdpMemory?.Documents ?? "N/A",
+        externalCdpJsEventListeners: cdpMemory?.JSEventListeners ?? "N/A",
       },
       deltaFromLast: deltaFromLast ? {
         mainRss: formatDelta(deltaFromLast.rss),

@@ -1,6 +1,9 @@
 const { appendAppLog } = require("../logging");
 const { sleep } = require("../utils");
-const { verifyDraftOwnership } = require("../state");
+const {
+  verifyDraftOwnership,
+  hashChatGptSnapshotText,
+} = require("../state");
 const {
   evaluateOnCdpPage,
   getConversationState,
@@ -138,12 +141,78 @@ async function waitForHeavyChatGptPromptDomCooldown(prompt = "", context = {}) {
   return { ok: true, skipped: false, length };
 }
 
+async function waitForChatGptReadyForNewPrompt(
+  client,
+  prompt,
+  context = {},
+  timeoutMs = 120000,
+) {
+  const expectedPromptHash = hashChatGptSnapshotText(prompt);
+  const startedAt = Date.now();
+  let lastState = null;
+  let lastGeneration = null;
+  while (Date.now() - startedAt < timeoutMs) {
+    assertPipelineRunActive();
+    lastState = await getConversationState(client);
+    if (
+      expectedPromptHash &&
+      lastState?.latestUserMessageHash === expectedPromptHash
+    ) {
+      return {
+        ok: true,
+        alreadySent: true,
+        expectedPromptHash,
+        state: lastState,
+      };
+    }
+    lastGeneration = await evaluateOnCdpPage(
+      client,
+      `(${detectChatGptActiveGenerationScriptStrict.toString()})()`,
+    ).catch((error) => ({ generating: true, error: error.message }));
+    if (
+      !lastState?.stopButtonVisible &&
+      !lastState?.streaming &&
+      !lastGeneration?.generating
+    ) {
+      return {
+        ok: true,
+        alreadySent: false,
+        expectedPromptHash,
+        state: lastState,
+        generation: lastGeneration,
+      };
+    }
+    await sleep(1000);
+  }
+  return {
+    ok: false,
+    error: "previous-chatgpt-response-still-streaming",
+    context,
+    state: lastState,
+    generation: lastGeneration,
+  };
+}
+
 async function runChatGptRobustSendLadder(
   client,
   prompt,
   { focused, beforeCount, strictAssistantStart, context },
 ) {
   const sceneId = context?.sceneId || "unknown";
+  const readyForPrompt = await waitForChatGptReadyForNewPrompt(
+    client,
+    prompt,
+    context,
+  );
+  if (!readyForPrompt?.ok) return readyForPrompt;
+  if (readyForPrompt.alreadySent) {
+    return {
+      ok: true,
+      status: "already-sent-by-user-message-ownership",
+      send: "already-sent-by-user-message-ownership",
+      acknowledged: readyForPrompt,
+    };
+  }
   setChatGptSendState(sceneId, "PREPARING");
   await appendAppLog(sceneId, {
     source: "main",
@@ -175,7 +244,7 @@ async function runChatGptRobustSendLadder(
   })()`,
   ).catch(() => null);
 
-  // 3. Enforce Native Character Dispatches via CDP Input Domain
+  // 3. Enforce native text dispatches via the CDP Input domain.
   await client.Input.insertText({ text: prompt }).catch(() => null);
   await sleep(400);
 
@@ -216,6 +285,22 @@ async function runChatGptRobustSendLadder(
     })()`,
     ).catch(() => null);
     await sleep(300);
+  }
+
+  comp = await evaluateOnCdpPage(
+    client,
+    `(${getComposerTextScript.toString()})()`,
+  ).catch(() => ({ text: "" }));
+  const composerPromptHash = hashChatGptSnapshotText(comp?.text || "");
+  const expectedPromptHash = hashChatGptSnapshotText(prompt);
+  if (!expectedPromptHash || composerPromptHash !== expectedPromptHash) {
+    return {
+      ok: false,
+      error: "chatgpt-composer-prompt-ownership-mismatch",
+      expectedPromptHash,
+      composerPromptHash,
+      composerLength: String(comp?.text || "").trim().length,
+    };
   }
 
   setChatGptSendState(sceneId, "READY");
@@ -266,24 +351,17 @@ async function runChatGptRobustSendLadder(
   if (clickedResult?.ok) {
     if (
       clickedResult.status === "already-sent-safely" ||
-      clickedResult.isStop ||
-      clickedResult.isStopActiveNow
+      clickedResult.isStop
     ) {
       await appendAppLog(null, {
         source: "main",
         kind: "running",
-        text: `runChatGptRobustSendLadder: detected Stop button/isStopActiveNow (already sent safely); skipping click.`,
+        text: `runChatGptRobustSendLadder: previous Stop button detected before click; current prompt is not acknowledged.`,
       });
-      const ack = await waitForPromptSendAcknowledged(
-        client,
-        beforeCount || 0,
-        10000,
-      );
       return {
-        ok: ack.ok,
-        status: "already-sent-safely",
-        send: "already-sent-safely",
-        acknowledged: ack,
+        ok: false,
+        error: "previous-chatgpt-response-still-streaming",
+        status: clickedResult.status,
       };
     }
 
@@ -339,6 +417,7 @@ async function runChatGptRobustSendLadder(
     });
     const ack = await waitForPromptSendAcknowledged(
       client,
+      prompt,
       beforeCount || 0,
       10000,
     );
@@ -379,24 +458,17 @@ async function runChatGptRobustSendLadder(
     if (clickedResult?.ok) {
       if (
         clickedResult.status === "already-sent-safely" ||
-        clickedResult.isStop ||
-        clickedResult.isStopActiveNow
+        clickedResult.isStop
       ) {
         await appendAppLog(null, {
           source: "main",
           kind: "running",
           text: `runChatGptRobustSendLadder: retry detected Stop button (already sent safely); skipping click.`,
         });
-        const ack = await waitForPromptSendAcknowledged(
-          client,
-          beforeCount || 0,
-          10000,
-        );
         return {
-          ok: ack.ok,
-          status: "already-sent-safely",
-          send: "already-sent-safely",
-          acknowledged: ack,
+          ok: false,
+          error: "previous-chatgpt-response-still-streaming",
+          status: clickedResult.status,
         };
       }
 
@@ -452,6 +524,7 @@ async function runChatGptRobustSendLadder(
       });
       const ack = await waitForPromptSendAcknowledged(
         client,
+        prompt,
         beforeCount || 0,
         10000,
       );
@@ -465,6 +538,7 @@ async function runChatGptRobustSendLadder(
 
   const ack = await waitForPromptSendAcknowledged(
     client,
+    prompt,
     beforeCount || 0,
     10000,
   );
@@ -488,7 +562,26 @@ async function forceSubmitChatGptComposerWithCdp(
     ).catch(() => ({ text: "" }));
     const remainingChars = String(state?.text || "").trim().length;
     if (remainingChars < 5) {
-      return { ok: true, mode: "already-empty", attempt };
+      const ownership = await getConversationState(client);
+      if (
+        ownership?.latestUserMessageHash === hashChatGptSnapshotText(prompt)
+      ) {
+        return {
+          ok: true,
+          mode: "already-sent-by-user-message-ownership",
+          attempt,
+        };
+      }
+      await evaluateOnCdpPage(
+        client,
+        `(${focusPromptInputScript.toString()})()`,
+      ).catch(() => null);
+      await evaluateOnCdpPage(
+        client,
+        `(${setPromptInputValueScript.toString()})(${JSON.stringify(prompt)})`,
+      ).catch(() => null);
+      await sleep(500);
+      continue;
     }
     await appendAppLog(null, {
       source: "main",
@@ -522,6 +615,7 @@ async function forceSubmitChatGptComposerWithCdp(
 
     const ack = await waitForPromptSendAcknowledged(
       client,
+      prompt,
       beforeCount || 0,
       8000,
     );
@@ -696,11 +790,13 @@ async function waitForChatGptComposerIdle(
 
 async function waitForPromptSendAcknowledged(
   client,
+  prompt,
   beforeCount = 0,
   timeoutMs = 15000,
 ) {
   const startedAt = Date.now();
   const monitor = require("./chatgpt_runtime_monitor");
+  const expectedPromptHash = hashChatGptSnapshotText(prompt);
   
   if (!monitor.page) {
     await monitor.startMonitoring(client).catch(() => null);
@@ -711,24 +807,27 @@ async function waitForPromptSendAcknowledged(
     await sleep(700);
     lastSnap = monitor.captureSnapshot();
     const dom = lastSnap.metrics.dom;
-
+    const state = await getConversationState(client);
+    const promptOwned =
+      Boolean(expectedPromptHash) &&
+      state?.latestUserMessageHash === expectedPromptHash;
     const composerCleared = (dom.composerText || "").trim().length < 5;
     const assistantAdvanced = dom.assistantMessageCount > (beforeCount || 0);
-    const stateAdvanced = !["WAITING_SEND", "UPLOADING"].includes(lastSnap.state);
 
-    // 2-signal verification: (composerCleared OR assistantAdvanced) AND stateAdvanced
-    if ((composerCleared || assistantAdvanced) && stateAdvanced) {
+    if (promptOwned) {
       await appendAppLog(null, {
         source: "main",
         kind: "ok",
-        text: `Prompt send verified by Monitor (Composer empty: ${composerCleared}, Advanced: ${assistantAdvanced}, State advanced to: ${lastSnap.state})`
+        text: `Prompt send verified by user-message ownership (Composer empty: ${composerCleared}, Advanced: ${assistantAdvanced}, State: ${lastSnap.state})`,
       }).catch(() => null);
-      
+
       return {
         ok: true,
+        promptOwned,
+        expectedPromptHash,
         composerCleared,
         assistantAdvanced,
-        generating: stateAdvanced,
+        generating: Boolean(state?.streaming || state?.stopButtonVisible),
       };
     }
   }
@@ -736,6 +835,9 @@ async function waitForPromptSendAcknowledged(
   return {
     ok: false,
     error: "Prompt send was not acknowledged by ChatGPT.",
+    expectedPromptHash,
+    latestUserMessageHash:
+      lastSnap?.metrics?.dom?.latestUserMessageHash || "",
     lastComposer: {
       textLength: (lastSnap?.metrics?.dom?.composerText || "").length,
     },

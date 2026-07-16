@@ -3,8 +3,8 @@ const fs = require('fs');
 const path = require('path');
 
 const root = path.resolve(__dirname, '..');
-const veoup = fs.readFileSync(path.join(root, 'electron/veoupAutomation.js'), 'utf8');
-const main = fs.readFileSync(path.join(root, 'electron/main.js'), 'utf8');
+const veoup = fs.readFileSync(path.join(root, 'electron/main/veoup/veoup.js'), 'utf8');
+const runner = fs.readFileSync(path.join(root, 'electron/main/pipeline/pipeline_runner.js'), 'utf8');
 
 const executeStart = veoup.indexOf('async function executeVeoUpAutomation(payload = {})');
 const executeEnd = veoup.indexOf('\n}\nlet calibrationSession', executeStart);
@@ -38,17 +38,17 @@ assert(executeBlock.includes('payload.veoupExePath = runningVeoUpWindow.window.e
 assert(executeBlock.includes('veoupExePath: payload.veoupExePath ||'), 'PowerShell automation payload must include resolved executable');
 assert(executeBlock.includes('spawn(resolvedLauncher.launcherPath'), 'configured/resolved executable must launch VeoUp');
 
-assert(main.includes('function isVeoUpStageError(error)'), 'VeoUp stage error classifier missing');
-assert(main.includes('error?.details?.result?.videoError'), 'VeoUp classifier must inspect nested durable result videoError');
-assert(main.includes('!isVeoUpFailure'), 'VeoUp failures must bypass Fresh Room Recovery');
-assert(main.includes('const isVeoUpFailure = isVeoUpStageError(error) || isPersistedVeoUpStage;'), 'VeoUp stage must bypass Fresh Room Recovery even when wrapped');
-assert(main.includes("error.status = result?.status || result?.error || 'veoup-automation-failed';"), 'runVeoUpScriptAsPromise must preserve structured status');
-assert(main.includes('error.details = result || {};'), 'runVeoUpScriptAsPromise must preserve structured result details');
-assert(main.includes("const currentStage = isVeoUpFailure ? 'veoup_prepare'"), 'VeoUp failures must persist veoup_prepare');
-const veoupSubmitStart = main.indexOf("await persistDurableStage(projectDir, sceneId, 'veoup_prepare'");
-const veoupSubmitEnd = main.indexOf('videoResult = await generateVideoWithProvider', veoupSubmitStart);
+assert(veoup.includes('function isVeoUpStageError(error)'), 'VeoUp stage error classifier missing');
+assert(veoup.includes('error?.details?.result?.videoError'), 'VeoUp classifier must inspect nested durable result videoError');
+assert(runner.includes('!isVeoUpFailure'), 'VeoUp failures must bypass Fresh Room Recovery');
+assert(runner.includes('const isVeoUpFailure = isVeoUpStageError(error) || isPersistedVeoUpStage;'), 'VeoUp stage must bypass Fresh Room Recovery even when wrapped');
+assert(veoup.includes("error.status = result?.status || result?.error || 'veoup-automation-failed';"), 'runVeoUpScriptAsPromise must preserve structured status');
+assert(veoup.includes('error.details = result || {};'), 'runVeoUpScriptAsPromise must preserve structured result details');
+assert(/const currentStage = isVeoUpFailure\s*\? "veoup_prepare"/.test(runner), 'VeoUp failures must persist veoup_prepare');
+const veoupSubmitStart = runner.indexOf('persistDurableStage(projectDir, sceneId, "veoup_prepare"');
+const veoupSubmitEnd = runner.indexOf('videoResult = await generateVideoWithProvider', veoupSubmitStart);
 assert(veoupSubmitStart >= 0 && veoupSubmitEnd > veoupSubmitStart, 'VeoUp submit block not found');
-const preAutomationStageBlock = main.slice(veoupSubmitStart, veoupSubmitEnd);
+const preAutomationStageBlock = runner.slice(veoupSubmitStart, veoupSubmitEnd);
 assert(!preAutomationStageBlock.includes("'veoup_image_loaded'"), 'must not persist veoup_image_loaded before automation success');
 assert(!preAutomationStageBlock.includes("'veoup_prompt_loaded'"), 'must not persist veoup_prompt_loaded before automation success');
 assert(preAutomationStageBlock.includes('keyframePath: imagePath'), 'VeoUp retries must preserve keyframe path');

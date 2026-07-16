@@ -28,11 +28,11 @@ function run() {
 
   assert.deepStrictEqual(
     shouldRotateConversation({ sceneOrdinal: 3 }),
-    { rotate: true, reason: 'scene-interval' }
+    { rotate: false, reason: '' }
   );
   assert.strictEqual(
     shouldRotateConversation({ assistantMessageCount: fixture('long-conversation').assistantMessageCount }).rotate,
-    true
+    false
   );
 
   console.log('chatgptAutomation.test.js ok');

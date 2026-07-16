@@ -1,68 +1,34 @@
-function detectLoginScript(provider) {
+function detectLoginScript() {
   const bodyText = document.body?.innerText || "";
   const buttonsText = [
     ...document.querySelectorAll('button, a, [role="button"]'),
   ]
-    .map((el) =>
-      `${el.textContent || ""} ${el.getAttribute("aria-label") || ""}`.trim(),
+    .map((element) =>
+      `${element.textContent || ""} ${element.getAttribute("aria-label") || ""}`.trim(),
     )
     .join(" | ");
   const composerSelectors = [
     "textarea",
     'div[contenteditable="true"]',
     '[contenteditable="true"].ProseMirror',
-    '.ProseMirror[contenteditable="true"]',
     '[data-testid="composer"]',
     '[data-testid="composer"] [contenteditable="true"]',
     '[role="textbox"]',
     "#prompt-textarea",
-    '[aria-label*="Message"]',
-    '[aria-label*="Ask"]',
-    '[aria-label*="Hỏi"]',
-    '[placeholder*="Ask"]',
-    '[placeholder*="Hỏi"]',
   ];
   const composer = composerSelectors
     .map((selector) => document.querySelector(selector))
     .find(Boolean);
-  const hasAppShell =
-    provider === "grok"
-      ? /Grok|Imagine|DeepSearch|Think|What do you want to know|Ask anything/i.test(
-          bodyText,
-        )
-      : provider === "pixverse"
-        ? /PixVerse|Create|Generate|Image to Video|Text to Video|My Videos|Workspace/i.test(
-            bodyText,
-          )
-        : /New chat|Search chats|Library|Recents|What’s on the agenda|Ask anything|Projects|Đoạn chat mới|Tìm kiếm đoạn chat|Thư viện|Dự án|Bạn đang làm về cái gì|Hỏi bất kỳ điều gì/i.test(
-            bodyText,
-          );
-  const hasExplicitLoginButton =
-    provider === "grok"
-      ? /(^|\|)\s*(sign in|log in|đăng nhập|sign up|đăng ký)\s*(\||$)/i.test(
-          buttonsText,
-        ) ||
-        /(^|\n)\s*(Sign in|Sign up)\s*($|\n)/i.test(bodyText) ||
-        /Sign up to keep chatting/i.test(bodyText)
-      : /(^|\|)\s*(log in|sign in|đăng nhập)\s*(\||$)/i.test(buttonsText);
-  const loggedOutWords =
-    provider === "grok"
-      ? /sign in|log in|đăng nhập|continue with|sign up to keep chatting/i
-      : provider === "pixverse"
-        ? /sign in|log in|sign up|continue with|đăng nhập/i
-        : /log in|sign up|sign in|đăng nhập|get started/i;
-  const hasChatGptLoginUi =
-    provider === "chatgpt" &&
-    (/(^|\|)\s*(log in|sign in|đăng nhập|sign up for free|sign up)\s*(\||$)/i.test(
+  const hasLoginUi =
+    /(^|\|)\s*(log in|sign in|đăng nhập|sign up for free|sign up)\s*(\||$)/i.test(
       buttonsText,
     ) ||
-      /(^|\n)\s*(Log in|Sign up for free|Sign up)\s*($|\n)/i.test(bodyText) ||
-      /Get responses tailored to you|Log in to get|saved chats|upload files/i.test(
-        bodyText,
-      ));
-  const chatgptLoggedInShell =
-    provider === "chatgpt" &&
-    !hasChatGptLoginUi &&
+    /(^|\n)\s*(Log in|Sign up for free|Sign up)\s*($|\n)/i.test(bodyText) ||
+    /Get responses tailored to you|Log in to get|saved chats|upload files/i.test(
+      bodyText,
+    );
+  const hasAppShell =
+    !hasLoginUi &&
     (/Projects|GPTs|Company knowledge|Invite team members|Đoạn chat mới|Tìm kiếm đoạn chat|Thư viện|Dự án|Bạn đang làm về cái gì|Hỏi bất kỳ điều gì/i.test(
       bodyText,
     ) ||
@@ -70,54 +36,17 @@ function detectLoginScript(provider) {
         bodyText,
       ) ||
       /Share\s*\||Chia sẻ|Tạo ảnh|Tra cứu thông tin/i.test(buttonsText));
-  const grokLoggedInShell =
-    provider === "grok" &&
-    (/SuperGrok|Imagine|Private|What do you want to know\?|Ask anything|Sign Out|Settings|Connectors|Tasks|Files/i.test(
-      bodyText,
-    ) ||
-      Boolean(composer));
-  const hasSignedInAccount =
-    provider === "grok"
-      ? grokLoggedInShell ||
-        /@[\w.-]+|Projects|History|Private|SuperGrok|Charlotte Garcia|New Project|Sign Out/i.test(
-          bodyText,
-        )
-      : chatgptLoggedInShell;
-  const looksLoggedOut =
-    provider === "chatgpt"
-      ? hasChatGptLoginUi
-      : provider === "grok"
-        ? hasExplicitLoginButton ||
-          /continue with google|continue with apple|sign in to grok|sign up to grok/i.test(
-            bodyText,
-          )
-        : hasExplicitLoginButton ||
-          (loggedOutWords.test(bodyText) && !composer && !hasSignedInAccount);
-  const cloudflareChallenge =
-    provider === "grok" &&
-    /cloudflare|performing security verification|verify you are human|checking if the site connection is secure|just a moment|Ray ID/i.test(
-      `${bodyText} ${document.title}`,
-    );
   return {
-    provider,
-    loggedIn: cloudflareChallenge
-      ? false
-      : provider === "chatgpt"
-        ? chatgptLoggedInShell && !looksLoggedOut
-        : provider === "grok"
-          ? !looksLoggedOut && (grokLoggedInShell || hasSignedInAccount)
-          : Boolean(composer || hasAppShell || hasSignedInAccount) &&
-            !looksLoggedOut,
+    provider: "chatgpt",
+    loggedIn: hasAppShell && !hasLoginUi,
     hasComposer: Boolean(composer),
     hasAppShell,
-    looksLoggedOut,
-    cloudflareChallenge,
-    reason: cloudflareChallenge
-      ? "Grok đang hiện Cloudflare security verification / cache challenge."
-      : looksLoggedOut
-        ? "Trang đang hiện Sign in/Sign up hoặc yêu cầu đăng nhập."
-        : "",
-    hasSignedInAccount,
+    looksLoggedOut: hasLoginUi,
+    cloudflareChallenge: false,
+    reason: hasLoginUi
+      ? "Trang ChatGPT đang hiện Sign in/Sign up hoặc yêu cầu đăng nhập."
+      : "",
+    hasSignedInAccount: hasAppShell,
     composerTag: composer?.tagName || null,
     composerClass: composer?.className || null,
     url: location.href,
@@ -125,8 +54,6 @@ function detectLoginScript(provider) {
     sampleText: bodyText.slice(0, 1200),
   };
 }
-
-// countAssistantMessagesScript replaced by dynamic wrapper
 
 function detectBrowserCrashPageScript() {
   const text = String(document.body?.innerText || "")
@@ -173,8 +100,13 @@ function dismissChatGptBlockingUiScript(context = {}) {
       item?.node?.href || item?.node?.getAttribute?.("href") || "",
     );
     return (
+      Boolean(
+        item?.node?.closest?.(
+          'nav, aside, [role="navigation"], a[href*="/c/"], a[href*="/g/"]',
+        ),
+      ) ||
       text.length > 140 ||
-      /create exactly|prompt below|do not answer|nhiem vu|scene|dua tren anh|keyframe|motion prompt|tao anh|xoa tep|delete file|remove file|remove attachment|chia se|share|linkedin|facebook|twitter|x\.com|xem them|show more|learn more|tim hieu|download|tai xuong|copy link|sao chep|open image|open in/i.test(
+      /skip to content|prompt file review|create exactly|prompt below|do not answer|nhiem vu|scene|dua tren anh|keyframe|motion prompt|tao anh|xoa tep|delete file|remove file|remove attachment|chia se|share|linkedin|facebook|twitter|x\.com|xem them|show more|learn more|tim hieu|download|tai xuong|copy link|sao chep|open image|open in/i.test(
         `${text} ${href}`,
       )
     );
@@ -380,23 +312,8 @@ function dismissChatGptBlockingUiScript(context = {}) {
       clickNode(choice.node, `choose-result:${choice.text.slice(0, 60)}`);
   }
 
-  const actionRequired =
-    !codexRoot &&
-    buttons.find(
-      (item) =>
-        !item.disabled &&
-        /action required|continue|review|confirm|allow|try again/i.test(
-          item.text,
-        ) &&
-        !/codex|download|tải|learn|tìm hiểu|open|cloud|install|windows|business|contact|liên hệ/i.test(
-          item.text,
-        ),
-    );
-  if (actionRequired)
-    clickNode(
-      actionRequired.node,
-      `action-required:${actionRequired.text.slice(0, 60)}`,
-    );
+  // Never click generic Review/Continue/Action Required controls here.
+  // Those controls can belong to sidebar items, GPTs or another conversation.
 
   document.dispatchEvent(
     new KeyboardEvent("keydown", {
@@ -1107,47 +1024,37 @@ function clickChatGptStopGeneratingScript() {
  * @deprecated Use chatgpt_runtime_monitor instead.
  */
 // readChatGptImageStateScript replaced by dynamic wrapper
-function clickUploadButtonScript(provider = "grok") {
+function clickUploadButtonScript() {
+  const input = document.querySelector('input[type="file"]');
+  if (input) return { ok: true, mode: "existing-input" };
   const visible = (node) => {
     const rect = node.getBoundingClientRect?.();
     return rect && rect.width > 4 && rect.height > 4;
   };
   const textOf = (node) =>
     `${node.textContent || ""} ${node.getAttribute?.("aria-label") || ""} ${node.title || ""} ${node.innerHTML || ""}`;
-  if (provider !== "grok") {
-    const input = document.querySelector('input[type="file"]');
-    if (input) return { ok: true, mode: "existing-input" };
-  }
   const buttons = [
     ...document.querySelectorAll('button, [role="button"], label, div, span'),
   ].filter(visible);
-  let uploadButton = null;
-  if (provider === "pixverse") {
-    uploadButton = buttons.find((button) =>
-      /image|upload|reference|ảnh|file|\+/i.test(textOf(button)),
+  const bottomButtons = buttons
+    .map((button) => ({
+      button,
+      rect: button.getBoundingClientRect(),
+      text: textOf(button),
+    }))
+    .filter((item) => item.rect.top > window.innerHeight * 0.55);
+  const uploadButton =
+    bottomButtons.find(
+      (item) =>
+        /^\s*\+\s*$/.test(item.text) ||
+        /Add|Attach|Upload|paperclip/i.test(item.text) ||
+        (item.rect.width <= 64 && /svg|path/i.test(item.button.innerHTML || "")),
+    )?.button ||
+    buttons.find((button) =>
+      /upload|attach|image|ảnh|file|paperclip|plus|add/i.test(textOf(button)),
     );
-  } else {
-    const bottomButtons = buttons
-      .map((button) => ({
-        button,
-        rect: button.getBoundingClientRect(),
-        text: textOf(button),
-      }))
-      .filter((item) => item.rect.top > window.innerHeight * 0.55);
-    uploadButton =
-      bottomButtons.find(
-        (item) =>
-          /^\s*\+\s*$/.test(item.text) ||
-          /Add|Attach|Upload|paperclip/i.test(item.text) ||
-          (item.rect.width <= 64 &&
-            /svg|path/i.test(item.button.innerHTML || "")),
-      )?.button ||
-      buttons.find((button) =>
-        /upload|attach|image|ảnh|file|paperclip|plus|add/i.test(textOf(button)),
-      );
-  }
   if (!uploadButton)
-    return { ok: false, error: "Không thấy nút upload/attach/image." };
+    return { ok: false, error: "Không thấy nút upload/attach của ChatGPT." };
   uploadButton.scrollIntoView({ block: "center", inline: "center" });
   uploadButton.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true }));
   uploadButton.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
@@ -1203,7 +1110,7 @@ function detectUploadedAssetScript() {
     };
   return {
     ok: false,
-    error: "Chưa thấy ảnh được paste vào workspace/canvas Grok sau Ctrl+V.",
+    error: "Chưa thấy ảnh được upload vào composer ChatGPT.",
     images,
     fileInputs,
     sampleText: bodyText.slice(-1000),
@@ -1243,7 +1150,7 @@ function focusPromptInputScript() {
       className: input.className || "",
     };
   }
-  return { ok: false, error: "Không tìm thấy composer ChatGPT/Grok." };
+  return { ok: false, error: "Không tìm thấy composer ChatGPT." };
 }
 
 function setPromptInputValueScript(prompt) {
@@ -2227,6 +2134,30 @@ function extractConversationSnapshot(options = {}) {
       String(node.innerText || node.textContent || "").trim()
     );
   };
+  const readUserText = (node) => {
+    const contentSelectors = [
+      ".whitespace-pre-wrap",
+      '[data-testid*="user-message"]',
+      "[data-message-content]",
+      'div[dir="auto"]',
+      "p",
+    ];
+    for (const selector of contentSelectors) {
+      const pieces = [...(node.querySelectorAll?.(selector) || [])]
+        .filter(visible)
+        .filter(
+          (child) =>
+            !child.closest?.(
+              '[data-testid*="attachment"], [class*="attachment"], [class*="file-preview"], button, nav, aside',
+            ),
+        )
+        .map((child) => String(child.innerText || child.textContent || "").trim())
+        .filter(Boolean)
+        .sort((left, right) => right.length - left.length);
+      if (pieces.length) return pieces[0];
+    }
+    return String(node.innerText || node.textContent || "").trim();
+  };
 
   // --- Element queries ---
   const bodyText = document.body?.innerText || "";
@@ -2278,13 +2209,13 @@ function extractConversationSnapshot(options = {}) {
   const latestAssistantHash = hashText(latestAssistantText);
 
   const latestUser = userNodes.at(-1);
-  const latestUserText = latestUser ? latestUser.innerText.trim() : '';
+  const latestUserText = latestUser ? readUserText(latestUser) : '';
   const latestUserMessageHash = hashText(latestUserText);
 
   const userMessages = [];
   if (!light) {
     userNodes.forEach((node, index) => {
-      const text = String(node.innerText || node.textContent || "").trim();
+      const text = readUserText(node);
       userMessages.push({
         index,
         turnIndex: index * 2,
@@ -2360,8 +2291,20 @@ function extractConversationSnapshot(options = {}) {
 
   const progressVisible = placeholderVisible || streaming;
 
-  // Skip deep image counts / canvas scans in light mode
-  const images = (!light && latestAssistant) ? Array.from(latestAssistant.querySelectorAll("img, canvas")) : [];
+  // ChatGPT now renders generated media in a sibling `.agent-turn`, not
+  // inside `[data-message-author-role="assistant"]`. This exact image-card
+  // query is intentionally cheap enough to run in light monitor snapshots.
+  const imageAgentTurns = [...document.querySelectorAll(".agent-turn")].filter(
+    (turn) => turn.querySelector?.(".group\\/imagegen-image"),
+  );
+  const latestImageAgentTurn = imageAgentTurns.at(-1);
+  const images = latestImageAgentTurn
+    ? Array.from(
+        latestImageAgentTurn.querySelectorAll(
+          '.group\\/imagegen-image img, .group\\/imagegen-image canvas',
+        ),
+      )
+    : [];
   const completeImages = images.filter(img => img.tagName === "CANVAS" || img.complete);
   const imageElementCount = images.length;
   const imageCompleteCount = completeImages.length;
@@ -2495,6 +2438,7 @@ function extractConversationSnapshot(options = {}) {
     latestAssistantHasText,
     imageElementCount,
     imageCompleteCount,
+    imageAgentTurnCount: imageAgentTurns.length,
     stoppedTextDetected,
     policyRefusalDetected,
     loggedOut,
@@ -2535,6 +2479,20 @@ const countAssistantMessagesScript = createOptimizedWrapper(`
 const countChatGptAssistantRootsScript = createOptimizedWrapper(`
   return { count: snap.assistantMessageCount, mode: "unified-assistant-roots" };
 `);
+
+// Image generation is rendered outside the logical assistant message in the
+// current ChatGPT DOM. Keep this counter separate from assistant text roots so
+// NV1 can scope itself to image cards created after the scene prompt.
+function countChatGptImageAgentTurnsScript() {
+  const turns = [...document.querySelectorAll(".agent-turn")].filter((turn) =>
+    turn.querySelector?.(".group\\/imagegen-image"),
+  );
+  return {
+    count: turns.length,
+    totalAgentTurns: document.querySelectorAll(".agent-turn").length,
+    mode: "agent-turn-imagegen-roots",
+  };
+}
 
 const getConversationStateScript = createOptimizedWrapper(`
   const conversationFingerprint = snap.currentChatId + ":" + snap.latestAssistantHash + ":" + snap.latestUserMessageHash + ":" + (snap.userMessages.length + snap.assistantMessages.length);
@@ -2591,6 +2549,7 @@ const readAssistantMessageSnapshotScript = createOptimizedWrapper(`
     hashes: snap.assistantMessages.map(m => m.hash).filter(Boolean),
     userIds: snap.userMessages.map(m => m.id).filter(Boolean),
     userHashes: snap.userMessages.map(m => m.hash).filter(Boolean),
+    latestUserMessageHash: snap.latestUserMessageHash,
     userMessages: snap.userMessages,
     latestUserTurnIndex: snap.userMessages.at(-1)?.turnIndex ?? -1,
     stopVisible: snap.stopVisible,
@@ -2607,12 +2566,15 @@ const readLatestAssistantScript = createOptimizedWrapper(`
   return {
     count: snap.assistantMessageCount,
     text,
+    hash: snap.latestAssistantHash,
     textLength: text.length,
     source: text ? "extract-conversation-snapshot" : "empty",
     generating: snap.sendButtonVisible ? false : (snap.stopButtonVisible || (snap.streaming && !snap.voiceReady)),
     generation: false,
     streamingIndicator: snap.streaming,
     stopButton: snap.stopButtonVisible,
+    composerBusy: snap.composerBusy,
+    activeGenerationMarker: snap.activeGenerationMarker,
     sendReady: snap.sendButtonVisible,
     voiceReady: snap.voiceReady,
     composerButtonCount: snap.buttonsCount,
@@ -2626,19 +2588,13 @@ const readChatGptImageStateScript = createOptimizedWrapper(`
   const waitingForAssistantMessage = snap.waitingForAssistantMessage;
   const thinking = !stoppedCreatingImage && /Thinking|Thinking about your request|Đang suy nghĩ|Generating|Creating/i.test(snap.latestAssistantText || snap.bodyTail);
 
-  const mediaRoots = [
-    ...document.querySelectorAll(
-      '[data-message-author-role="assistant"], article, .message, [class*="response"]',
-    ),
-  ].filter(
-    (node) =>
-      node.querySelector?.("img, picture source, canvas") ||
-      /Generated image/i.test(node.innerText || ""),
+  const mediaRoots = [...document.querySelectorAll('.agent-turn')].filter(
+    (node) => node.querySelector?.('.group\\\\/imagegen-image'),
   );
   const mediaRoot = mediaRoots.at(-1);
   const urls = [];
   if (mediaRoot) {
-    const foundUrls = [...mediaRoot.querySelectorAll("img, picture source")]
+    const foundUrls = [...mediaRoot.querySelectorAll('.group\\\\/imagegen-image img, .group\\\\/imagegen-image picture source')]
       .filter((node) => {
         const label = \`\${node.alt || ""} \${node.getAttribute?.("aria-label") || ""} \${node.className || ""}\`;
         if (/avatar|profile|logo|icon|emoji/i.test(label)) return false;
@@ -2697,8 +2653,9 @@ const readChatGptImageStateScript = createOptimizedWrapper(`
     visibleImageBoxCount: urls.length,
     completedVisibleImage,
     assistantCount: snap.assistantMessageCount,
+    imageAgentTurnCount: mediaRoots.length,
     latestAssistantText: snap.latestAssistantText,
-    assistantMode: snap.assistantMessageCount > 0 ? "assistant-role" : "fallback-non-user",
+    assistantMode: mediaRoots.length > 0 ? "agent-turn-imagegen" : "no-image-agent-turn",
   };
 `);
 
@@ -2725,6 +2682,7 @@ module.exports = {
   getActiveComposerTextScript,
   inspectNv2ComposerSubmitStateScript,
   countChatGptAssistantRootsScript,
+  countChatGptImageAgentTurnsScript,
   getConversationStateScript,
   clickChatGptStopGeneratingScript,
   readChatGptImageStateScript,

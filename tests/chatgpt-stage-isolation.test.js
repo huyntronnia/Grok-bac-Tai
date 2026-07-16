@@ -24,8 +24,8 @@ assert(!main.includes('buildTaskPrompt({ task: hardTasks.task1, script: scriptTe
 assert(!main.includes('buildTaskPrompt({ task: hardTasks.task2, script: scriptText'), 'NV2 builder must not include full batch scriptText');
 assert(main.includes('const finalImagePrompt = task1ImagePrompt;'), 'IMAGE_STAGE must use isolated NV1 prompt');
 
-const nv1SendIndex = main.indexOf('sendPromptViaCdpInput(page, finalPrompt)');
-const nv2SendIndex = main.indexOf('sendNv2PromptViaDeepCdpInput(page, instruction');
+const nv1SendIndex = chatgptRuntime.indexOf('sendPromptWithSameChatRefreshRecovery(page, finalNv1Prompt');
+const nv2SendIndex = chatgptRuntime.indexOf('sendNv2PromptViaDeepCdpInput(page, instruction');
 assert(nv1SendIndex > 0 && nv2SendIndex > nv1SendIndex, 'NV2 must be a separate composer submission after NV1');
 assert(main.includes('missing validated image before MOTION_STAGE'), 'MOTION_STAGE must require an existing image path');
 assert(main.includes('validateContinuityReferenceImage(imagePath)'), 'MOTION_STAGE must validate image before NV2');
@@ -44,7 +44,7 @@ assert(/await waitForChatGptHydrationResponse\(\s*page,\s*beforeScenes\?\.count 
 assert(renderer.includes('recentScenes: buildRecentScenesForHydration(scene.id, 20)'), 'renderer must send max 20 recent scenes');
 assert(chatgptRuntime.includes('const CHAT_ROTATION_ENABLED = false;'), 'automatic ChatGPT rotation must be disabled');
 assert(/CHAT_ROTATION_ENABLED\s*&&\s*sessionSceneCounter\s*>=/.test(chatgptRuntime), 'scene-count rotation branch must be gated by CHAT_ROTATION_ENABLED');
-assert(chatgptRuntime.includes('Session scene counter: ${sessionSceneCounter}/3'), 'rotation counter log missing');
+assert(chatgptRuntime.includes('Memory refresh counter: ${sessionSceneCounter}/${CHAT_MEMORY_REFRESH_EVERY_SCENES}'), 'same-conversation memory refresh counter log missing');
 assert(main.includes('Scene ${sceneId}: Sending NV1.'), 'NV1 send log must use requested text');
 assert(main.includes('isChatGptContextFresh = false;'), 'fresh context flag must flip after send/upload success');
 assert(main.indexOf('await waitForChatGptHydrationResponse(page, beforeScenes?.count || 0, { sceneId, request: 2 });') < main.indexOf('isChatGptContextFresh = false;'), 'fresh flag must flip after request 2 acknowledgement');

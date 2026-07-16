@@ -1,0 +1,43 @@
+Vidora final validation
+=======================
+Date: 2026-07-14 (Asia/Ho_Chi_Minh)
+
+PASS: JavaScript syntax checks for electron/main.js, renderer.js, preload.js and every electron/main/**/*.js.
+PASS: npm test -> all 33 tests/*.test.js files passed.
+PASS: direct Electron dependency resolved: Electron 30.5.1.
+PASS: npm dependency tree resolves at depth 0.
+PASS: Windows x64 portable assembled at dist/win-unpacked with the current app.asar.
+PASS: dist/win-unpacked/Vidora.exe is a PE32+ Windows x86-64 GUI executable.
+PASS: dist/win-unpacked/resources/ffmpeg.exe is a PE32+ Windows x86-64 console executable.
+PASS: no case-insensitive `character` token remains under electron/.
+PASS: no `.grokproj` extension remains under electron/.
+PASS: Request 1/2 ownership, NV1 conversation lock, NV2 keyframe upload/text flow, same-chat refresh, runtime monitor, durable recovery, .vdra lifecycle, VeoUp launch/output/cleanup and cancellation tests all pass.
+PASS: NV1 image discovery is scoped to `.agent-turn > .group/imagegen-image img` without depending on localized alt text; logical assistant roots are not scanned for images.
+PASS: stale grey-wrapper recovery reloads the same conversation at most once after stop disappears, then rechecks conversation ID and NV1 user-message ownership without resending.
+PASS: stale grey-wrapper recovery may bypass WAIT_ACCEPT only for its explicit recovery policy; active action/upload/send locks still block reload.
+PASS: pipeline IPC and persisted scene records contain no inline image base64; only file paths and compact pipeline metadata are retained.
+PASS: Electron renderer memory metrics use private/residentSet KiB fields and temporary Playwright CDP sessions are detached.
+PASS: Playwright runtime-monitor listeners and BrowserAdapter connections are released on every teardown path.
+PASS: every 5 fully successful ChatGPT scenes triggers a reload of the same verified conversation ID without automatic chat rotation.
+PASS: stale image-turn baseline regression (configured baseline 24, virtualized DOM count 1) rebases to the current owned image card and extracts without duplicate NV1 resend.
+PASS: the same DOM rebase is rejected when latest-prompt ownership is false, the image precedes the latest user turn, generation still has a Stop control, or the baseline has not actually shrunk.
+PASS: WAIT_IMAGE/NV1_SENT resume recognizes the deterministic owned RETRY 1 prompt hash and persists that hash for subsequent restarts.
+PASS: NV2 text discovery remains scoped to logical assistant/markdown response content.
+PASS: NV2 accepts an owned in-place mutation of the existing assistant node, returns a real text hash, requires 3 stable ticks/4 seconds, and refuses completion while hard-generating or soft-busy.
+
+SHA-256
+-------
+Vidora.exe:
+1fff34604d03c3bc8482b9768f6a45b8692783f9fee1587e1dd7f71c82593742
+
+resources/ffmpeg.exe:
+04e1307997530f9cf2fe35cba2ca7e8875ca91da02f89d6c7243df819c94ad00
+
+resources/app.asar:
+200f24a24184d56998073d34b8fcc77da4d1020b59d847f87b332bc7a8d20d61
+
+Limitations
+-----------
+- Electron GUI/live authenticated ChatGPT and VeoUp end-to-end smoke tests cannot run in this container.
+- NSIS wrapping stopped after successful win-unpacked packaging because Wine is unavailable on this Linux host.
+- The portable Windows directory is complete and is delivered as a zip; run Vidora.exe after extracting all files.
