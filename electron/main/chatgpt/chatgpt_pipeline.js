@@ -66,6 +66,7 @@ const {
   recoverChatGptBlockingUi,
   recoverChatGptResponseChoiceChat,
   isReloadBlocked,
+  isTransientCdpNavigationError,
 } = require("./chatgpt_recovery");
 const {
   isChatGptPolicyRefusalText,
@@ -1575,6 +1576,7 @@ async function waitForChatGptImageGenerationDoneBeforeExtract(
 const IMAGE_WAIT_REFRESH_INTERVAL_MS = 60000;
 const IMAGE_WAIT_GRAY_CANVAS_REFRESH_MS = 60000;
 const IMAGE_WAIT_STABLE_TICKS_REQUIRED = 2;
+const IMAGE_WAIT_TEXT_ONLY_STABLE_TICKS_REQUIRED = 2;
 const IMAGE_WAIT_READY_TICKS_REQUIRED = 8;
 const IMAGE_WAIT_INITIAL_TIMEOUT_MS = 480000;
 const IMAGE_WAIT_AFTER_REFRESH_TIMEOUT_MS = 300000;
@@ -1612,6 +1614,8 @@ class ImageWaitContext {
     this.imageTurnScopeRebased = false;
     this.ownedRebasedImageVisible = false;
     this.lastImageTurnScopeSignature = "";
+    this.ownedTextSignature = "";
+    this.ownedTextStableTicks = 0;
     // Internal fingerprint cache used by detectImageWaitProgress to tell
     // "changed" from "same" between ticks. Not part of the public shape.
     this._progressFingerprint = "";
@@ -1804,6 +1808,18 @@ function inspectNv1ImageTurnScopeScript(
   const turnsAfterLatestUser = latestUserNode
     ? imageTurns.filter(followsLatestUser)
     : [];
+  const assistantNodes = Array.from(
+    document.querySelectorAll(
+      '[data-message-author-role="assistant"], [data-testid*="assistant-message"]',
+    ),
+  ).filter((node, index, nodes) => nodes.indexOf(node) === index);
+  const assistantsAfterLatestUser = latestUserNode
+    ? assistantNodes.filter(followsLatestUser)
+    : [];
+  const latestOwnedAssistant = assistantsAfterLatestUser.at(-1) || null;
+  const ownedAssistantText = String(
+    latestOwnedAssistant?.innerText || latestOwnedAssistant?.textContent || "",
+  ).trim();
   const latestOwnedTurn = turnsAfterLatestUser.at(-1) || null;
   const latestOwnedCard = latestOwnedTurn?.querySelector?.(
     ".group\\/imagegen-image",
@@ -1863,6 +1879,12 @@ function inspectNv1ImageTurnScopeScript(
     turnsAfterLatestUser: turnsAfterLatestUser.length,
     firstOwnedImageAgentTurnIndex: firstOwnedIndex,
     latestUserNodeFound: Boolean(latestUserNode),
+    assistantsAfterLatestUser: assistantsAfterLatestUser.length,
+    ownedAssistantText: ownedAssistantText.slice(0, 4000),
+    ownedAssistantTextLength: ownedAssistantText.length,
+    ownedAssistantComplete: Boolean(
+      ownedAssistantText.length > 20 && !placeholderVisible && !stopVisible
+    ),
     ownershipConfirmed: Boolean(ownershipConfirmed),
     baselineOutOfRange,
     imageReady,
@@ -2148,6 +2170,53 @@ async function waitForLatestChatGPTGeneratedImage(client, options = {}) {
       details: { minImageAgentTurnIndex, existingUrlCount: ctx.knownUrls.size },
     });
 
+    const singleRetryPrompt = buildNv1SingleRetryPrompt(options.prompt);
+    const singleRetryPromptHash = hashChatGptSnapshotText(singleRetryPrompt);
+    let singleNv1RetrySent =
+      activeExpectedUserPromptHash === singleRetryPromptHash;
+    const sendSingleNv1Retry = async (retryReason) => {
+      if (singleNv1RetrySent) return false;
+      assertPipelineRunActive(runId);
+      const resent = await sendPromptWithSameChatRefreshRecovery(
+        client,
+        singleRetryPrompt,
+        {
+          sceneId,
+          stage: `nv1-single-resend-${retryReason}`,
+          expectedConversationId,
+        },
+      );
+      if (!resent?.ok) {
+        throw new Error(resent?.error || "nv1-single-resend-failed");
+      }
+      activeExpectedUserPromptHash = singleRetryPromptHash;
+      ctx.expectedUserPromptHash = activeExpectedUserPromptHash;
+      ctx.imageTurnScopeRebased = false;
+      ctx.ownedRebasedImageVisible = false;
+      ctx.lastImageTurnScopeSignature = "";
+      ctx.ownedTextSignature = "";
+      ctx.ownedTextStableTicks = 0;
+      const ownership = await getConversationState(client).catch(() => ({}));
+      if (ownership?.latestUserMessageHash !== activeExpectedUserPromptHash) {
+        throw new Error("nv1-resend-user-message-ownership-not-confirmed");
+      }
+      await writeSceneSnapshot(options.sceneDir, {
+        pipelineStage: "WAIT_IMAGE",
+        sentPromptHash: activeExpectedUserPromptHash,
+      });
+      singleNv1RetrySent = true;
+      hasWaitedOnce = false;
+      await appendAppLog(sceneId, {
+        source: "main",
+        kind: "warning",
+        text: retryReason === "owned-text-only-answer"
+          ? `Scene ${sceneId}: ChatGPT returned a completed response without an owned image card; sent the one allowed NV1 retry in the same conversation.`
+          : `Scene ${sceneId}: NV1 still has no owned image card; sent the one allowed retry in the same conversation.`,
+        details: { retryReason, expectedConversationId },
+      }).catch(() => null);
+      return true;
+    };
+
     for (let attempt = 1; attempt <= 3; attempt += 1) {
     assertPipelineRunActive(runId);
     const attemptStartedAt = Date.now();
@@ -2161,6 +2230,7 @@ async function waitForLatestChatGPTGeneratedImage(client, options = {}) {
     let lastLogAt = 0;
     let refreshedForVisibleOutput = false;
     let textOnlyAnswer = false;
+    let fastSingleRetrySent = false;
     ctx.imageTurnScopeRebased = false;
     ctx.ownedRebasedImageVisible = false;
     const resendImagePrompt = async (reason, snapshot) => {
@@ -2336,10 +2406,28 @@ async function waitForLatestChatGPTGeneratedImage(client, options = {}) {
     while (Date.now() - attemptStartedAt < phaseTimeoutMs) {
       assertPipelineRunActive(runId);
       if (expectedConversationId) {
-        const currentUrl = await evaluateOnCdpPage(
+        const currentUrlRead = await evaluateOnCdpPage(
           client,
           "location.href",
-        ).catch(() => "");
+        ).then((url) => ({ ok: true, url })).catch((error) => ({
+          ok: false,
+          error: String(error?.message || error || ""),
+        }));
+        if (
+          !currentUrlRead.ok &&
+          isTransientCdpNavigationError(currentUrlRead.error)
+        ) {
+          await appendAppLog(sceneId, {
+            source: "main",
+            kind: "running",
+            text: `Scene ${sceneId}: ChatGPT navigation is settling; preserving the locked conversation before the next NV1 ownership check.`,
+            details: { error: currentUrlRead.error },
+          }).catch(() => null);
+          await waitForCdpLoad(client).catch(() => null);
+          await sleep(500);
+          continue;
+        }
+        const currentUrl = currentUrlRead.ok ? currentUrlRead.url : "";
         const currentConversationId =
           String(currentUrl || "").match(/\/c\/([^/?#]+)/)?.[1] || "";
         if (currentConversationId !== expectedConversationId) {
@@ -2351,6 +2439,20 @@ async function waitForLatestChatGPTGeneratedImage(client, options = {}) {
       let ownershipConfirmed = false;
       if (activeExpectedUserPromptHash) {
         const ownershipState = await getConversationState(client);
+        if (
+          ownershipState?.ok === false &&
+          isTransientCdpNavigationError(ownershipState?.error)
+        ) {
+          await appendAppLog(sceneId, {
+            source: "main",
+            kind: "running",
+            text: `Scene ${sceneId}: NV1 ownership read was interrupted by transient navigation; waiting without reload or resend.`,
+            details: { error: ownershipState?.error || "" },
+          }).catch(() => null);
+          await waitForCdpLoad(client).catch(() => null);
+          await sleep(500);
+          continue;
+        }
         if (
           ownershipState?.latestUserMessageHash !== activeExpectedUserPromptHash
         ) {
@@ -2513,6 +2615,65 @@ async function waitForLatestChatGPTGeneratedImage(client, options = {}) {
         : { ...snapshot, urls: [] };
 
       if (!hasNewImageAgentTurn) {
+        const ownedAssistantText = String(
+          imageTurnScope?.ownedAssistantText || "",
+        ).trim();
+        const ownedTextOnlyCandidate = Boolean(
+          ownershipConfirmed &&
+            imageTurnScope?.ownedAssistantComplete &&
+            Number(imageTurnScope?.turnsAfterLatestUser || 0) === 0 &&
+            ownedAssistantText.length > 20 &&
+            !/preparing image|creating image|generating image|đang tạo ảnh|thinking/i.test(
+              ownedAssistantText,
+            ) &&
+            !looksLikeCollapsedUserPrompt(ownedAssistantText, "image"),
+        );
+        if (ownedTextOnlyCandidate) {
+          const ownedTextSignature = hashChatGptSnapshotText(
+            ownedAssistantText,
+          );
+          if (ownedTextSignature === ctx.ownedTextSignature) {
+            ctx.ownedTextStableTicks += 1;
+          } else {
+            ctx.ownedTextSignature = ownedTextSignature;
+            ctx.ownedTextStableTicks = 1;
+          }
+        } else {
+          ctx.ownedTextSignature = "";
+          ctx.ownedTextStableTicks = 0;
+        }
+
+        if (
+          ownedTextOnlyCandidate &&
+          ctx.ownedTextStableTicks >=
+            IMAGE_WAIT_TEXT_ONLY_STABLE_TICKS_REQUIRED
+        ) {
+          if (isChatGptPolicyRefusalText(ownedAssistantText)) {
+            await notifyChatGptPolicyRefusal(
+              sceneId,
+              "NV1/image",
+              ownedAssistantText,
+            );
+          }
+          if (isChatGptLimitText(ownedAssistantText)) {
+            await notifyRenderer(
+              "chatgpt-limit-stop",
+              `Scene ${sceneId}: ChatGPT báo limit/hạn mức. Bấm OK để tool dừng hẳn; đổi account hoặc chờ reset rồi bấm Start lại thủ công.`,
+              { sceneId, text: ownedAssistantText },
+            );
+            throw new Error(
+              "ChatGPT bị limit/hạn mức. Tool đã dừng theo yêu cầu, không tự gửi lại.",
+            );
+          }
+          const resent = await sendSingleNv1Retry("owned-text-only-answer");
+          if (!resent) {
+            throw new Error("chatgpt-image-text-only-after-single-retry");
+          }
+          fastSingleRetrySent = true;
+          attempt = 2;
+          break;
+        }
+
         const staleWrapper = await pollChatGptStaleImageWrapper(client);
         const wrapperRecoveryEligible =
           !staleWrapper.stopVisible &&
@@ -2569,6 +2730,8 @@ async function waitForLatestChatGPTGeneratedImage(client, options = {}) {
             effectiveMinImageAgentTurnIndex,
             imageTurnScope,
             assistantCount: Number(snapshot?.assistantCount || 0),
+            ownedTextOnlyCandidate,
+            ownedTextStableTicks: ctx.ownedTextStableTicks,
           },
         }).catch(() => null);
         await sleep(1500);
@@ -2851,6 +3014,10 @@ async function waitForLatestChatGPTGeneratedImage(client, options = {}) {
       }
     }
 
+    if (fastSingleRetrySent) {
+      continue;
+    }
+
     if (ctx.imageTurnScopeRebased && ctx.ownedRebasedImageVisible) {
       await appendAppLog(sceneId, {
         source: "main",
@@ -2880,33 +3047,15 @@ async function waitForLatestChatGPTGeneratedImage(client, options = {}) {
       continue;
     }
 
-      if (attempt === 2) {
-      const retryPrompt = buildNv1SingleRetryPrompt(options.prompt);
-      const resent = await sendPromptWithSameChatRefreshRecovery(client, retryPrompt, {
-        sceneId,
-        stage: "nv1-single-resend",
-        expectedConversationId,
-      });
-      if (!resent?.ok) throw new Error(resent?.error || "nv1-single-resend-failed");
-      activeExpectedUserPromptHash = hashChatGptSnapshotText(retryPrompt);
-      ctx.expectedUserPromptHash = activeExpectedUserPromptHash;
-      ctx.imageTurnScopeRebased = false;
-      ctx.ownedRebasedImageVisible = false;
-      ctx.lastImageTurnScopeSignature = "";
-      const ownership = await getConversationState(client).catch(() => ({}));
-      if (ownership?.latestUserMessageHash !== activeExpectedUserPromptHash) {
-        throw new Error("nv1-resend-user-message-ownership-not-confirmed");
+    if (attempt === 2) {
+      const resent = await sendSingleNv1Retry("image-wait-timeout");
+      if (!resent) {
+        await appendAppLog(sceneId, {
+          source: "main",
+          kind: "warning",
+          text: `Scene ${sceneId}: the single NV1 retry was already sent; entering the final wait without another resend.`,
+        }).catch(() => null);
       }
-      await writeSceneSnapshot(options.sceneDir, {
-        pipelineStage: "WAIT_IMAGE",
-        sentPromptHash: activeExpectedUserPromptHash,
-      });
-      hasWaitedOnce = false;
-      await appendAppLog(sceneId, {
-        source: "main",
-        kind: "warning",
-        text: `Scene ${sceneId}: NV1 vẫn chưa có ảnh; đã gửi lại NV1 đúng một lần và bắt đầu lượt chờ cuối.`,
-      }).catch(() => null);
       continue;
     }
     }

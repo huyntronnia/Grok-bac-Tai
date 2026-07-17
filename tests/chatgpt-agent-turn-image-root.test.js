@@ -107,6 +107,8 @@ function runImageTurnScope({
   baseline = 24,
   ownershipConfirmed = true,
   imageAfterLatestUser = true,
+  assistantAfterLatestUser = false,
+  assistantText = "",
   placeholder = false,
   stopVisible = false,
 } = {}) {
@@ -128,8 +130,13 @@ function runImageTurnScope({
       return selector.includes("imagegen-image") ? card : null;
     },
   };
+  const assistant = {
+    innerText: assistantText,
+    textContent: assistantText,
+  };
   const latestUser = {
-    compareDocumentPosition() {
+    compareDocumentPosition(node) {
+      if (node === assistant) return assistantAfterLatestUser ? 4 : 2;
       return imageAfterLatestUser ? 4 : 2;
     },
   };
@@ -152,6 +159,9 @@ function runImageTurnScope({
       querySelectorAll(selector) {
         if (selector === ".agent-turn") return [imageTurn];
         if (selector.includes('data-message-author-role="user"')) return [latestUser];
+        if (selector.includes('data-message-author-role="assistant"')) {
+          return assistantAfterLatestUser ? [assistant] : [];
+        }
         if (selector === 'button, [role="button"]') {
           return stopVisible ? [stopButton] : [];
         }
@@ -193,6 +203,29 @@ assert.strictEqual(
   runImageTurnScope({ baseline: 1 }).rebased,
   false,
   "a normal baseline equal to the current count must keep waiting for a new image turn",
+);
+
+const ownedTextOnlyScope = runImageTurnScope({
+  baseline: 1,
+  imageAfterLatestUser: false,
+  assistantAfterLatestUser: true,
+  assistantText:
+    "Visible participants and moving elements: one orange tabby cat crossing the scene.",
+});
+assert.strictEqual(ownedTextOnlyScope.turnsAfterLatestUser, 0);
+assert.strictEqual(ownedTextOnlyScope.assistantsAfterLatestUser, 1);
+assert.strictEqual(ownedTextOnlyScope.ownedAssistantComplete, true);
+assert.match(ownedTextOnlyScope.ownedAssistantText, /Visible participants/);
+assert.strictEqual(
+  runImageTurnScope({
+    baseline: 1,
+    imageAfterLatestUser: false,
+    assistantAfterLatestUser: true,
+    assistantText: "A completed text-only answer that is long enough to inspect.",
+    stopVisible: true,
+  }).ownedAssistantComplete,
+  false,
+  "text-only detection must wait until generation has stopped",
 );
 
 // Prove the serialized selector reaches querySelector with one literal CSS
