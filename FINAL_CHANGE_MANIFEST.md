@@ -1,6 +1,6 @@
 # Vidora final change manifest
 
-Ngày kiểm chứng: 2026-07-14 (Asia/Ho_Chi_Minh)
+Ngày kiểm chứng: 2026-07-15 (Asia/Ho_Chi_Minh)
 
 ## Kết quả chính
 
@@ -28,6 +28,9 @@ Ngày kiểm chứng: 2026-07-14 (Asia/Ho_Chi_Minh)
 - Sửa deadlock wrapper xám ở scene đầu: chỉ recovery `stale NV1 wrapper` được phép vượt `WAIT_ACCEPT` để F5 đúng chat; active action, upload và send state vẫn chặn reload.
 - Sửa lỗi ảnh đã hiện nhưng app không nhận sau khi ChatGPT reload/virtualize DOM: baseline `.agent-turn` tuyệt đối được rebase chỉ khi latest user-message hash vẫn thuộc NV1 hiện tại, image card nằm sau đúng user turn, ảnh đã hoàn chỉnh và Stop/placeholder đều biến mất. Ảnh owned đã hiện sau rebase sẽ tiếp tục được extract mà không F5 hoặc gửi trùng NV1.
 - Resume scene đang dở chấp nhận cả hash NV1 gốc và hash `RETRY 1` chuẩn; hash retry được ghi vào scene snapshot để mở lại app vẫn tiếp tục nhận đúng ảnh hiện có.
+- Không còn phân loại `Execution context was destroyed`/`Cannot find context` do navigation tạm thời là renderer crash. Recovery chờ trang ổn định và giữ nguyên conversation; chỉ crash/OOM thật mới đi vào nhánh crash recovery.
+- Conversation URL và NV1 ownership read chịu được navigation tạm thời, không biến DOM rỗng trong lúc chuyển trang thành lỗi `nv1-user-message-ownership-lost`.
+- Phát hiện text-only trước nhánh chờ `.agent-turn`: assistant phải nằm sau đúng NV1 user turn, không còn Stop/placeholder và giữ nguyên nội dung qua 2 poll. Sau đó app gửi `RETRY 1` tối đa một lần trong cùng conversation, persist ownership hash và không lấy ảnh scene cũ.
 - `npm test` nay chạy toàn bộ `tests/*.test.js` thay vì một danh sách con.
 
 ## File trọng tâm
@@ -43,6 +46,7 @@ Ngày kiểm chứng: 2026-07-14 (Asia/Ho_Chi_Minh)
 - `package.json`
 - `tests/run-all-tests.js`
 - `tests/chatgpt-agent-turn-image-root.test.js`
+- `tests/chatgpt-transient-navigation-text-only.test.js`
 - `tests/chatgpt-nv2-in-place-response.test.js`
 - `tests/long-run-oom-gray-wrapper.test.js`
 

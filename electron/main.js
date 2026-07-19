@@ -43,6 +43,16 @@ const {
 } = require("./main/memory");
 
 const {
+  prepareProjectPayloadForSave,
+  hydrateProjectPayloadPaths,
+  hasLegacyEmbeddedAssets,
+  removeEmbeddedAssets,
+  containsInlineAssetData,
+  writeJsonFileAtomic,
+  enqueueProjectWrite,
+} = require("./main/project");
+
+const {
   getPipelineStateFile,
   hashChatGptSnapshotText,
   normalizeChatTitleValue,
@@ -210,6 +220,7 @@ const {
   cancelCoordinateSetup,
   scanProjectAndRunVeoUp,
   runVeoUpScriptAsPromise,
+  createVeoUpBatchCoordinator,
   getVeoUpVideoSourcePath,
   assertVeoUpResultAssociation,
   buildVeoUpPromptsReadyFile,
@@ -565,10 +576,7 @@ async function newProjectSession(event, options = {}) {
 }
 
 async function saveProjectSessionFile(_event, payload = {}) {
-  const embeddedPayload = await embedProjectAssets(payload);
-  const safePayload = validateProjectPayload(
-    sanitizeProjectValue(embeddedPayload),
-  );
+  const safePayload = validateProjectPayload(sanitizeProjectValue(payload));
   const safeName = sanitizeFileName(
     safePayload.project?.name || "vidora-project",
   );
@@ -593,25 +601,38 @@ async function saveProjectSessionFile(_event, payload = {}) {
     ...(safePayload.runtime || {}),
     outputFolder: projectFolder,
   };
-  const finalPayload = validateProjectPayload(
-    sanitizeProjectValue(safePayload),
+  const pathOnlyPayload = prepareProjectPayloadForSave(
+    safePayload,
+    projectFolder,
   );
+  const finalPayload = validateProjectPayload(
+    sanitizeProjectValue(pathOnlyPayload),
+  );
+  if (containsInlineAssetData(finalPayload)) {
+    throw new Error("Project autosave rejected inline image/video data.");
+  }
   await fs.mkdir(projectFolder, { recursive: true });
-  await fs.writeFile(filePath, JSON.stringify(finalPayload, null, 2), "utf8");
+  const writeResult = await enqueueProjectWrite(filePath, () =>
+    writeJsonFileAtomic(filePath, finalPayload),
+  );
   await ensureProjectPrepromptFolder(projectFolder);
   await rememberLastProjectFile(filePath);
-  return { ok: true, filePath, projectFolder, payload: finalPayload };
+  return {
+    ok: true,
+    filePath,
+    projectFolder,
+    revision: Number(payload?.runtime?.projectAutosaveRevision || 0),
+    savedAt: new Date().toISOString(),
+    bytesWritten: writeResult.bytesWritten,
+  };
 }
 
 async function overwriteProjectSessionFile(
   _event,
-  { filePath = "", payload = {} } = {},
+  { filePath = "", payload = {}, revision = 0 } = {},
 ) {
   if (!filePath) return { ok: false, error: "Missing project file path." };
-  const embeddedPayload = await embedProjectAssets(payload);
-  const safePayload = validateProjectPayload(
-    sanitizeProjectValue(embeddedPayload),
-  );
+  const safePayload = validateProjectPayload(sanitizeProjectValue(payload));
   const targetPath = ensureProjectFilePath(
     filePath.toLowerCase().endsWith(".vdra") ? filePath : `${filePath}.vdra`,
   );
@@ -627,18 +648,32 @@ async function overwriteProjectSessionFile(
     ...(safePayload.runtime || {}),
     outputFolder: projectFolder,
   };
-  const finalPayload = validateProjectPayload(
-    sanitizeProjectValue(safePayload),
+  safePayload.runtime.projectAutosaveRevision = Number(
+    revision || safePayload.runtime.projectAutosaveRevision || 0,
   );
+  const pathOnlyPayload = prepareProjectPayloadForSave(
+    safePayload,
+    projectFolder,
+  );
+  const finalPayload = validateProjectPayload(
+    sanitizeProjectValue(pathOnlyPayload),
+  );
+  if (containsInlineAssetData(finalPayload)) {
+    throw new Error("Project autosave rejected inline image/video data.");
+  }
   await fs.mkdir(projectFolder, { recursive: true });
-  await fs.writeFile(targetPath, JSON.stringify(finalPayload, null, 2), "utf8");
+  const writeResult = await enqueueProjectWrite(targetPath, () =>
+    writeJsonFileAtomic(targetPath, finalPayload),
+  );
   await ensureProjectPrepromptFolder(projectFolder);
   await rememberLastProjectFile(targetPath);
   return {
     ok: true,
     filePath: targetPath,
     projectFolder,
-    payload: finalPayload,
+    revision: Number(revision || safePayload.runtime.projectAutosaveRevision || 0),
+    savedAt: new Date().toISOString(),
+    bytesWritten: writeResult.bytesWritten,
   };
 }
 
@@ -656,7 +691,12 @@ async function createProjectSessionFile(
     ...(safePayload.runtime || {}),
     outputFolder: projectFolder,
   };
-  const validPayload = validateProjectPayload(safePayload);
+  const validPayload = validateProjectPayload(
+    prepareProjectPayloadForSave(safePayload, projectFolder),
+  );
+  if (containsInlineAssetData(validPayload)) {
+    throw new Error("Project create rejected inline image/video data.");
+  }
   const filePath = ensureProjectFilePath(
     path.join(folderPath, `${safeName}.vdra`),
   );
@@ -673,24 +713,30 @@ async function createProjectSessionFile(
     };
   }
   await fs.mkdir(projectFolder, { recursive: false });
-  await fs.writeFile(filePath, JSON.stringify(validPayload, null, 2), "utf8");
+  const writeResult = await enqueueProjectWrite(filePath, () =>
+    writeJsonFileAtomic(filePath, validPayload),
+  );
   await ensureProjectPrepromptFolder(projectFolder, { logCreated: true });
   await rememberLastProjectFile(filePath);
-  return { ok: true, filePath, projectFolder, payload: validPayload };
+  return {
+    ok: true,
+    filePath,
+    projectFolder,
+    revision: Number(payload?.runtime?.projectAutosaveRevision || 0),
+    savedAt: new Date().toISOString(),
+    bytesWritten: writeResult.bytesWritten,
+  };
 }
 
 async function rememberLastProjectFile(filePath = "") {
   const normalizedPath = String(filePath || "").trim();
   if (!normalizedPath) return false;
   await fs.mkdir(path.dirname(LAST_PROJECT_STATE_FILE), { recursive: true });
-  await fs.writeFile(
-    LAST_PROJECT_STATE_FILE,
-    JSON.stringify(
-      { filePath: normalizedPath, updatedAt: new Date().toISOString() },
-      null,
-      2,
-    ),
-    "utf8",
+  await enqueueProjectWrite(LAST_PROJECT_STATE_FILE, () =>
+    writeJsonFileAtomic(LAST_PROJECT_STATE_FILE, {
+      filePath: normalizedPath,
+      updatedAt: new Date().toISOString(),
+    }),
   );
   return true;
 }
@@ -722,7 +768,17 @@ async function loadProjectSessionFile(filePath = "") {
   parsed.runtime = { ...(parsed.runtime || {}), outputFolder: projectFolder };
   await fs.mkdir(projectFolder, { recursive: true });
   await ensureProjectPrepromptFolder(projectFolder);
+  const migratedEmbeddedAssets = hasLegacyEmbeddedAssets(parsed);
   await restoreEmbeddedProjectAssets(parsed, projectFolder);
+  if (migratedEmbeddedAssets) {
+    removeEmbeddedAssets(parsed);
+    parsed.runtime = {
+      ...(parsed.runtime || {}),
+      projectMigration: "embedded-v1-to-external-relative-v1",
+      projectMigrationAt: new Date().toISOString(),
+    };
+  }
+  hydrateProjectPayloadPaths(parsed, projectFolder);
   await mergePipelineSceneStateIntoProjectPayload(parsed, projectFolder);
   const payload = validateProjectPayload(sanitizeProjectValue(parsed));
   payload.runtime = {
@@ -791,6 +847,16 @@ async function mergePipelineSceneStateIntoProjectPayload(
     if (saved.sourceVideoPath) scene.sourceVideoPath = saved.sourceVideoPath;
     if (saved.videoValidated === true) scene.videoValidated = true;
     if (saved.completionStatus) scene.completionStatus = saved.completionStatus;
+    if (saved.recoveryLimitReached === true) {
+      scene.recoveryLimitReached = true;
+      scene.pipelineRetryCount = Number(saved.retryCount || 0);
+      scene.error = saved.lastError || scene.error || '';
+      scene.status = 'error';
+      scene.progressStep = saved.keyframePath ? 'motion' : 'image';
+    } else if (saved.recoveryLimitReached === false) {
+      scene.recoveryLimitReached = false;
+      scene.pipelineRetryCount = 0;
+    }
     if (saved.videoValidated === true && saved.videoPath) {
       scene.status = "video_done";
       scene.progressStep = "merge";
@@ -804,39 +870,6 @@ async function mergePipelineSceneStateIntoProjectPayload(
   return payload;
 }
 
-async function embedProjectAssets(payload = {}) {
-  const cloned = JSON.parse(JSON.stringify(payload || {}));
-  const scenes = Array.isArray(cloned.project?.scenes)
-    ? cloned.project.scenes
-    : [];
-  cloned.embeddedAssets = { version: 1, encoding: "base64", scenes: [] };
-  for (const scene of scenes) {
-    const sceneId = scene.sceneId || scene.id;
-    const record = { sceneId, files: {} };
-    for (const [kind, key] of [
-      ["image", "imagePath"],
-      ["video", "videoPath"],
-    ]) {
-      const filePath = scene[key];
-      if (!filePath || !(await pathExists(filePath))) continue;
-      const buffer = await fs.readFile(filePath);
-      record.files[kind] = {
-        fileName: path.basename(filePath),
-        relativePath: `scene_${String(sceneId).padStart(3, "0")}/${path.basename(filePath)}`,
-        mimeType:
-          kind === "video"
-            ? "video/mp4"
-            : `image/${path.extname(filePath).slice(1).toLowerCase() || "png"}`,
-        sizeBytes: buffer.length,
-        data: buffer.toString("base64"),
-      };
-    }
-    if (Object.keys(record.files).length)
-      cloned.embeddedAssets.scenes.push(record);
-  }
-  return cloned;
-}
-
 async function restoreEmbeddedProjectAssets(payload = {}, projectFolder = "") {
   const records = Array.isArray(payload.embeddedAssets?.scenes)
     ? payload.embeddedAssets.scenes
@@ -846,15 +879,17 @@ async function restoreEmbeddedProjectAssets(payload = {}, projectFolder = "") {
     ? payload.project.scenes
     : [];
   for (const record of records) {
+    const numericSceneId = Number(record?.sceneId);
+    if (!Number.isInteger(numericSceneId) || numericSceneId <= 0) continue;
     const scene = scenes.find(
       (item) =>
-        String(item.id) === String(record.sceneId) ||
-        String(item.sceneId) === String(record.sceneId),
+        String(item.id) === String(numericSceneId) ||
+        String(item.sceneId) === String(numericSceneId),
     );
     if (!scene) continue;
     const sceneDir = path.join(
       projectFolder,
-      `scene_${String(record.sceneId).padStart(3, "0")}`,
+      `scene_${String(numericSceneId).padStart(3, "0")}`,
     );
     await fs.mkdir(sceneDir, { recursive: true });
     for (const [kind, file] of Object.entries(record.files || {})) {
@@ -5004,77 +5039,86 @@ function findChatGptConversationScript(title = "") {
 }
 
 
+let veoupBatchCoordinatorInstance = null;
+
+function getVeoUpBatchCoordinator() {
+  if (veoupBatchCoordinatorInstance) return veoupBatchCoordinatorInstance;
+  veoupBatchCoordinatorInstance = createVeoUpBatchCoordinator({
+    appendLog: appendAppLog,
+    executeAutomation: async (options = {}) => {
+      const runId = String(
+        options.runId || getScopedPipelineRunId() || "",
+      ).trim();
+      return executeVeoUpAutomation({
+        ...options,
+        runId,
+        userDataDir: app.getPath("userData"),
+        maximizeBeforeAutomation: true,
+        registerChildProcess:
+          options.registerChildProcess ||
+          ((child) => trackPipelineChildProcess(child, runId)),
+      });
+    },
+  });
+  return veoupBatchCoordinatorInstance;
+}
+
 async function runVeoUpAutomation(_event, payload = {}) {
+  const runId = String(
+    payload?.runId || getScopedPipelineRunId() || "",
+  ).trim();
   try {
-    const runId = String(
-      payload?.runId || getScopedPipelineRunId() || "",
-    ).trim();
     if (runId) pipelineCancellation.activeRunIds.add(runId);
     assertPipelineRunActive(runId);
-    await appendAppLog(null, {
-      source: "main",
-      kind: "running",
-      text: "VeoUp automation: starting after completed Vidora pipeline.",
-      details: {
-        outputFolder: payload?.outputFolder || "",
-        projectName: payload?.projectName || "",
-      },
-    }).catch(() => null);
-
-    const result = await executeVeoUpAutomation({
+    const scenes = Array.isArray(payload.scenes) ? payload.scenes : [];
+    const result = await getVeoUpBatchCoordinator().requestBatch({
       ...payload,
+      projectDir: payload.outputFolder || payload.projectDir || "",
+      expectedSceneIds: scenes.map((scene, index) =>
+        Number(scene?.id || scene?.sceneId || index + 1),
+      ),
+      trigger: payload.trigger || "pipeline-complete",
+      autoStartVideoGeneration: payload.autoStartVideoGeneration !== false,
       runId,
       isCancelled: () => isPipelineRunCancelled(runId),
       registerChildProcess: (child) => trackPipelineChildProcess(child, runId),
-      userDataDir: app.getPath("userData"),
-      maximizeBeforeAutomation: true,
     });
-    assertPipelineRunActive(runId);
-
-    if (!result || !result.ok) {
-      throw new Error(result?.error || "VeoUp automation failed");
-    }
-
-    await appendAppLog(null, {
-      source: "main",
-      kind: "ok",
-      text: `VeoUp automation: loaded ${result.imageCount || 0} keyframes and ${result.promptLineCount || 0} prompts.`,
-      details: result,
-    }).catch(() => null);
-
-    if (runId) pipelineCancellation.activeRunIds.delete(runId);
+    if (!result?.cancelled) assertPipelineRunActive(runId);
     return result;
   } catch (error) {
     if (isPipelineCancelledError(error)) {
-      const runId = String(
-        payload?.runId || getScopedPipelineRunId() || "",
-      ).trim();
-      if (runId) pipelineCancellation.activeRunIds.delete(runId);
       return {
         ok: false,
         cancelled: true,
+        status: "cancelled",
         error: error.message,
         code: error.code,
       };
     }
-    const runId = String(
-      payload?.runId || getScopedPipelineRunId() || "",
-    ).trim();
+    console.error("[VeoUp Batch Main] Exception occurred:", error);
+    await appendAppLog(null, {
+      source: "main",
+      kind: "error",
+      text: "VeoUp batch request encountered a runtime exception.",
+      details: {
+        errorMessage: error?.message || String(error),
+        errorStack: error?.stack || "",
+      },
+    }).catch(() => null);
+    return { ok: false, status: "failed", error: error?.message || String(error) };
+  } finally {
     if (runId) pipelineCancellation.activeRunIds.delete(runId);
-    console.error("[VeoUp Automation Main] Exception occurred:", error);
-    if (typeof appendAppLog === "function") {
-      await appendAppLog(
-        globalThis.__vidoraCurrentActiveSceneId || 0,
-        "error",
-        "VeoUp automation sequence encountered a runtime exception",
-        {
-          errorMessage: error?.message || String(error),
-          errorStack: error?.stack || "",
-        },
-      ).catch(() => null);
-    }
-    throw error;
   }
+}
+
+async function getVeoUpBatchStatusHandler(_event, payload = {}) {
+  return getVeoUpBatchCoordinator().getBatchStatus(
+    payload.projectDir || payload.outputFolder || "",
+  );
+}
+
+async function cancelVeoUpBatchHandler(_event, payload = {}) {
+  return getVeoUpBatchCoordinator().cancelBatch(payload);
 }
 
 async function exportProject(_event, payload) {
@@ -5220,53 +5264,24 @@ async function scanProjectAndRunVeoUpHandler(_event, payload = {}) {
   if (!projectDir) {
     return { ok: false, error: "Chưa chọn folder project." };
   }
-
-  const check = await checkIfAllScenesComplete(projectDir);
-  if (!check.complete) {
-    await appendAppLog(null, {
-      source: "main",
-      kind: "warn",
-      text: "Không tìm thấy bất kỳ scene nào có đủ cặp ảnh + prompt để nạp.",
-    });
-    return {
-      ok: false,
-      error: "Không tìm thấy bất kỳ scene nào có đủ cặp ảnh + prompt để nạp.",
-    };
-  }
-
   try {
-    await buildVeoUpPromptsReadyFile({
+    const expectedSceneCount = Number(payload.expectedSceneCount || 0);
+    const expectedSceneIds = Array.isArray(payload.expectedSceneIds)
+      ? payload.expectedSceneIds
+      : expectedSceneCount > 0
+        ? Array.from({ length: expectedSceneCount }, (_, index) => index + 1)
+        : [];
+    return await getVeoUpBatchCoordinator().requestBatch({
+      ...payload,
       projectDir,
-      sceneDirs: check.sceneDirs,
-      expectedSceneCount: check.sceneDirs.length,
+      outputFolder: projectDir,
+      expectedSceneCount,
+      expectedSceneIds,
+      trigger: payload.trigger || "manual-scan",
+      autoStartVideoGeneration: payload.autoStartVideoGeneration !== false,
+      previewStartButtonOnly: Boolean(payload.previewStartButtonOnly),
+      runId: String(payload.runId || "").trim(),
     });
-
-    const scenes = [];
-    for (const dir of check.sceneDirs) {
-      const id = parseInt(path.basename(dir).match(/\d+/)[0], 10);
-      const keyframePath = await findSceneKeyframePathSafe(dir, id);
-      scenes.push({
-        id,
-        imagePath: keyframePath,
-        keyframeOutputPath: keyframePath,
-        motionPromptPath: path.join(dir, "motion_prompt.txt"),
-      });
-    }
-
-    const config = await getVeoUpCoordinateConfig(
-      app.getPath("userData"),
-    ).catch(() => ({}));
-    const res = await runVeoUpScriptAsPromise(config, projectDir, scenes, {
-      projectName: payload.projectName || path.basename(projectDir),
-      autoStartVideoGeneration: true,
-    });
-
-    return {
-      ok: true,
-      imageCount: scenes.length,
-      promptLineCount: scenes.length,
-      ...res,
-    };
   } catch (err) {
     console.error("[scanProjectAndRunVeoUpHandler] Failed:", err);
     return { ok: false, error: err.message || String(err) };
@@ -5354,6 +5369,8 @@ app.whenReady().then(() => {
       saveVeoUpCoordinateConfigHandler,
       cancelVeoUpCoordinateSetupHandler,
       scanProjectAndRunVeoUpHandler,
+      getVeoUpBatchStatusHandler,
+      cancelVeoUpBatchHandler,
       appendAppLog,
       getAppLogPath,
       openHardPromptFile,

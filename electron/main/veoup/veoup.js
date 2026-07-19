@@ -449,6 +449,10 @@ async function collectMotionPrompts(outputFolder = '', scenes = []) {
   }
   if (grouped.length) return sortBySceneNumber(grouped);
 
+  return collectMotionPromptsFromScenes(outputFolder, scenes);
+}
+
+async function collectMotionPromptsFromScenes(outputFolder = '', scenes = []) {
   const prompts = [];
   for (const [index, scene] of (scenes || []).entries()) {
     const sceneId = Number(scene?.id || scene?.sceneId || index + 1);
@@ -462,6 +466,29 @@ async function collectMotionPrompts(outputFolder = '', scenes = []) {
     if (text) prompts.push({ sceneId, text, index: index + 1 });
   }
   return sortBySceneNumber(prompts);
+}
+
+function validateVeoUpBatchCollections(keyframes = [], prompts = [], expectedRows = 0) {
+  const expected = Number(expectedRows || 0);
+  const keyframeIds = keyframes.map((item, index) => Number(item?.sceneId || sceneNumberFrom(item?.path || item?.file || '', index + 1)));
+  const promptIds = prompts.map((item, index) => Number(item?.sceneId || index + 1));
+  const uniqueKeyframeIds = new Set(keyframeIds);
+  const uniquePromptIds = new Set(promptIds);
+  const paired = keyframeIds.length === promptIds.length &&
+    keyframeIds.every((sceneId, index) => sceneId === promptIds[index]);
+  const ok = expected > 0 &&
+    keyframeIds.length === expected &&
+    promptIds.length === expected &&
+    uniqueKeyframeIds.size === expected &&
+    uniquePromptIds.size === expected &&
+    paired;
+  return {
+    ok,
+    error: ok ? '' : 'veoup-batch-scene-pairing-mismatch',
+    expectedRows: expected,
+    keyframeSceneIds: keyframeIds,
+    promptSceneIds: promptIds,
+  };
 }
 
 function quoteForFileDialog(filePath) {
@@ -1314,21 +1341,90 @@ function Set-ClipboardText([string]$Text) {
 }
 
 function Count-LeftPromptRows($Window) {
-  $rect = $Window.Current.BoundingRectangle
-  $leftLimit = $rect.Left + ($rect.Width * 0.55)
-  $topLimit = $rect.Top + 260
-  $ids = New-Object System.Collections.Generic.HashSet[string]
-  $all = $Window.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
-  foreach ($element in $all) {
-    try {
-      $box = $element.Current.BoundingRectangle
-      if ($box.Left -gt $leftLimit -or $box.Top -lt $topLimit) { continue }
-      $name = ''
-      if ($element.Current.Name) { $name = $element.Current.Name.Trim() }
-      if ($name -match '^\d{1,5}$') { [void]$ids.Add($name) }
-    } catch {}
+  try {
+    $rect = $Window.Current.BoundingRectangle
+    $leftLimit = $rect.Left + ($rect.Width * 0.55)
+    $topLimit = $rect.Top + 260
+    $ids = New-Object System.Collections.Generic.HashSet[string]
+    $all = $Window.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
+    foreach ($element in $all) {
+      try {
+        $box = $element.Current.BoundingRectangle
+        if ($box.Left -gt $leftLimit -or $box.Top -lt $topLimit) { continue }
+        $name = ''
+        if ($element.Current.Name) { $name = $element.Current.Name.Trim() }
+        if ($name -match '^\d{1,5}$') { [void]$ids.Add($name) }
+      } catch {}
+    }
+    return $ids.Count
+  } catch {
+    return -1
   }
-  return $ids.Count
+}
+
+function Count-LeftImageRows($Window) {
+  try {
+    $rect = $Window.Current.BoundingRectangle
+    $leftLimit = $rect.Left + ($rect.Width * 0.58)
+    $topLimit = $rect.Top + 260
+    $sceneIds = New-Object System.Collections.Generic.HashSet[string]
+    $all = $Window.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
+    foreach ($element in $all) {
+      try {
+        $box = $element.Current.BoundingRectangle
+        if ($box.Left -gt $leftLimit -or $box.Top -lt $topLimit) { continue }
+        $name = [string]$element.Current.Name
+        if ($name -match 'scene[_\s-]*0*(\d{1,5})') {
+          [void]$sceneIds.Add([string][int]$Matches[1])
+        }
+      } catch {}
+    }
+    return $sceneIds.Count
+  } catch {
+    return -1
+  }
+}
+
+function Wait-For-ExpectedBatchRows($Payload) {
+  $expectedRows = [int]$Payload.expectedRows
+  if ($expectedRows -le 0) { $expectedRows = [int]$Payload.promptLineCount }
+  if (!$Payload.batchMode) {
+    return [pscustomobject]@{ ok = $true; expectedRows = $expectedRows; detectedRows = $expectedRows; imageRows = $expectedRows; promptRows = $expectedRows; verified = $false; method = 'per-scene-compatibility' }
+  }
+  $timeoutMs = [Math]::Min(300000, [Math]::Max(30000, 15000 + ($expectedRows * 500)))
+  $deadline = (Get-Date).AddMilliseconds($timeoutMs)
+  $stableCount = 0
+  $lastDetected = -1
+  $lastImageRows = -1
+  $lastPromptRows = -1
+  $probeSucceeded = $false
+  do {
+    $targetWin = Find-RealVeoUpWindow
+    if ($null -eq $targetWin) {
+      Start-Sleep -Milliseconds 750
+      continue
+    }
+    $window = [System.Windows.Automation.AutomationElement]::FromHandle($targetWin.Handle)
+    $promptRows = Count-LeftPromptRows $window
+    $imageRows = Count-LeftImageRows $window
+    if ($promptRows -ge 0 -and $imageRows -ge 0 -and ($promptRows -gt 0 -or $imageRows -gt 0)) { $probeSucceeded = $true }
+    $detectedRows = [Math]::Max(0, [Math]::Min([int]$promptRows, [int]$imageRows))
+    Write-Host "[VeoUp Batch] Row validation: images $imageRows/$expectedRows; prompts $promptRows/$expectedRows."
+    if ($imageRows -ge $expectedRows -and $promptRows -ge $expectedRows) {
+      if ($detectedRows -eq $lastDetected) { $stableCount += 1 } else { $stableCount = 1 }
+      if ($stableCount -ge 2) {
+        return [pscustomobject]@{ ok = $true; expectedRows = $expectedRows; detectedRows = $detectedRows; imageRows = $imageRows; promptRows = $promptRows; verified = $true; method = 'uia-row-count'; timeoutMs = $timeoutMs }
+      }
+    } else {
+      $stableCount = 0
+    }
+    $lastDetected = $detectedRows
+    $lastImageRows = $imageRows
+    $lastPromptRows = $promptRows
+    Start-Sleep -Milliseconds 1000
+  } while ((Get-Date) -lt $deadline)
+  $errorCode = $(if ($probeSucceeded) { 'veoup-batch-row-count-mismatch' } else { 'veoup-row-count-unverifiable' })
+  return [pscustomobject]@{ ok = $false; error = $errorCode; expectedRows = $expectedRows; detectedRows = [Math]::Max(0, $lastDetected); imageRows = [Math]::Max(0, $lastImageRows); promptRows = [Math]::Max(0, $lastPromptRows); verified = $false; method = 'uia-row-count'; timeoutMs = $timeoutMs }
 }
 
 function Click-ImageToVideo-Tab($Window) {
@@ -1490,9 +1586,11 @@ function Invoke-FinalStartButton($Payload) {
     return [pscustomobject]@{ ok = $false; error = 'missing-generate-button-coordinate' }
   }
 
-  $baselineList = Get-VideoFileSnapshot $Payload
   $baselinePaths = @{}
-  foreach ($item in $baselineList) { $baselinePaths[$item.FullName] = $true }
+  if (!$Payload.batchMode) {
+    $baselineList = Get-VideoFileSnapshot $Payload
+    foreach ($item in $baselineList) { $baselinePaths[$item.FullName] = $true }
+  }
 
   $ack = $null
   $maxAttempts = 2
@@ -1511,6 +1609,11 @@ function Invoke-FinalStartButton($Payload) {
     return [pscustomobject]@{ ok = $false; error = 'veoup-generate-click-not-acknowledged'; acknowledgement = $ack }
   }
 
+  if ($Payload.batchMode) {
+    Write-Host "[VeoUp Batch] Generate submission acknowledged; output monitoring remains external."
+    return [pscustomobject]@{ ok = $true; submitted = $true; acknowledgement = $ack }
+  }
+
   $submittedAtUtc = (Get-Date).ToUniversalTime().AddSeconds(-2)
   $video = Wait-For-StableNewVideo $Payload $baselinePaths $submittedAtUtc
   if (!$video.ok) { return $video }
@@ -1519,6 +1622,22 @@ function Invoke-FinalStartButton($Payload) {
     Write-Host "veoup-post-generation-cleanup-failed"
   }
   return [pscustomobject]@{ ok = $true; sourceDownloadPath = $video.path; videoPath = $video.path; acknowledgement = $ack; video = $video; postGenerationCleanup = $cleanup; cleanupError = $(if ($cleanup.ok) { '' } else { 'veoup-post-generation-cleanup-failed' }) }
+}
+
+function Preview-VeoUpStartButton($Payload) {
+  if (${startButtonOffsetX} -eq 0 -or ${startButtonOffsetY} -eq 0) {
+    return [pscustomobject]@{ ok = $false; error = 'missing-generate-button-coordinate' }
+  }
+  $targetWin = Find-RealVeoUpWindow
+  if ($null -eq $targetWin) {
+    return [pscustomobject]@{ ok = $false; error = 'veoup-window-not-found-before-start-preview' }
+  }
+  $hwnd = $targetWin.Handle
+  [void](Focus-VeoUpHwnd $hwnd)
+  $mapping = Resolve-ClientClickPoint $hwnd ([double]${startButtonOffsetX}) ([double]${startButtonOffsetY}) 'generate-button-preview'
+  [Windows.Forms.Cursor]::Position = New-Object Drawing.Point($mapping.finalScreenPoint.X, $mapping.finalScreenPoint.Y)
+  Write-Host "[VeoUp Batch] Preview-only mode: cursor moved to Start; no click performed."
+  return [pscustomobject]@{ ok = $true; previewed = $true; mapping = $mapping }
 }
 
 Write-Host "[VeoUp] Verifying clean input state before new scene submission..."
@@ -1536,6 +1655,9 @@ if (!$preCleanup.ok) {
     promptLineCount = [int]$payload.promptLineCount
     promptFilePath = [string]$payload.promptFilePath
     keyframesFolder = [string]$payload.keyframesFolder
+    batchId = [string]$payload.batchId
+    chunkIndex = [int]$payload.chunkIndex
+    chunkCount = [int]$payload.chunkCount
     runId = [string]$payload.runId
     sceneId = [int]$payload.sceneId
   }
@@ -1591,8 +1713,12 @@ Start-Sleep -Milliseconds 200
 Start-Sleep -Milliseconds 300
 [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
 
-Write-Host "[VeoUp] Waiting 5 seconds for VeoUp image grid to append assets..."
-Start-Sleep -Milliseconds 5000
+$imageImportWaitMs = 5000
+if ($payload.batchMode) {
+  $imageImportWaitMs = [Math]::Min(60000, [Math]::Max(5000, ([int]$payload.imageCount * 150)))
+}
+Write-Host "[VeoUp] Waiting $imageImportWaitMs ms for VeoUp image grid to append assets..."
+Start-Sleep -Milliseconds $imageImportWaitMs
 
 $titleAfterOpen = Get-ActiveWindowTitle
 $classAfterOpen = Get-ActiveWindowClassName
@@ -1635,7 +1761,82 @@ Start-Sleep -Milliseconds 500
 
 Write-Host "[VeoUp Macro Progress] All keyframes and prompt lines dispatched."
 
-Start-Sleep -Seconds 1.5
+Start-Sleep -Milliseconds 1500
+$rowValidation = Wait-For-ExpectedBatchRows $payload
+if (!$rowValidation.ok) {
+  if (Get-Command Clear-Clipboard -ErrorAction SilentlyContinue) { Clear-Clipboard } else { [System.Windows.Forms.Clipboard]::Clear() }
+  $result = [pscustomobject]@{
+    ok = $false
+    error = [string]$rowValidation.error
+    status = [string]$rowValidation.error
+    expectedRows = [int]$rowValidation.expectedRows
+    detectedRows = [int]$rowValidation.detectedRows
+    imageRows = [int]$rowValidation.imageRows
+    promptRows = [int]$rowValidation.promptRows
+    imageCount = [int]$payload.imageCount
+    promptLineCount = [int]$payload.promptLineCount
+    promptFilePath = [string]$payload.promptFilePath
+    keyframesFolder = [string]$payload.keyframesFolder
+    batchId = [string]$payload.batchId
+    chunkIndex = [int]$payload.chunkIndex
+    chunkCount = [int]$payload.chunkCount
+    runId = [string]$payload.runId
+    sceneId = [int]$payload.sceneId
+  }
+  'VIDORA_VEOUP_RESULT ' + ($result | ConvertTo-Json -Depth 8 -Compress)
+  exit 0
+}
+
+if ($payload.previewStartButtonOnly) {
+  $previewResult = Preview-VeoUpStartButton $payload
+  if (Get-Command Clear-Clipboard -ErrorAction SilentlyContinue) { Clear-Clipboard } else { [System.Windows.Forms.Clipboard]::Clear() }
+  $result = [pscustomobject]@{
+    ok = [bool]$previewResult.ok
+    error = [string]$previewResult.error
+    status = $(if ($previewResult.ok) { 'previewed' } else { [string]$previewResult.error })
+    generateAcknowledged = $false
+    expectedRows = [int]$rowValidation.expectedRows
+    detectedRows = [int]$rowValidation.detectedRows
+    imageRows = [int]$rowValidation.imageRows
+    promptRows = [int]$rowValidation.promptRows
+    imageCount = [int]$payload.imageCount
+    promptLineCount = [int]$payload.promptLineCount
+    promptFilePath = [string]$payload.promptFilePath
+    keyframesFolder = [string]$payload.keyframesFolder
+    batchId = [string]$payload.batchId
+    chunkIndex = [int]$payload.chunkIndex
+    chunkCount = [int]$payload.chunkCount
+    runId = [string]$payload.runId
+    sceneId = [int]$payload.sceneId
+  }
+  'VIDORA_VEOUP_RESULT ' + ($result | ConvertTo-Json -Depth 8 -Compress)
+  exit 0
+}
+
+if (!$payload.autoStartVideoGeneration) {
+  if (Get-Command Clear-Clipboard -ErrorAction SilentlyContinue) { Clear-Clipboard } else { [System.Windows.Forms.Clipboard]::Clear() }
+  $result = [pscustomobject]@{
+    ok = $true
+    status = 'loaded'
+    generateAcknowledged = $false
+    expectedRows = [int]$rowValidation.expectedRows
+    detectedRows = [int]$rowValidation.detectedRows
+    imageRows = [int]$rowValidation.imageRows
+    promptRows = [int]$rowValidation.promptRows
+    imageCount = [int]$payload.imageCount
+    promptLineCount = [int]$payload.promptLineCount
+    promptFilePath = [string]$payload.promptFilePath
+    keyframesFolder = [string]$payload.keyframesFolder
+    batchId = [string]$payload.batchId
+    chunkIndex = [int]$payload.chunkIndex
+    chunkCount = [int]$payload.chunkCount
+    runId = [string]$payload.runId
+    sceneId = [int]$payload.sceneId
+  }
+  'VIDORA_VEOUP_RESULT ' + ($result | ConvertTo-Json -Depth 8 -Compress)
+  exit 0
+}
+
 $generateResult = Invoke-FinalStartButton $payload
 if (Get-Command Clear-Clipboard -ErrorAction SilentlyContinue) { Clear-Clipboard } else { [System.Windows.Forms.Clipboard]::Clear() }
 if (!$generateResult.ok) {
@@ -1643,31 +1844,43 @@ if (!$generateResult.ok) {
     ok = $false
     error = [string]$generateResult.error
     status = [string]$generateResult.error
-    expectedRows = [int]$payload.promptLineCount
-    detectedRows = [int]$payload.promptLineCount
+    expectedRows = [int]$rowValidation.expectedRows
+    detectedRows = [int]$rowValidation.detectedRows
+    imageRows = [int]$rowValidation.imageRows
+    promptRows = [int]$rowValidation.promptRows
     imageCount = [int]$payload.imageCount
     promptLineCount = [int]$payload.promptLineCount
     promptFilePath = [string]$payload.promptFilePath
     keyframesFolder = [string]$payload.keyframesFolder
+    batchId = [string]$payload.batchId
+    chunkIndex = [int]$payload.chunkIndex
+    chunkCount = [int]$payload.chunkCount
     runId = [string]$payload.runId
     sceneId = [int]$payload.sceneId
   }
   'VIDORA_VEOUP_RESULT ' + ($result | ConvertTo-Json -Depth 8 -Compress)
   exit 0
 }
-Write-Host "[VeoUp Macro Progress] Final Start acknowledged, video found, and clipboard cleared."
+Write-Host "[VeoUp Macro Progress] Final Start acknowledged and clipboard cleared."
 
 $result = [pscustomobject]@{
   ok = $true
+  status = $(if ($payload.batchMode) { 'submitted' } else { 'completed' })
   sourceDownloadPath = [string]$generateResult.sourceDownloadPath
   videoPath = [string]$generateResult.videoPath
   generateAcknowledged = $true
   postGenerationCleanupOk = [bool]$generateResult.postGenerationCleanup.ok
   postGenerationCleanupError = [string]$generateResult.cleanupError
+  postGenerationCleanupSkipped = [bool]$payload.batchMode
   runId = [string]$payload.runId
+  batchId = [string]$payload.batchId
+  chunkIndex = [int]$payload.chunkIndex
+  chunkCount = [int]$payload.chunkCount
   sceneId = [int]$payload.sceneId
-  expectedRows = [int]$payload.promptLineCount
-  detectedRows = [int]$payload.promptLineCount
+  expectedRows = [int]$rowValidation.expectedRows
+  detectedRows = [int]$rowValidation.detectedRows
+  imageRows = [int]$rowValidation.imageRows
+  promptRows = [int]$rowValidation.promptRows
   imageCount = [int]$payload.imageCount
   promptLineCount = [int]$payload.promptLineCount
   promptFilePath = [string]$payload.promptFilePath
@@ -1734,11 +1947,11 @@ function runPowerShell(scriptPath, payloadPath, timeoutMs = 120000, options = {}
       }
     };
     child.on('close', (code, signal) => handleExit(code, signal));
-    child.on('exit', (code, signal) => handleExit(code, signal));
     child.on('error', (err) => {
       if (finished) return;
       finished = true;
       clearTimeout(timer);
+      clearInterval(cancelTimer);
       reject(err);
     });
   });
@@ -1754,7 +1967,26 @@ function readJsonFileStripBom(filePath) {
   return JSON.parse(raw.trim());
 }
 
+let activeVeoUpAutomationExecution = null;
+
 async function executeVeoUpAutomation(payload = {}) {
+  if (activeVeoUpAutomationExecution) {
+    return {
+      ok: false,
+      status: 'veoup-automation-busy',
+      error: 'veoup-automation-busy',
+      activeBatchId: activeVeoUpAutomationExecution.batchId,
+      activeRunId: activeVeoUpAutomationExecution.runId,
+      activeSceneId: activeVeoUpAutomationExecution.sceneId,
+      outputFolder: String(payload.outputFolder || payload.videoOutputFolder || ''),
+    };
+  }
+  const executionToken = {
+    batchId: String(payload.batchId || ''),
+    runId: String(payload.runId || ''),
+    sceneId: Number(payload.scenes?.[0]?.id || payload.scenes?.[0]?.sceneId || 0),
+  };
+  activeVeoUpAutomationExecution = executionToken;
   let resolvedOutputFolder = '';
   try {
     const throwIfCancelled = () => {
@@ -1772,7 +2004,25 @@ async function executeVeoUpAutomation(payload = {}) {
     const scenes = Array.isArray(payload.scenes) ? payload.scenes : [];
     throwIfCancelled();
     const collectedKeyframes = await collectKeyframes(resolvedOutputFolder, scenes);
-    const prompts = await collectMotionPrompts(resolvedOutputFolder, scenes);
+    const prompts = payload.batchMode
+      ? await collectMotionPromptsFromScenes(resolvedOutputFolder, scenes)
+      : await collectMotionPrompts(resolvedOutputFolder, scenes);
+    if (payload.batchMode) {
+      const pairing = validateVeoUpBatchCollections(
+        collectedKeyframes,
+        prompts,
+        Number(payload.expectedRows || scenes.length),
+      );
+      if (!pairing.ok) {
+        return {
+          ok: false,
+          status: pairing.error,
+          error: pairing.error,
+          outputFolder: resolvedOutputFolder,
+          ...pairing,
+        };
+      }
+    }
     const exportedPrompts = await exportVeoUpPromptFile(resolvedOutputFolder, prompts);
     const preparedKeyframes = await prepareVeoUpKeyframesFolder(resolvedOutputFolder, collectedKeyframes);
     throwIfCancelled();
@@ -1902,9 +2152,14 @@ async function executeVeoUpAutomation(payload = {}) {
       runningWindow: resolvedLauncher.runningWindow || null,
       searchedLauncherPaths: resolvedLauncher.searchedPaths || [],
       runId: payload.runId || '',
+      batchId: payload.batchId || '',
+      batchMode: Boolean(payload.batchMode),
+      chunkIndex: Number(payload.chunkIndex || 1),
+      chunkCount: Number(payload.chunkCount || 1),
       sceneId: scenes.length === 1 ? Number(scenes[0]?.id || scenes[0]?.sceneId || 1) : 0,
       imageCount: keyframes.length,
       promptLineCount,
+      expectedRows: Number(payload.expectedRows || promptLineCount),
       keyframesFolder: preparedKeyframes.keyframesDir,
       promptFilePath: exportedPrompts.promptFilePath,
       keyframes: keyframes.map((item) => item.path),
@@ -1923,6 +2178,7 @@ async function executeVeoUpAutomation(payload = {}) {
       clearButtonOffsetY,
       maximizeBeforeAutomation: payload.maximizeBeforeAutomation !== false,
       autoStartVideoGeneration: Boolean(payload.autoStartVideoGeneration),
+      previewStartButtonOnly: Boolean(payload.previewStartButtonOnly),
       generationTimeoutMs,
     };
 
@@ -1998,6 +2254,10 @@ async function executeVeoUpAutomation(payload = {}) {
     }
     if (error?.code === 'PIPELINE_CANCELLED' || /^PIPELINE_CANCELLED:/i.test(String(error?.message || error))) throw error;
     return { ok: false, error: error?.message || String(error), outputFolder: resolvedOutputFolder };
+  } finally {
+    if (activeVeoUpAutomationExecution === executionToken) {
+      activeVeoUpAutomationExecution = null;
+    }
   }
 }
 let calibrationSession = null;
@@ -2926,6 +3186,8 @@ module.exports = {
   normalizeWhitespace,
   collectKeyframes,
   collectMotionPrompts,
+  collectMotionPromptsFromScenes,
+  validateVeoUpBatchCollections,
   convertVeoUpClientPointToScreen,
   prepareVeoUpKeyframesFolder,
   exportVeoUpPromptFile,
@@ -3061,7 +3323,7 @@ function isVeoUpStageError(error) {
       }
     })
     .join(" ");
-  return /veoup-launcher-not-found|veoup-pre-submission-cleanup-failed|veoup-window-not-found|output timeout|generate acknowledgement|veoup-generate-click-not-acknowledged|veoup-generate-submission-not-acknowledged|veoup-video-missing-after-submission/i.test(
+  return /veoup-automation-busy|veoup-launcher-not-found|veoup-pre-submission-cleanup-failed|veoup-window-not-found|output timeout|generate acknowledgement|veoup-generate-click-not-acknowledged|veoup-generate-submission-not-acknowledged|veoup-video-missing-after-submission/i.test(
     message,
   );
 }
@@ -3102,4 +3364,3 @@ async function runVeoUpScriptAsPromise(
   }
   return result;
 }
-

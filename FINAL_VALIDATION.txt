@@ -1,9 +1,9 @@
 Vidora final validation
 =======================
-Date: 2026-07-14 (Asia/Ho_Chi_Minh)
+Date: 2026-07-15 (Asia/Ho_Chi_Minh)
 
 PASS: JavaScript syntax checks for electron/main.js, renderer.js, preload.js and every electron/main/**/*.js.
-PASS: npm test -> all 33 tests/*.test.js files passed.
+PASS: npm test -> all 34 tests/*.test.js files passed.
 PASS: direct Electron dependency resolved: Electron 30.5.1.
 PASS: npm dependency tree resolves at depth 0.
 PASS: Windows x64 portable assembled at dist/win-unpacked with the current app.asar.
@@ -22,6 +22,10 @@ PASS: every 5 fully successful ChatGPT scenes triggers a reload of the same veri
 PASS: stale image-turn baseline regression (configured baseline 24, virtualized DOM count 1) rebases to the current owned image card and extracts without duplicate NV1 resend.
 PASS: the same DOM rebase is rejected when latest-prompt ownership is false, the image precedes the latest user turn, generation still has a Stop control, or the baseline has not actually shrunk.
 PASS: WAIT_IMAGE/NV1_SENT resume recognizes the deterministic owned RETRY 1 prompt hash and persists that hash for subsequent restarts.
+PASS: transient CDP navigation errors are not renderer crashes; recovery preserves the active conversation and waits for DOM/load stability without Page.navigate.
+PASS: transient conversation URL and NV1 ownership reads wait and retry instead of reporting ownership loss from an empty navigation-time DOM.
+PASS: an owned, complete, stable text-only NV1 response is detected before the no-image early continue and triggers exactly one same-conversation RETRY 1.
+PASS: text-only detection rejects assistant text from before the latest user turn and waits while Stop/placeholder generation signals remain visible.
 PASS: NV2 text discovery remains scoped to logical assistant/markdown response content.
 PASS: NV2 accepts an owned in-place mutation of the existing assistant node, returns a real text hash, requires 3 stable ticks/4 seconds, and refuses completion while hard-generating or soft-busy.
 

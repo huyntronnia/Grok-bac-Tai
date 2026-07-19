@@ -224,6 +224,51 @@ function selectLatestCompletedAssistantMessage(snapshot = {}) {
   };
 }
 
+function buildNv2OwnedPromptBaseline(snapshot = {}, promptHash = "", fallback = {}) {
+  const wantedHash = String(promptHash || "").trim();
+  const userMessages = Array.isArray(snapshot?.userMessages)
+    ? snapshot.userMessages
+    : [];
+  const assistantMessages = Array.isArray(snapshot?.messages)
+    ? snapshot.messages
+    : [];
+  const ownedUser = [...userMessages]
+    .reverse()
+    .find(
+      (message) =>
+        wantedHash && String(message?.hash || "").trim() === wantedHash,
+    );
+  const ownedUserTurnIndex = Number(ownedUser?.turnIndex);
+  if (!ownedUser || !Number.isFinite(ownedUserTurnIndex)) return null;
+
+  const assistantsBeforeOwnedUser = assistantMessages.filter((message) => {
+    const turnIndex = Number(message?.turnIndex);
+    return Number.isFinite(turnIndex) && turnIndex < ownedUserTurnIndex;
+  });
+  const usersThroughOwnedPrompt = userMessages.filter((message) => {
+    const turnIndex = Number(message?.turnIndex);
+    return Number.isFinite(turnIndex) && turnIndex <= ownedUserTurnIndex;
+  });
+  const latestAssistantBeforeOwnedUser = assistantsBeforeOwnedUser.at(-1);
+
+  return {
+    count: assistantsBeforeOwnedUser.length,
+    userCount: usersThroughOwnedPrompt.length,
+    maxTurnIndex: ownedUserTurnIndex,
+    nv2UserTurnIndex: ownedUserTurnIndex,
+    text: String(latestAssistantBeforeOwnedUser?.text || "").trim(),
+    ids: assistantsBeforeOwnedUser.map((message) => message?.id).filter(Boolean),
+    hashes: assistantsBeforeOwnedUser
+      .map((message) => message?.hash)
+      .filter(Boolean),
+    userIds: usersThroughOwnedPrompt.map((message) => message?.id).filter(Boolean),
+    userHashes: usersThroughOwnedPrompt
+      .map((message) => message?.hash)
+      .filter(Boolean),
+    url: String(fallback?.url || snapshot?.url || ""),
+  };
+}
+
 function selectNewAssistantMessageAfterBaseline(
   snapshot = {},
   baseline = {},
@@ -374,6 +419,7 @@ module.exports = {
   isNv2SnapshotGenerationActive,
   extractCompletedNv2ResponseFromSnapshot,
   selectLatestCompletedAssistantMessage,
+  buildNv2OwnedPromptBaseline,
   selectNewAssistantMessageAfterBaseline,
   looksLikeCollapsedUserPrompt,
   isChatGptLimitText,

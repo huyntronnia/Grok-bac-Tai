@@ -315,8 +315,15 @@ async function performDurableRecovery(page, options, sceneDir, snapshot, stage, 
   return { action: "wait", pageState };
 }
 
+function isTransientCdpNavigationError(error) {
+  return /execution context.*destroyed|cannot find context|most likely because of (?:a )?navigation|frame was detached|navigat(?:ed|ing|ion).*context/i.test(
+    String(error?.message || error || ""),
+  );
+}
+
 function isCdpCrashError(error) {
-  return /crash|crashed|Aw, Snap|Out of Memory|cannot find context|execution context.*destroyed|target.*closed|inspected target.*closed|webcontents was destroyed|session closed/i.test(
+  if (isTransientCdpNavigationError(error)) return false;
+  return /crash|crashed|Aw, Snap|Out of Memory|target.*closed|inspected target.*closed|webcontents was destroyed|session closed/i.test(
     String(error?.message || error || ""),
   );
 }
@@ -371,11 +378,45 @@ async function recoverCdpPageIfCrashed(
   ).catch((error) => ({
     ok: false,
     crashed: isCdpCrashError(error),
+    transientNavigation: isTransientCdpNavigationError(error),
     error: error.message,
   }));
 
   const currentSceneId = globalThis.__vidoraLastProcessedSceneId || "unknown";
   const sendState = getChatGptSendState(currentSceneId);
+
+  if (state?.transientNavigation) {
+    await appendAppLog(currentSceneId, {
+      source: "main",
+      kind: "running",
+      text: `${PROVIDER_META[provider]?.title || provider}: transient navigation interrupted a CDP read during ${reason}; preserving the current conversation and waiting for the page to settle.`,
+      details: { provider, reason, state },
+    }).catch(() => null);
+    await waitForCdpLoad(client).catch(() => null);
+    await sleep(350);
+    const afterNavigation = await evaluateOnCdpPage(
+      client,
+      `(${detectBrowserCrashPageScript.toString()})()`,
+    ).catch((error) => ({
+      ok: false,
+      crashed: isCdpCrashError(error),
+      transientNavigation: isTransientCdpNavigationError(error),
+      error: error.message,
+    }));
+    if (!afterNavigation?.crashed) {
+      return {
+        ok: true,
+        skipped: true,
+        reason: "TRANSIENT_CDP_NAVIGATION",
+        state,
+        after: afterNavigation,
+      };
+    }
+    state.crashed = true;
+    state.transientNavigation = false;
+    state.reason = afterNavigation.reason || state.reason;
+    state.error = afterNavigation.error || state.error;
+  }
 
   if (!state?.crashed) {
     if (sendState === "PREPARING" || sendState === "READY" || sendState === "CLICKING") {
@@ -411,6 +452,7 @@ async function recoverCdpPageIfCrashed(
   ).catch((error) => ({
     ok: false,
     crashed: isCdpCrashError(error),
+    transientNavigation: isTransientCdpNavigationError(error),
     error: error.message,
   }));
   if (after?.crashed) {
@@ -774,6 +816,8 @@ module.exports = {
   forceCleanChatGptNewChatRotation,
   isChatGptRequestRotationEligible,
   initChatGptRecovery,
+  isTransientCdpNavigationError,
+  isCdpCrashError,
   isReloadBlocked,
   requestReloadWithReason,
   performDurableRecovery,
