@@ -24,6 +24,7 @@ const {
   isChatGptLimitText,
   isSameChatTitle,
   extractCompletedNv2ResponseFromSnapshot,
+  buildNv2OwnedPromptBaseline,
 } = require("../state");
 const {
   getChatGptContextFresh,
@@ -73,6 +74,8 @@ const {
   isRetryableChatGptToolErrorText,
   normalizeChatGptRetryText,
 } = require("../recovery");
+
+const CHATGPT_HYDRATION_KEYFRAME_LIMIT = 10;
 
 // --- Injected dependencies (set via initChatGptPipeline) ---
 let getCdpPage;
@@ -616,6 +619,7 @@ async function generateMotionPromptWithChatGPT({
   chatContextTitle = "",
   chatGptStability = {},
   keyframeMotionPromptOnly = false,
+  runId = "",
 }) {
   const lockKey = `scene:${sceneId}:motion_prompt`;
   const existing = motionPromptSendLocks.get(lockKey);
@@ -649,6 +653,7 @@ async function generateMotionPromptWithChatGPT({
       chatContextTitle,
       chatGptStability,
       keyframeMotionPromptOnly,
+      runId,
     },
     { lockKey, attemptId },
   );
@@ -681,6 +686,7 @@ async function generateMotionPromptWithChatGPTOnce(
     chatContextTitle = "",
     chatGptStability = {},
     keyframeMotionPromptOnly = false,
+    runId = "",
   },
   lockInfo = {},
 ) {
@@ -759,7 +765,7 @@ async function generateMotionPromptWithChatGPTOnce(
         ? beforeCountFromRoots
         : 0;
 
-    const before = {
+    let before = {
       count: beforeCount,
       userCount: beforeSnapshot?.userCount || 0,
       maxTurnIndex: Number.isFinite(Number(beforeSnapshot?.maxTurnIndex)) ? Number(beforeSnapshot.maxTurnIndex) : -1,
@@ -793,6 +799,91 @@ async function generateMotionPromptWithChatGPTOnce(
       pageState.latestUserMessageHash === instructionHash ||
       (Array.isArray(before.userHashes) && before.userHashes.includes(instructionHash)) ||
       (Array.isArray(before.hashes) && before.hashes.includes(instructionHash));
+    const liveOwnedPromptBaseline =
+      pageState.latestUserMessageHash === instructionHash
+        ? buildNv2OwnedPromptBaseline(
+            beforeSnapshot,
+            instructionHash,
+            before,
+          )
+        : null;
+    if (liveOwnedPromptBaseline) {
+      before = liveOwnedPromptBaseline;
+      snapshot.nv2Baseline = liveOwnedPromptBaseline;
+      snapshot.nv2UserTurnIndex = liveOwnedPromptBaseline.nv2UserTurnIndex;
+    }
+    let forceNv2Resend = false;
+    const manualNv2RetryRequested = Boolean(
+      snapshot.manualNv2RetryRequested === true &&
+        (!snapshot.manualNv2RetryRunId ||
+          snapshot.manualNv2RetryRunId === runId),
+    );
+    if (
+      manualNv2RetryRequested &&
+      snapshot.pipelineStage === "NV2_SENT" &&
+      pageState.latestUserMessageHash === instructionHash &&
+      liveOwnedPromptBaseline
+    ) {
+      const completedAfterOwnedPrompt =
+        extractCompletedNv2ResponseFromSnapshot(
+          beforeSnapshot,
+          liveOwnedPromptBaseline,
+        );
+      const generationActive = Boolean(
+        beforeSnapshot?.generationActive ||
+          beforeSnapshot?.stopVisible ||
+          beforeSnapshot?.streamingIndicator ||
+          beforeSnapshot?.composerBusy ||
+          pageState?.streaming ||
+          pageState?.stopButtonVisible,
+      );
+      forceNv2Resend = Boolean(
+        !generationActive &&
+          !completedAfterOwnedPrompt?.ok &&
+          completedAfterOwnedPrompt?.error === "no-new-assistant",
+      );
+      snapshot.manualNv2RetryRequested = false;
+      snapshot.manualNv2RetryRunId = "";
+      snapshot.manualNv2RetryConsumedAt = new Date().toISOString();
+      if (forceNv2Resend) {
+        snapshot.pipelineStage = "NV2_MANUAL_RETRY_READY";
+        if (!snapshot.hydration) snapshot.hydration = {};
+        snapshot.hydration.sceneUploadDone = false;
+        snapshot.hydration.promptUploadDone = false;
+        await appendAppLog(sceneId, {
+          source: "main",
+          kind: "running",
+          text: `Scene ${sceneId}: owned NV2 request is idle without an assistant response; performing one manual, keyframe-preserving resend.`,
+          details: {
+            runId,
+            nv2UserTurnIndex: liveOwnedPromptBaseline.nv2UserTurnIndex,
+          },
+        }).catch(() => null);
+      } else {
+        await appendAppLog(sceneId, {
+          source: "main",
+          kind: "running",
+          text: `Scene ${sceneId}: manual NV2 recovery found an active or completed owned turn; adopting it without duplicate resend.`,
+          details: {
+            generationActive,
+            completed: Boolean(completedAfterOwnedPrompt?.ok),
+          },
+        }).catch(() => null);
+      }
+      await writeSceneSnapshot(sceneDir, snapshot);
+    } else if (manualNv2RetryRequested) {
+      // The saved conversation no longer owns this NV2 turn (or the stage has
+      // already advanced). Consume the one-shot recovery request here; the
+      // existing normal send/resume path below is the safe recovery action.
+      snapshot.manualNv2RetryRequested = false;
+      snapshot.manualNv2RetryRunId = "";
+      snapshot.manualNv2RetryConsumedAt = new Date().toISOString();
+      snapshot.manualNv2RetryConsumedReason =
+        pageState.latestUserMessageHash === instructionHash
+          ? "owned-turn-not-resumable"
+          : "owned-turn-missing-use-normal-send";
+      await writeSceneSnapshot(sceneDir, snapshot);
+    }
 
     // If we are resuming from NV2_SENT, first prove the current chat actually has this NV2 prompt.
     if (snapshot.pipelineStage === "NV2_SENT" && nv2PromptAlreadySent) {
@@ -824,7 +915,10 @@ async function generateMotionPromptWithChatGPTOnce(
       snapshot.createdAt = new Date().toISOString();
       await writeSceneSnapshot(sceneDir, snapshot);
 
-      const isDraftMatches = verifyDraftOwnership(snapshot, pageState) && pageState.composerReady;
+      const isDraftMatches =
+        !forceNv2Resend &&
+        verifyDraftOwnership(snapshot, pageState) &&
+        pageState.composerReady;
       if (isDraftMatches) {
         await appendAppLog(sceneId, {
           source: "main",
@@ -838,7 +932,9 @@ async function generateMotionPromptWithChatGPTOnce(
         snapshot.pipelineStage = "NV2_SENT";
         await writeSceneSnapshot(sceneDir, snapshot);
       } else {
-        const userPromptMatches = (pageState.latestUserMessageHash === instructionHash);
+        const userPromptMatches =
+          !forceNv2Resend &&
+          pageState.latestUserMessageHash === instructionHash;
         if (userPromptMatches) {
           await appendAppLog(null, {
             source: "main",
@@ -876,7 +972,9 @@ async function generateMotionPromptWithChatGPTOnce(
 
           const sent = await sendNv2PromptViaDeepCdpInput(page, instruction, {
             sceneId,
-            stage: "motion_prompt",
+            stage: forceNv2Resend
+              ? "motion_prompt_manual_recovery"
+              : "motion_prompt",
             attemptId: lockInfo.attemptId,
             beforeCount: before.count,
           });
@@ -909,10 +1007,32 @@ async function generateMotionPromptWithChatGPTOnce(
           if (ownedNv2State?.latestUserMessageHash !== instructionHash) {
             throw new Error("nv2-user-message-not-confirmed-after-send");
           }
+          const ownedNv2Snapshot = await evaluateOnCdpPage(
+            page,
+            `(${readAssistantMessageSnapshotScript.toString()})()`,
+          ).catch(() => ({}));
+          const ownedUserTurnIndex = Number(
+            ownedNv2Snapshot?.latestUserTurnIndex,
+          );
+          if (Number.isFinite(ownedUserTurnIndex) && ownedUserTurnIndex >= 0) {
+            before = {
+              ...before,
+              maxTurnIndex: ownedUserTurnIndex,
+              nv2UserTurnIndex: ownedUserTurnIndex,
+            };
+          }
 
           if (!snapshot.hydration) snapshot.hydration = {};
           snapshot.hydration.promptUploadDone = true;
           snapshot.pipelineStage = "NV2_SENT";
+          snapshot.nv2Baseline = before;
+          snapshot.nv2UserTurnIndex = before.nv2UserTurnIndex ?? null;
+          snapshot.nv2SentAt = new Date().toISOString();
+          snapshot.nv2AttemptId = lockInfo.attemptId || "";
+          if (forceNv2Resend) {
+            snapshot.nv2ManualResendCount =
+              Number(snapshot.nv2ManualResendCount || 0) + 1;
+          }
           await writeSceneSnapshot(sceneDir, snapshot);
 
           if (keyframeMotionPromptOnly) {
@@ -943,6 +1063,7 @@ async function generateMotionPromptWithChatGPTOnce(
       refreshAfterMs: undefined,
       refreshReason: undefined,
       expectedConversationId,
+      runId,
     });
     if (!result?.ok) {
       throw new Error(result?.error || "IMAGE_STAGE NV2 response waiting failed.");
@@ -5057,7 +5178,11 @@ async function hydrateFreshChatGptContextAfterRotation(
   {
     await setChatGptTaskState(sceneDir, "REQUEST2", "SEND", { sceneId });
     const recentKeyframes = projectDir
-      ? await collectRecentProjectKeyframes(projectDir, 5, sceneId)
+      ? await collectRecentProjectKeyframes(
+          projectDir,
+          CHATGPT_HYDRATION_KEYFRAME_LIMIT,
+          sceneId,
+        )
       : [];
     const beforeScenes = await evaluateOnCdpPage(
       page,
@@ -5101,7 +5226,7 @@ async function hydrateFreshChatGptContextAfterRotation(
       }).catch(() => null);
     }
     const request2Prompt =
-      "Request 2: read and remember the attached keyframes from up to 5 previous project scenes. Use them as visual continuity context for upcoming requests. Reply only when ready.";
+      `Request 2: read and remember the attached keyframes from up to ${CHATGPT_HYDRATION_KEYFRAME_LIMIT} previous project scenes. Use them as visual continuity context for upcoming requests. Reply only when ready.`;
     const sentScenes = await sendPromptWithSameChatRefreshRecovery(
       page,
       request2Prompt,
@@ -5254,7 +5379,10 @@ async function hydrateFreshChatGptContextAfterRotation(
     await sleep(1500);
   }
   const keyframes = projectDir
-    ? await collectRecentProjectKeyframes(projectDir, 5)
+    ? await collectRecentProjectKeyframes(
+        projectDir,
+        CHATGPT_HYDRATION_KEYFRAME_LIMIT,
+      )
     : [];
   if (keyframes.length) {
     await appendAppLog(null, {

@@ -224,6 +224,7 @@ let autoContinuing = false;
 let currentProjectFilePath = '';
 let projectDirty = false;
 const PROJECT_AUTOSAVE_DEBOUNCE_MS = 1000;
+const MAX_PROJECT_SCENE_COUNT = 10000;
 let projectAutosaveTimer = null;
 let projectAutosaveRevision = 0;
 let projectAutosaveSavedRevision = 0;
@@ -234,6 +235,7 @@ let lastMissingAssetCount = 0;
 let activePipelineRunId = '';
 let cancelledPipelineRunId = '';
 let stopPipelineInFlight = false;
+let pendingManualRecoveryResetSceneIds = new Set();
 const pipelineTimers = new Map();
 let projectRuntime = {
   currentStage: 'idle',
@@ -313,7 +315,7 @@ function getChatGptStabilitySettings() {
     autoReload: chatGptAutoReloadToggle?.checked !== false,
     autoResume: chatGptAutoResumeToggle?.checked !== false,
     retryLimit: clamp(Number(chatGptRetryLimitInput?.value ?? DEFAULT_CHATGPT_RETRY_LIMIT) || DEFAULT_CHATGPT_RETRY_LIMIT, 1, 5),
-    targetSceneCount: clamp(Number(customTargetScenesInput?.value ?? projectSceneCount) || projectSceneCount, 1, 100),
+    targetSceneCount: clamp(Number(customTargetScenesInput?.value ?? projectSceneCount) || projectSceneCount, 1, MAX_PROJECT_SCENE_COUNT),
   };
 }
 
@@ -323,13 +325,13 @@ function applyChatGptStabilitySettings(settings = {}) {
   if (chatGptRetryLimitInput) chatGptRetryLimitInput.value = String(clamp(Number(settings.retryLimit ?? DEFAULT_CHATGPT_RETRY_LIMIT) || DEFAULT_CHATGPT_RETRY_LIMIT, 1, 5));
   if (customTargetScenesInput) {
     const projectSceneCount = getProjectTargetSceneDefault();
-    customTargetScenesInput.value = String(clamp(Number(settings.targetSceneCount ?? projectSceneCount) || projectSceneCount, 1, 100));
-    targetSceneCount = clamp(Number(settings.targetSceneCount ?? projectSceneCount) || projectSceneCount, 1, 100);
+    customTargetScenesInput.value = String(clamp(Number(settings.targetSceneCount ?? projectSceneCount) || projectSceneCount, 1, MAX_PROJECT_SCENE_COUNT));
+    targetSceneCount = clamp(Number(settings.targetSceneCount ?? projectSceneCount) || projectSceneCount, 1, MAX_PROJECT_SCENE_COUNT);
   }
 }
 
 function getProjectTargetSceneDefault() {
-  return clamp(Number(project?.scenes?.length || 0) || 1, 1, 100);
+  return clamp(Number(project?.scenes?.length || 0) || 1, 1, MAX_PROJECT_SCENE_COUNT);
 }
 
 function syncTargetSceneCountToProjectDefault() {
@@ -519,6 +521,7 @@ async function stopPipelineFromClick(event) {
   autoContinuing = false;
   veoupAutomationInFlight = false;
   activeBatchIds = [];
+  pendingManualRecoveryResetSceneIds.clear();
   clearPipelineTimers(runId);
   window.isVidoraPipelineBusy = false;
   window.__vidoraCancelledPipelineRunId = runId;
@@ -856,11 +859,14 @@ async function recoverWorkflowRun() {
     const res = await window.videoPlannerAPI?.scanProjectAndRunVeoUp?.({
       projectDir: outputFolder,
       expectedSceneCount: project.scenes.length,
+      expectedSceneIds: project.scenes.map((scene) => Number(scene.id || scene.sceneId)).filter(Number.isInteger),
       projectName: project.name || '',
+      trigger: 'workflow-recovery',
+      autoStartVideoGeneration: true,
       previewStartButtonOnly: Boolean(veoupPreviewStartOnlyToggle?.checked)
     });
     if (res && res.ok) {
-      setStatus(`Quét project thành công! Chạy VeoUp hoàn tất: ${res.imageCount} ảnh.`, 'ok');
+      setStatus(`Đã ${res.status === 'previewed' ? 'preview' : 'gửi'} batch VeoUp: ${res.imageCount} scene.`, 'ok');
     } else {
       setStatus(`Không thể chạy VeoUp: ${res?.error || 'Unknown error'}`, 'error');
     }
@@ -1251,6 +1257,7 @@ async function runFullPipeline() {
   for (let i = 0; i < scenesToRun.length; i++) {
     assertPipelineRunActive(runId);
     const scene = scenesToRun[i];
+    let manualRecoveryReset = false;
 
     // Preceding Video Validation Guard & Hard Rollback Loop (Scene N > 1)
     if (scene.id > 1) {
@@ -1349,6 +1356,25 @@ async function runFullPipeline() {
       scene.progressStep = scene.imagePath ? 'motion' : 'image';
       render();
 
+      manualRecoveryReset = pendingManualRecoveryResetSceneIds.delete(scene.id);
+      if (manualRecoveryReset) {
+        scene.recoveryLimitReached = false;
+        scene.pipelineRetryCount = 0;
+        scene.error = '';
+        projectRuntime = {
+          ...projectRuntime,
+          lastErrorClassification: null,
+          lastAction: 'manual-recovery-reset',
+          waitingForUserStart: false,
+        };
+        safeAddPipelineLog(
+          'renderer',
+          'running',
+          `Scene ${scene.id}: mở lại chu kỳ phục hồi thủ công, giữ nguyên keyframe hợp lệ.`
+        );
+        persist({ immediateAutosave: true, reason: 'manual-recovery-reset' });
+      }
+
 
       assertPipelineRunActive(runId);
       const result = await window.videoPlannerAPI.runScenePipeline({
@@ -1361,6 +1387,7 @@ projectName: project.name,
         motionPrompt,
         imagePath: scene.imagePath || '',
         forceRegenerateImage: Boolean(scene.forceRegenerateImage),
+        manualRecoveryReset,
         videoProvider: 'veoup',
         keyframeMotionPromptOnly,
         videoConfig: getVideoProviderConfig(),
@@ -1713,8 +1740,10 @@ projectName: project.name,
   if (shouldSkipReview()) {
     const unfinished = project.scenes.some((scene) => activeBatchIds.includes(scene.id) && !isSceneCompleteForVeoUp(scene));
     if (unfinished) return queueAutoContinue();
-    assertPipelineRunActive(runId);
-    await mergeAndShowFinalPreview();
+    if (!isKeyframeMotionPromptOnlyModeEnabled()) {
+      assertPipelineRunActive(runId);
+      await mergeAndShowFinalPreview();
+    }
   }
   setStatus('Không còn scene cần chạy hoặc đã đạt mục tiêu.', 'ok');
 
@@ -1726,9 +1755,11 @@ projectName: project.name,
 
 
 function isSceneCompleteForVeoUp(scene) {
-  if (!scene || scene.status === 'skipped') return true;
-  if (scene.status === 'done') return Boolean(scene.imagePath && (scene.motionPrompt || scene.motionPromptPath));
-  return sceneHasVideoOutput(scene);
+  if (!scene || scene.status === 'skipped') return false;
+  return Boolean(
+    (scene.imagePath || scene.keyframeOutputPath) &&
+    (scene.motionPrompt || scene.motionPromptPath || scene.motionPromptOutputPath)
+  );
 }
 
 function isProjectCompleteForVeoUp() {
@@ -1737,9 +1768,8 @@ function isProjectCompleteForVeoUp() {
 
 async function maybeRunVeoUpAutomationAfterPipeline(reason = 'pipeline-complete', runId = getActivePipelineRunId()) {
   if (runId) assertPipelineRunActive(runId);
-  if (isKeyframeMotionPromptOnlyModeEnabled()) return;
+  if (!isKeyframeMotionPromptOnlyModeEnabled()) return;
   if (veoupAutomationInFlight) return;
-  if (projectRuntime?.veoupAutomationResult?.ok) return;
   if (!window.videoPlannerAPI?.runVeoUpAutomation || !isProjectCompleteForVeoUp()) return;
 
   veoupAutomationInFlight = true;
@@ -1753,42 +1783,51 @@ async function maybeRunVeoUpAutomationAfterPipeline(reason = 'pipeline-complete'
   safeAddPipelineLog?.('renderer', 'running', 'VeoUp automation: starting after completed Vidora pipeline.', { reason, outputFolder });
   setStatus('Pipeline complete. Starting VeoUp automation...', 'running');
 
-  const result = await window.videoPlannerAPI.runVeoUpAutomation({
-    runId,
-    outputFolder,
-    projectName: project?.name || projectNameInput?.value || '',
-    previewStartButtonOnly: Boolean(veoupPreviewStartOnlyToggle?.checked),
-    scenes: (project?.scenes || []).map((scene) => ({
-      id: scene.id,
-      imagePath: scene.imagePath || scene.keyframeOutputPath || '',
-      keyframeOutputPath: scene.keyframeOutputPath || '',
-      motionPrompt: scene.motionPrompt || '',
-      motionPromptPath: scene.motionPromptPath || '',
-      motionPromptOutputPath: scene.motionPromptOutputPath || '',
-      status: scene.status || '',
-      videoStatus: scene.videoStatus || '',
-    })),
-  }).catch((error) => ({ ok: false, error: error.message || String(error), code: error?.code || '' }));
+  try {
+    const result = await window.videoPlannerAPI.runVeoUpAutomation({
+      runId,
+      trigger: reason,
+      outputFolder,
+      projectName: project?.name || projectNameInput?.value || '',
+      autoStartVideoGeneration: true,
+      previewStartButtonOnly: Boolean(veoupPreviewStartOnlyToggle?.checked),
+      scenes: (project?.scenes || []).map((scene) => ({
+        id: scene.id,
+        imagePath: scene.imagePath || scene.keyframeOutputPath || '',
+        keyframeOutputPath: scene.keyframeOutputPath || '',
+        motionPrompt: scene.motionPrompt || '',
+        motionPromptPath: scene.motionPromptPath || '',
+        motionPromptOutputPath: scene.motionPromptOutputPath || '',
+        status: scene.status || '',
+        videoStatus: scene.videoStatus || '',
+      })),
+    }).catch((error) => ({ ok: false, error: error.message || String(error), code: error?.code || '' }));
 
-  if (runId) assertPipelineRunActive(runId);
-
-  projectRuntime = { ...projectRuntime, veoupAutomationResult: result };
-  persist();
-  safeAddPipelineLog?.(
-    'renderer',
-    result?.ok ? 'ok' : 'error',
-    result?.ok
-      ? `VeoUp automation complete: ${result.imageCount || 0} images, ${result.promptLineCount || 0} prompts.`
-      : `VeoUp automation failed: ${result?.error || 'validation mismatch'}`,
-    result
-  );
-  setStatus(
-    result?.ok
-      ? 'Pipeline complete. VeoUp automation loaded images and prompts.'
-      : `Pipeline complete, but VeoUp automation failed: ${result?.error || 'validation mismatch'}`,
-    result?.ok ? 'ok' : 'error'
-  );
-  veoupAutomationInFlight = false;
+    if (runId && !result?.cancelled) assertPipelineRunActive(runId);
+    projectRuntime = { ...projectRuntime, veoupAutomationResult: result };
+    persist();
+    const successLabel = result?.status === 'previewed'
+      ? 'đã preview nút Start'
+      : result?.status === 'loaded'
+        ? 'đã nạp vào VeoUp'
+        : 'đã gửi sang VeoUp';
+    safeAddPipelineLog?.(
+      'renderer',
+      result?.ok ? 'ok' : 'error',
+      result?.ok
+        ? `VeoUp batch ${successLabel}: ${result.imageCount || 0} ảnh, ${result.promptLineCount || 0} prompt.`
+        : `VeoUp batch thất bại: ${result?.error || 'validation mismatch'}`,
+      result
+    );
+    setStatus(
+      result?.ok
+        ? `NV1/NV2 đã hoàn tất; batch ${successLabel} (${result.imageCount || 0} scene).`
+        : `NV1/NV2 đã hoàn tất nhưng batch VeoUp thất bại: ${result?.error || 'validation mismatch'}`,
+      result?.ok ? 'ok' : 'error'
+    );
+  } finally {
+    veoupAutomationInFlight = false;
+  }
 }
 function getSelectedWebProvider() {
   return 'chatgpt';
@@ -1877,11 +1916,27 @@ async function startPipelineFromClick(event) {
   }
   if (customTargetScenesInput) {
     const projectSceneCount = getProjectTargetSceneDefault();
-    targetSceneCount = clamp(Number(customTargetScenesInput.value) || projectSceneCount, 1, 100);
+    targetSceneCount = clamp(Number(customTargetScenesInput.value) || projectSceneCount, 1, MAX_PROJECT_SCENE_COUNT);
     customTargetScenesInput.value = String(targetSceneCount);
   }
+  const recoverySceneIds = (project?.scenes || [])
+    .filter((scene) => scene.recoveryLimitReached === true)
+    .map((scene) => scene.id);
+  const runtimeRecoveryScene =
+    projectRuntime.lastErrorClassification === 'recovery_limit_reached'
+      ? findSceneByRuntimeRef(projectRuntime.currentSceneId)
+      : null;
+  if (runtimeRecoveryScene?.id && !recoverySceneIds.includes(runtimeRecoveryScene.id)) {
+    recoverySceneIds.push(runtimeRecoveryScene.id);
+  }
+  pendingManualRecoveryResetSceneIds = new Set(recoverySceneIds);
   beginPipelineRun();
-  setStatus('Đã bấm Start pipeline. Đang khởi động workflow...', 'running');
+  setStatus(
+    recoverySceneIds.length
+      ? `Đang phục hồi scene ${recoverySceneIds[0]} và giữ nguyên keyframe hợp lệ...`
+      : 'Đã bấm Start pipeline. Đang khởi động workflow...',
+    'running'
+  );
   await autoRunRoute();
 }
 window.startPipelineFromClick = startPipelineFromClick;
@@ -2875,6 +2930,7 @@ function getProjectSessionPayload() {
     },
     runtime: {
       ...runtime,
+      projectAutosaveRevision,
       outputFolder,
       videoProvider: 'veoup',
       reviewSettings: getReviewSettings(),
@@ -3110,39 +3166,57 @@ async function flushProjectAutosave({ force = false, reason = 'autosave' } = {})
   }
   if (!project || !currentProjectFilePath) return true;
   if (projectAutosaveInFlight) {
-    await projectAutosaveInFlight;
-    if (!force && projectAutosaveSavedRevision >= projectAutosaveRevision)
-      return true;
+    try {
+      await projectAutosaveInFlight;
+    } catch (_error) {
+      return false;
+    }
+    if (projectAutosaveSavedRevision >= projectAutosaveRevision) return true;
+    return flushProjectAutosave({ force: false, reason: 'changes-during-save' });
   }
   if (force && projectAutosaveSavedRevision >= projectAutosaveRevision) {
     projectAutosaveRevision += 1;
   }
-  const revisionToSave = projectAutosaveRevision;
-  const filePathToSave = currentProjectFilePath;
-  const payload = getProjectSessionPayload();
-  projectAutosaveInFlight = (async () => {
-    const result = await window.videoPlannerAPI?.overwriteProjectSession?.({
-      filePath: filePathToSave,
-      payload,
-    });
-    if (!result?.ok) {
-      throw new Error(result?.error || 'project-autosave-failed');
+  const autosaveRun = (async () => {
+    while (
+      project &&
+      currentProjectFilePath &&
+      projectAutosaveSavedRevision < projectAutosaveRevision
+    ) {
+      const revisionToSave = projectAutosaveRevision;
+      const filePathToSave = currentProjectFilePath;
+      const payload = getProjectSessionPayload();
+      payload.runtime = {
+        ...(payload.runtime || {}),
+        projectAutosaveRevision: revisionToSave,
+      };
+      const result = await window.videoPlannerAPI?.overwriteProjectSession?.({
+        filePath: filePathToSave,
+        payload,
+        revision: revisionToSave,
+      });
+      if (!result?.ok) {
+        throw new Error(result?.error || 'project-autosave-failed');
+      }
+      if (currentProjectFilePath === filePathToSave) {
+        currentProjectFilePath = result.filePath || filePathToSave;
+        projectAutosaveSavedRevision = Math.max(
+          projectAutosaveSavedRevision,
+          Number(result.revision || revisionToSave),
+        );
+      }
+      projectAutosaveLastError = '';
+      if (projectAutosaveSavedRevision >= projectAutosaveRevision) {
+        projectDirty = false;
+      }
+      persist({ skipAutosave: true });
+      renderProjectSessionStatus();
     }
-    currentProjectFilePath = result.filePath || filePathToSave;
-    projectAutosaveSavedRevision = Math.max(
-      projectAutosaveSavedRevision,
-      revisionToSave,
-    );
-    projectAutosaveLastError = '';
-    if (projectAutosaveSavedRevision >= projectAutosaveRevision) {
-      projectDirty = false;
-    }
-    persist({ skipAutosave: true });
-    renderProjectSessionStatus();
     return true;
   })();
+  projectAutosaveInFlight = autosaveRun;
   try {
-    await projectAutosaveInFlight;
+    await autosaveRun;
   } catch (error) {
     projectAutosaveLastError = error?.message || String(error);
     projectDirty = true;
@@ -3153,12 +3227,11 @@ async function flushProjectAutosave({ force = false, reason = 'autosave' } = {})
     );
     return false;
   } finally {
-    projectAutosaveInFlight = null;
+    if (projectAutosaveInFlight === autosaveRun) {
+      projectAutosaveInFlight = null;
+    }
   }
-  if (projectAutosaveSavedRevision < projectAutosaveRevision) {
-    queueProjectAutosave({ immediate: true, reason: 'changes-during-save' });
-  }
-  return true;
+  return projectAutosaveSavedRevision >= projectAutosaveRevision;
 }
 
 function persistProjectCheckpoint(reason = 'pipeline-checkpoint') {
@@ -3381,21 +3454,13 @@ async function openProjectSessionFlow() {
 
 function persist(options = {}) {
   try {
-    let sanitizedProject = null;
-    if (project) {
-      const { scenes: _discardedScenes, ...projectMetadata } = project;
-      sanitizedProject = {
-        ...scrubLegacyProjectFields(projectMetadata),
-        scenes: Array.isArray(project.scenes)
-          ? project.scenes.map((scene) => scene
-              ? scrubLegacyProjectFields(sceneWithoutInlineImageData(scene))
-              : scene)
-          : []
-      };
-    }
-
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
-      project: scrubLegacyProjectFields(sanitizedProject),
+      projectSummary: project ? {
+        id: project.id || '',
+        name: project.name || '',
+        sceneCount: Array.isArray(project.scenes) ? project.scenes.length : 0,
+        updatedAt: project.updatedAt || '',
+      } : null,
       activeBatchIds,
       paused,
       outputFolder,
@@ -3410,55 +3475,7 @@ function persist(options = {}) {
       veoupPreviewStartOnly: Boolean(veoupPreviewStartOnlyToggle?.checked)
     }));
   } catch (e) {
-    console.warn('[LocalStorage Persist Quota Error] Failed to execute setItem, applying safe fallback:', e);
-    try {
-      let fallbackProject = null;
-      if (project) {
-        const activeSceneId = projectRuntime?.currentSceneId;
-        const { scenes: _discardedScenes, ...projectMetadata } = project;
-        fallbackProject = {
-          ...scrubLegacyProjectFields(projectMetadata),
-          scenes: Array.isArray(project.scenes)
-            ? project.scenes.map((s, idx) => {
-                if (!s) return s;
-                const copy = scrubLegacyProjectFields(
-                  sceneWithoutInlineImageData(s),
-                );
-                
-                const isCompleted = ['video_done', 'video_ready', 'scene_completed'].includes(copy.status);
-                const isActive = String(copy.id) === String(activeSceneId) || String(idx + 1) === String(activeSceneId);
-                
-                if (isCompleted && !isActive) {
-                  // Keep only essential metadata to free up space
-                  copy.original = '';
-                  copy.imagePrompt = '';
-                  copy.motionPrompt = '';
-                  copy.continuityReferencePaths = [];
-                }
-                return copy;
-              })
-            : []
-        };
-      }
-
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({
-        project: scrubLegacyProjectFields(fallbackProject),
-        activeBatchIds,
-        paused,
-        outputFolder,
-        currentProjectFilePath,
-        projectDirty,
-        projectRuntime: scrubLegacyProjectFields(projectRuntime),
-        reviewSettings: getReviewSettings(),
-        imageGeneration: getImageGenerationSettings(),
-        continuityReferences: getContinuityReferenceSettings(),
-        chatGptStability: getChatGptStabilitySettings(),
-        pipelineMode: { keyframeMotionPromptOnly: isKeyframeMotionPromptOnlyModeEnabled() },
-        veoupPreviewStartOnly: Boolean(veoupPreviewStartOnlyToggle?.checked)
-      }));
-    } catch (innerErr) {
-      console.error('[LocalStorage Persist Critical] Fallback also failed:', innerErr);
-    }
+    console.warn('[LocalStorage Persist Error] Could not save compact UI state:', e);
   }
   if (!options.skipAutosave) {
     queueProjectAutosave({
@@ -3700,7 +3717,7 @@ modelInput?.addEventListener('input', () => {
   .forEach((control) => control.addEventListener('change', () => {
     if (control === customTargetScenesInput) {
       const projectSceneCount = getProjectTargetSceneDefault();
-      targetSceneCount = clamp(Number(customTargetScenesInput.value) || projectSceneCount, 1, 100);
+      targetSceneCount = clamp(Number(customTargetScenesInput.value) || projectSceneCount, 1, MAX_PROJECT_SCENE_COUNT);
       customTargetScenesInput.value = String(targetSceneCount);
     }
     persist();
@@ -4114,12 +4131,20 @@ function updateScanButtonVisibility() {
       const res = await window.videoPlannerAPI?.scanProjectAndRunVeoUp?.({
         projectDir: outputFolder,
         expectedSceneCount: project.scenes.length,
+        expectedSceneIds: project.scenes.map((scene) => Number(scene.id || scene.sceneId)).filter(Number.isInteger),
         projectName: project.name || '',
+        trigger: 'manual-scan',
+        autoStartVideoGeneration: true,
         previewStartButtonOnly: Boolean(veoupPreviewStartOnlyToggle?.checked)
       });
       if (res && res.ok) {
-        setStatus(`Quét project thành công! Chạy VeoUp hoàn tất: ${res.imageCount} ảnh.`, 'ok');
-        alert(`Hoàn tất chạy VeoUp cho ${res.imageCount} scenes!`);
+        const action = res.status === 'previewed'
+          ? 'Đã preview nút Start cho'
+          : res.status === 'loaded'
+            ? 'Đã nạp vào VeoUp'
+            : 'Đã gửi sang VeoUp';
+        setStatus(`${action}: ${res.imageCount} scene.`, 'ok');
+        alert(`${action} ${res.imageCount} scene.`);
       } else {
         const errMsg = res?.error || 'Có lỗi xảy ra.';
         setStatus(`Lỗi quét project hoặc chạy VeoUp: ${errMsg}`, 'error');

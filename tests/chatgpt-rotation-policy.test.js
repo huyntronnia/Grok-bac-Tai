@@ -56,7 +56,8 @@ assert(!main.includes('window.location.href = "https://chatgpt.com/"'), 'memory 
 assert(main.includes('ChatGPT memory GC refresh disabled'), 'memory GC disable log missing');
 assert(main.includes('Rotating ChatGPT only after repeated valid request failures.'), 'rotation pre-log missing');
 assert(main.includes('hydrateFreshChatGptContextAfterRotation(options, sceneId)'), 'fresh chat must be hydrated after recovery rotation');
-assert(chatgptRuntime.includes('collectRecentProjectKeyframes(projectDir, 5)'), 'rotation hydration must collect up to 5 recent keyframes');
+assert(chatgptRuntime.includes('const CHATGPT_HYDRATION_KEYFRAME_LIMIT = 10;'), 'rotation hydration must share the 10-keyframe limit');
+assert(/collectRecentProjectKeyframes\(\s*projectDir,\s*CHATGPT_HYDRATION_KEYFRAME_LIMIT,?\s*\)/.test(chatgptRuntime), 'rotation hydration must collect up to 10 recent keyframes');
 assert(main.includes('ChatGPT rotation hydrate request 1: uploading selected scene txt file.'), 'rotation request 1 selected scene file upload log missing');
 assert(main.includes('sourceSceneFilePath && await pathExists(sourceSceneFilePath)'), 'rotation request 1 must prefer the original selected scene txt path');
 assert(main.includes('sourceSceneFileName || \'scene.txt\''), 'rotation request 1 must preserve selected scene file name for fallback copy');

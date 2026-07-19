@@ -10,6 +10,8 @@ function initIpcHandlers(runtime) {
     saveVeoUpCoordinateConfigHandler,
     cancelVeoUpCoordinateSetupHandler,
     scanProjectAndRunVeoUpHandler,
+    getVeoUpBatchStatusHandler,
+    cancelVeoUpBatchHandler,
     appendAppLog,
     getAppLogPath,
     openHardPromptFile,
@@ -82,6 +84,14 @@ function initIpcHandlers(runtime) {
   ipcMain.handle(
     "veoup:scan-project-and-run",
     safeIpcHandler(scanProjectAndRunVeoUpHandler),
+  );
+  ipcMain.handle(
+    "veoup:get-batch-status",
+    safeIpcHandler(getVeoUpBatchStatusHandler),
+  );
+  ipcMain.handle(
+    "veoup:cancel-batch",
+    safeIpcHandler(cancelVeoUpBatchHandler),
   );
 
   ipcMain.handle("app:append-log", appendAppLog);

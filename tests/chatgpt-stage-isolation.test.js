@@ -39,7 +39,8 @@ assert(chatgptRuntime.includes('ChatGPT hydrate request 1: uploading ${preprompt
 assert(chatgptRuntime.includes('Request 1: read and remember all attached preprompt files. Reply only when ready.'), 'request 1 prompt missing');
 assert(/await waitForChatGptHydrationResponse\(\s*page,\s*beforePreprompt\?\.count \|\| 0,\s*{[\s\S]*?request: 1,/.test(chatgptRuntime), 'request 1 must wait for ChatGPT response');
 assert(chatgptRuntime.includes('ChatGPT hydrate request 2: uploading ${recentKeyframes.length} recent keyframe(s).'), 'request 2 must upload recent keyframes');
-assert(chatgptRuntime.includes('Request 2: read and remember the attached keyframes from up to 5 previous project scenes.'), 'request 2 prompt missing');
+assert(chatgptRuntime.includes('const CHATGPT_HYDRATION_KEYFRAME_LIMIT = 10;'), 'request 2 must use a centralized 10-keyframe limit');
+assert(chatgptRuntime.includes('Request 2: read and remember the attached keyframes from up to ${CHATGPT_HYDRATION_KEYFRAME_LIMIT} previous project scenes.'), 'request 2 prompt must use the configured keyframe limit');
 assert(/await waitForChatGptHydrationResponse\(\s*page,\s*beforeScenes\?\.count \|\| 0,\s*{[\s\S]*?request: 2,/.test(chatgptRuntime), 'request 2 must wait for ChatGPT response');
 assert(renderer.includes('recentScenes: buildRecentScenesForHydration(scene.id, 20)'), 'renderer must send max 20 recent scenes');
 assert(chatgptRuntime.includes('const CHAT_ROTATION_ENABLED = false;'), 'automatic ChatGPT rotation must be disabled');

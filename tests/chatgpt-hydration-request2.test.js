@@ -15,8 +15,12 @@ assert(end > start, 'hydrateFreshChatGptContextAfterRotation block end missing')
 const block = pipeline.slice(start, end);
 
 assert(
-  block.includes('collectRecentProjectKeyframes(projectDir, 5, sceneId)'),
-  'Request 2 must collect only 5 recent keyframes'
+  pipeline.includes('const CHATGPT_HYDRATION_KEYFRAME_LIMIT = 10;'),
+  'Request 2 keyframe limit must be centralized at 10'
+);
+assert(
+  /collectRecentProjectKeyframes\(\s*projectDir,\s*CHATGPT_HYDRATION_KEYFRAME_LIMIT,\s*sceneId,?\s*\)/.test(block),
+  'Request 2 must collect up to 10 recent keyframes before the current scene'
 );
 assert(
   block.includes('uploadFilesToChatGptSequentially') &&
@@ -32,8 +36,8 @@ assert(
   'Request 2 must use same-chat send recovery'
 );
 assert(
-  block.includes('Request 2: read and remember the attached keyframes from up to 5 previous project scenes.'),
-  'Request 2 prompt must describe 5 previous scenes'
+  block.includes('Request 2: read and remember the attached keyframes from up to ${CHATGPT_HYDRATION_KEYFRAME_LIMIT} previous project scenes.'),
+  'Request 2 prompt must use the centralized 10-keyframe limit'
 );
 assert(
   block.includes('chatgpt-hydration-keyframes-message-failed'),

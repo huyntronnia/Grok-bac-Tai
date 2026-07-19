@@ -517,6 +517,99 @@ async function persistDurableStage(
   });
 }
 
+async function resetSceneRecoveryForManualStart(options = {}, attemptKey = "") {
+  if (options?.manualRecoveryReset !== true) return { reset: false };
+  const sceneId = Number(options?.sceneId || 0);
+  const projectDir =
+    options.outputFolder || options.projectPath || options.outputPath || "";
+  if (!sceneId || !projectDir || !attemptKey) return { reset: false };
+
+  const previous = await readPipelineSceneState(projectDir, sceneId).catch(
+    () => ({}),
+  );
+  const currentStage = String(
+    previous.stage || previous.currentStage || "prepare_scene",
+  ).trim();
+  const sceneToken = `scene_${String(sceneId).padStart(3, "0")}`;
+  const sceneDir = path.join(projectDir, sceneToken);
+  const expectedKeyframePath = path.join(
+    sceneDir,
+    `${sceneToken}_keyframe.png`,
+  );
+  const keyframeCandidates = [
+    options.imagePath,
+    previous.keyframePath,
+    previous.imagePath,
+    expectedKeyframePath,
+  ].filter(Boolean);
+  let keyframePath = "";
+  for (const candidate of [...new Set(keyframeCandidates)]) {
+    if (
+      isSceneScopedFilePath(candidate, sceneId) &&
+      (await pathExists(candidate).catch(() => false))
+    ) {
+      keyframePath = candidate;
+      break;
+    }
+  }
+  const motionPromptPath = path.join(sceneDir, "motion_prompt.txt");
+  const motionPromptExists = await pathExists(motionPromptPath).catch(
+    () => false,
+  );
+  const sceneSnapshot = await readSceneSnapshot(sceneDir).catch(() => ({}));
+  const shouldRetryNv2 = Boolean(
+    keyframePath &&
+      !motionPromptExists &&
+      (/^nv2_/i.test(currentStage) || sceneSnapshot.pipelineStage === "NV2_SENT"),
+  );
+  const now = new Date().toISOString();
+
+  scenePipelineFailureTracker[attemptKey] = 0;
+  if (shouldRetryNv2) {
+    await writeSceneSnapshot(sceneDir, {
+      manualNv2RetryRequested: true,
+      manualNv2RetryRunId: String(
+        options.runId || getScopedPipelineRunId() || "",
+      ),
+      manualNv2RetryRequestedAt: now,
+      manualNv2RetryCount:
+        Number(sceneSnapshot.manualNv2RetryCount || 0) + 1,
+      motionValidated: false,
+    });
+  }
+  await persistDurableStage(projectDir, sceneId, currentStage, {
+    ok: false,
+    paused: false,
+    active: true,
+    waitingForUserStart: false,
+    recoveryLimitReached: false,
+    retryCount: 0,
+    attemptCount: 0,
+    lastError: "",
+    pausedAt: "",
+    manualRecoveryResetAt: now,
+    manualRecoveryResetRunId: String(
+      options.runId || getScopedPipelineRunId() || "",
+    ),
+    keyframePath: keyframePath || previous.keyframePath || "",
+  });
+  options.__manualRecoveryResetApplied = true;
+
+  await appendAppLog(null, {
+    source: "main",
+    kind: "running",
+    text: `Scene ${sceneId}: manual recovery reset accepted; retry budget reopened without deleting valid assets.`,
+    details: {
+      sceneId,
+      currentStage,
+      shouldRetryNv2,
+      preservedKeyframe: keyframePath ? path.basename(keyframePath) : "",
+      motionPromptExists,
+    },
+  }).catch(() => null);
+  return { reset: true, currentStage, shouldRetryNv2, keyframePath };
+}
+
 function assertDurableSceneSuccess(result = {}) {
   if (
     result?.keyframeMotionPromptOnly === true &&
@@ -642,6 +735,8 @@ async function runScenePipelineLocked(_event, options) {
   const { sceneId } = options;
   const attemptKey = `${options.outputFolder || "default"}::scene-${sceneId || 0}`;
   const currentStartingSceneId = Number(sceneId || 0);
+
+  await resetSceneRecoveryForManualStart(options, attemptKey);
 
   // If resuming mid-project, enforce clean state immediately before executing any prompt
   if (options && options.isFirstSceneOfRun && currentStartingSceneId > 1) {
@@ -1429,6 +1524,7 @@ async function runScenePipelineLockedInternal(_event, options) {
       sceneText,
       chatContextTitle: "",
       keyframeMotionPromptOnly,
+      runId,
     });
     assertPipelineRunActive(runId);
     await fs.mkdir(sceneDir, { recursive: true });
@@ -1979,6 +2075,7 @@ module.exports = {
   readPipelineSceneState,
   writePipelineSceneState,
   persistDurableStage,
+  resetSceneRecoveryForManualStart,
   assertDurableSceneSuccess,
   isSceneScopedFilePath,
   startNextSceneChatGptPrefetch,

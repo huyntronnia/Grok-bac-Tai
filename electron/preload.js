@@ -42,6 +42,8 @@ contextBridge.exposeInMainWorld('videoPlannerAPI', {
   deleteVeoUpCoordinateConfig: (payload) => ipcRenderer.invoke('veoup:delete-coordinate-config', payload),
   cancelVeoUpCoordinateSetup: () => ipcRenderer.invoke('veoup:cancel-coordinate-setup'),
   scanProjectAndRunVeoUp: (options) => ipcRenderer.invoke('veoup:scan-project-and-run', options),
+  getVeoUpBatchStatus: (options) => ipcRenderer.invoke('veoup:get-batch-status', options),
+  cancelVeoUpBatch: (options) => ipcRenderer.invoke('veoup:cancel-batch', options),
   generateScenePrompts: (options) => ipcRenderer.invoke('ai:generate-scene-prompts', options),
   exportProject: (payload) => ipcRenderer.invoke('project:export', payload),
   newProjectSession: (options) => ipcRenderer.invoke('project:new-session', options),
