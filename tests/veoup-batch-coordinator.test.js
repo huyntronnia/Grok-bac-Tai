@@ -12,13 +12,24 @@ const {
   readVeoUpBatchState,
 } = require("../electron/main/veoup/batch_state_store");
 
+const VALID_PNG = Buffer.concat([
+  Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+    "base64",
+  ),
+  Buffer.alloc(5000),
+]);
+
+const motionPrompt = (sceneId, suffix = "") =>
+  `Scene ${sceneId}: slow camera tracking with controlled parallax, natural subject movement, stable framing, consistent lighting, and a clean final settle. ${suffix}`.trim();
+
 async function createProject(root, count = 2) {
   for (let sceneId = 1; sceneId <= count; sceneId += 1) {
     const token = `scene_${String(sceneId).padStart(3, "0")}`;
     const sceneDir = path.join(root, token);
     await fs.mkdir(sceneDir, { recursive: true });
-    await fs.writeFile(path.join(sceneDir, `${token}_keyframe.png`), Buffer.from([sceneId, 2, 3]));
-    await fs.writeFile(path.join(sceneDir, "motion_prompt.txt"), `motion ${sceneId}`, "utf8");
+    await fs.writeFile(path.join(sceneDir, `${token}_keyframe.png`), VALID_PNG);
+    await fs.writeFile(path.join(sceneDir, "motion_prompt.txt"), motionPrompt(sceneId), "utf8");
   }
 }
 
@@ -69,7 +80,7 @@ async function createProject(root, count = 2) {
   assert.strictEqual(duplicate.promptLineCount, 2);
   assert.strictEqual(executeCount, 1, "same fingerprint must not execute twice");
 
-  await fs.writeFile(path.join(root, "scene_002", "motion_prompt.txt"), "motion 2 changed", "utf8");
+  await fs.writeFile(path.join(root, "scene_002", "motion_prompt.txt"), motionPrompt(2, "changed"), "utf8");
   const changed = await coordinator.requestBatch({
     projectDir: root,
     expectedSceneCount: 2,
@@ -130,7 +141,7 @@ async function createProject(root, count = 2) {
   assert.strictEqual(joined.joined, true);
   assert.strictEqual(joined.imageCount, 2);
 
-  await fs.writeFile(path.join(root, "scene_001", "motion_prompt.txt"), "new fingerprint while busy", "utf8");
+  await fs.writeFile(path.join(root, "scene_001", "motion_prompt.txt"), motionPrompt(1, "new fingerprint while busy"), "utf8");
   const busy = await blockingCoordinator.requestBatch({
     projectDir: root,
     expectedSceneCount: 2,
@@ -140,6 +151,36 @@ async function createProject(root, count = 2) {
   assert.strictEqual(busy.error, "veoup-batch-busy");
   releaseExecution();
   await activeRequest;
+
+  const failureLogs = [];
+  const failedCoordinator = createVeoUpBatchCoordinator({
+    executeAutomation: async () => ({
+      ok: false,
+      error: "veoup-row-count-unverifiable",
+      expectedRows: 2,
+      detectedRows: 0,
+      imageRows: 0,
+      promptRows: 0,
+      selectionCount: 2,
+      selectionVerified: true,
+      selectionMethod: "exact-folder-ctrl-a-dialog-closed",
+      verificationMethod: "uia-row-count",
+    }),
+    appendLog: async (_event, entry) => { failureLogs.push(entry); },
+    readState: async () => null,
+  });
+  const failed = await failedCoordinator.requestBatch({
+    projectDir: root,
+    expectedSceneCount: 2,
+    autoStartVideoGeneration: true,
+    force: true,
+  });
+  assert.strictEqual(failed.ok, false);
+  assert.strictEqual(failed.expectedRows, 2);
+  assert.strictEqual(failed.selectionVerified, true);
+  const failureLog = failureLogs.find((entry) => entry.kind === "error");
+  assert.strictEqual(failureLog.details.result.expectedRows, 2);
+  assert.strictEqual(failureLog.details.result.selectionCount, 2);
 
   await fs.rm(root, { recursive: true, force: true });
   console.log("VeoUp batch coordinator single-flight/idempotency tests passed");

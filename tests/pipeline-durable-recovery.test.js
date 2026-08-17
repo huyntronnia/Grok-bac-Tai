@@ -29,14 +29,21 @@ for (const stage of [
   assert(runner.includes(`"${stage}"`) || runner.includes(`'${stage}'`), `missing durable stage ${stage}`);
 }
 
-assert(recovery.includes("const DURABLE_PIPELINE_BACKOFF_MS = [5000, 10000, 15000, 30000];"));
+assert(recovery.includes("const DURABLE_PIPELINE_BACKOFF_MS = [10000, 30000, 60000, 120000];"));
 assert(runner.includes("const MAX_SCENE_RECOVERY_CYCLES = 2;"));
 assert(runner.includes("retryCount >= MAX_SCENE_RECOVERY_CYCLES"));
-assert(runner.includes("recoveryLimitReached: true"));
-assert(runner.includes("waitingForUserStart: true"));
-assert(runner.includes("PIPELINE_PAUSED_AFTER_RECOVERY_LIMIT"));
+assert(runner.includes('"pipeline-auto-restart"'));
+assert(runner.includes("resetSceneRecoveryForAutomaticRestart"));
+assert(runner.includes("automatic pipeline restart"));
+assert(runner.includes("recoveryLimitReached: false"));
+assert(runner.includes("waitingForUserStart: false"));
+assert(runner.includes('"pipeline-paused"'));
+assert(runner.includes("isNv2NoResendTerminalFailure(error)"));
+assert(runner.includes("nv2NoResend: true"));
+assert(!runner.includes("PIPELINE_PAUSED_AFTER_RECOVERY_LIMIT"));
 assert(runner.includes("assertDurableSceneSuccess(result)"));
 assert(runner.includes("await sleep(retryDelayMs);"));
+assert(runner.includes("await sleep(autoRestartDelayMs);"));
 assert(runner.includes("assertPipelineRunActive(runId)"));
 assert(runner.includes("persistDurableStage(projectDir, sceneId, currentStage"));
 assert(main.includes("await mergePipelineSceneStateIntoProjectPayload(parsed, projectFolder);"));

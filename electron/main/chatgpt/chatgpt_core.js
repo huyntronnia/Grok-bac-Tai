@@ -18,6 +18,8 @@ async function getConversationState(page) {
       attachmentCount: 0,
       attachmentNames: [],
       attachmentHashes: [],
+      attachmentsCompleted: 0,
+      attachmentUploadInProgress: false,
       latestAssistantHash: "",
       conversationLength: 0,
       conversationFingerprint: ""
@@ -40,6 +42,8 @@ async function getConversationState(page) {
     attachmentCount: 0,
     attachmentNames: [],
     attachmentHashes: [],
+    attachmentsCompleted: 0,
+    attachmentUploadInProgress: false,
     latestAssistantHash: "",
     conversationLength: 0,
     conversationFingerprint: ""

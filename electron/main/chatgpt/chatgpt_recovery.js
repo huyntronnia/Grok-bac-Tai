@@ -74,18 +74,21 @@ function isReloadBlocked(sceneId = "unknown", policy = {}) {
     return `Blocked reload: Pending Action [${globalThis.__vidoraPendingAction}] is active.`;
   }
   const composerState = globalThis.__vidoraLastComposerState || "EMPTY";
+  const sendState = getChatGptSendState(sceneId);
   const allowWaitAccept = Boolean(
     policy.allowWaitAcceptAtSafeBoundary ||
     policy.allowStaleNv1WrapperRefresh,
   );
+  const allowFailedDraftRefresh = Boolean(
+    policy.allowFailedDraftRefresh && sendState === "FAILED",
+  );
   if (
     composerState === "ATTACHING_FILES" ||
-    composerState === "READY_TO_SEND" ||
+    (composerState === "READY_TO_SEND" && !allowFailedDraftRefresh) ||
     (composerState === "WAIT_ACCEPT" && !allowWaitAccept)
   ) {
     return `Blocked reload: Composer is in safe state [${composerState}].`;
   }
-  const sendState = getChatGptSendState(sceneId);
   if (sendState === "PREPARING" || sendState === "READY" || sendState === "CLICKING" || sendState === "SENDING" || sendState === "ATTACHING") {
     return `Blocked reload: ChatGptSendState is ${sendState}.`;
   }

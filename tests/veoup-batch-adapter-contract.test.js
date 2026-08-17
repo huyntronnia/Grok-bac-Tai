@@ -34,6 +34,9 @@ for (const field of [
   "expectedRows",
   "autoStartVideoGeneration",
   "previewStartButtonOnly",
+  "batchFolderFileCount",
+  "expectedFileNames",
+  "singleFileSelectionText",
 ]) {
   assert(payloadBlock.includes(`${field}:`), `PowerShell payload is missing ${field}`);
 }
@@ -55,7 +58,7 @@ assert(
 
 const rowProbe = sliceBetween(
   veoup,
-  "function Wait-For-ExpectedBatchRows($Payload) {",
+  "function Wait-For-ExpectedBatchRows($Payload, $SelectionProof) {",
   "function Click-ImageToVideo-Tab",
 );
 assert(rowProbe.includes("Count-LeftImageRows $window"), "Batch must probe image rows");
@@ -70,10 +73,23 @@ assert(
 );
 assert(rowProbe.includes("veoup-row-count-unverifiable"), "Unverifiable UIA counts must fail closed");
 assert(rowProbe.includes("veoup-batch-row-count-mismatch"), "Missing rows must return a distinct mismatch error");
+assert(
+  rowProbe.includes("dialog-selection-plus-surface-ready"),
+  "Virtualized VeoUp rows must have a strong selection-plus-surface verification path",
+);
+assert(
+  veoup.includes("function Confirm-OpenFileDialogSelection") &&
+    veoup.includes("function Wait-ForOpenFileDialogClosed"),
+  "Batch import must invoke Open and verify that the native dialog closed",
+);
+assert(
+  !veoup.includes("function Get-OpenFileDialogSelectionProof"),
+  "Virtualized selection-item counts must not block the Open action",
+);
 
 const dispatchBlock = sliceBetween(
   veoup,
-  "$rowValidation = Wait-For-ExpectedBatchRows $payload",
+  "$rowValidation = Wait-For-ExpectedBatchRows $payload $selectionProof",
   "'VIDORA_VEOUP_RESULT ' + ($result | ConvertTo-Json -Depth 8 -Compress)\nWrite-Host \"[VeoUp] Automation completed.\"",
 );
 const previewStart = dispatchBlock.indexOf("if ($payload.previewStartButtonOnly) {");

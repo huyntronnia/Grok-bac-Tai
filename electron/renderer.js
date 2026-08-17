@@ -225,6 +225,7 @@ let currentProjectFilePath = '';
 let projectDirty = false;
 const PROJECT_AUTOSAVE_DEBOUNCE_MS = 1000;
 const MAX_PROJECT_SCENE_COUNT = 10000;
+const INTER_SCENE_BREATHER_MS = 10000;
 let projectAutosaveTimer = null;
 let projectAutosaveRevision = 0;
 let projectAutosaveSavedRevision = 0;
@@ -457,6 +458,22 @@ function pipelineDelay(ms, runId = getActivePipelineRunId()) {
   });
 }
 
+async function waitForInterSceneBreather(runId, sceneId) {
+  assertPipelineRunActive(runId);
+  safeAddPipelineLog(
+    'renderer',
+    'running',
+    `Scene ${sceneId}: inter-scene breather started (${INTER_SCENE_BREATHER_MS}ms).`
+  );
+  await pipelineDelay(INTER_SCENE_BREATHER_MS, runId);
+  assertPipelineRunActive(runId);
+  safeAddPipelineLog(
+    'renderer',
+    'ok',
+    `Scene ${sceneId}: inter-scene breather completed; continuing pipeline.`
+  );
+}
+
 function sleep(ms) {
   return pipelineDelay(ms);
 }
@@ -466,7 +483,30 @@ function schedulePipelineTimer(callback, delay = 0, runId = getActivePipelineRun
   const timerId = setTimeout(async () => {
     pipelineTimers.delete(timerId);
     if (runId && !isPipelineRunActive(runId)) return;
-    await callback();
+    try {
+      await callback();
+    } catch (error) {
+      if (isPipelineCancelledError(error)) return;
+      const message = error?.message || String(error);
+      paused = true;
+      isRunning = false;
+      autoContinuing = false;
+      projectRuntime = {
+        ...projectRuntime,
+        lastErrorClassification: 'scheduled-continuation-failed',
+        lastAction: 'scheduled-continuation-failed',
+        waitingForUserStart: true,
+      };
+      safeAddPipelineLog(
+        'renderer',
+        'error',
+        `Scheduled pipeline continuation failed: ${message}`
+      );
+      setStatus(`Pipeline continuation dừng: ${message}`, 'error');
+      finishPipelineRun(runId);
+      persist({ immediateAutosave: true, reason: 'scheduled-continuation-failed' });
+      render();
+    }
   }, delay);
   pipelineTimers.set(timerId, { runId, reject: null });
   return timerId;
@@ -700,18 +740,34 @@ async function runNextBatch({ regenerate = false } = {}) {
 
 async function syncProjectSceneFolders({ repairFromDisk = false } = {}) {
   if (!outputFolder || !project?.scenes?.length || !window.videoPlannerAPI?.ensureProjectSceneFolders) return null;
-  const result = await window.videoPlannerAPI.ensureProjectSceneFolders({ outputFolder, scenes: project.scenes }).catch(() => null);
+  const result = await window.videoPlannerAPI.ensureProjectSceneFolders({ outputFolder, scenes: project.scenes, inspectOnly: repairFromDisk }).catch(() => null);
   if (repairFromDisk && result?.records?.length) {
     result.records.forEach((record) => {
       const scene = project.scenes.find((item) => String(item.id) === String(record.sceneId) || String(item.sceneId) === String(record.sceneId));
       if (!scene) return;
-      if (record.keyframeExists) {
+      const keyframeValid = record.keyframeExists === true && record.keyframeValid === true;
+      const motionPromptValid = record.motionPromptExists === true && record.motionPromptValid === true;
+      scene.assetStatCheckedAtMs = Number(record.assetStatCheckedAtMs || Date.now());
+      scene.keyframeFileExists = record.keyframeExists === true;
+      scene.keyframeFileValid = record.keyframeValid === true;
+      scene.keyframeValidationError = record.keyframeValidationError || '';
+      scene.motionPromptFileExists = record.motionPromptExists === true;
+      scene.motionPromptFileValid = record.motionPromptValid === true;
+      scene.motionPromptValidationError = record.motionPromptValidationError || '';
+      if (keyframeValid) {
         scene.imagePath = record.keyframePath;
         scene.keyframeFileMtimeMs = record.keyframeMtimeMs || 0;
       } else {
         scene.imagePath = '';
         scene.imageDataUrl = '';
         scene.keyframeFileMtimeMs = 0;
+      }
+      if (motionPromptValid) {
+        scene.motionPromptPath = record.motionPromptPath;
+        scene.motionPromptOutputPath = record.motionPromptPath;
+      } else {
+        scene.motionPromptPath = '';
+        scene.motionPromptOutputPath = '';
       }
       if (record.videoExists) {
         scene.videoPath = record.videoPath;
@@ -731,8 +787,14 @@ async function syncProjectSceneFolders({ repairFromDisk = false } = {}) {
         scene.outputStatCheckedAtMs = Date.now();
         scene.videoValidated = false;
         scene.lastFramePath = '';
-        if (record.keyframeExists) {
-          scene.status = scene.motionPrompt ? 'image_done' : 'image_done';
+        if (keyframeValid && isKeyframeMotionPromptOnlyModeEnabled() && motionPromptValid) {
+          scene.status = 'done';
+          scene.completionStatus = 'keyframe_motion_complete';
+          scene.videoStatus = 'skipped-keyframe-motion-only';
+          scene.progressStep = 'complete';
+          scene.reviewType = '';
+        } else if (keyframeValid) {
+          scene.status = 'image_done';
           scene.progressStep = 'motion';
           scene.reviewType = '';
         } else {
@@ -1063,11 +1125,23 @@ function hasValidSceneOutputPath(value) {
 }
 
 const SCENE_OUTPUT_STAT_TTL_MS = 5 * 60 * 1000;
+const SCENE_ASSET_AUDIT_TTL_MS = 5 * 60 * 1000;
 
 function sceneHasRequiredOutputForCurrentMode(scene) {
   try {
     if (isKeyframeMotionPromptOnlyModeEnabled()) {
-      return Boolean(scene && hasValidSceneOutputPath(scene.imagePath) && (scene.motionPrompt || scene.motionPromptPath || scene.videoStatus === 'skipped-keyframe-motion-only'));
+      const checkedAt = Number(scene?.assetStatCheckedAtMs || 0);
+      const timestampIsRecent = checkedAt > 0 && Date.now() - checkedAt <= SCENE_ASSET_AUDIT_TTL_MS;
+      return Boolean(
+        scene &&
+        hasValidSceneOutputPath(scene.imagePath) &&
+        scene.keyframeFileExists === true &&
+        scene.keyframeFileValid === true &&
+        hasValidSceneOutputPath(scene.motionPromptPath) &&
+        scene.motionPromptFileExists === true &&
+        scene.motionPromptFileValid === true &&
+        timestampIsRecent
+      );
     }
     const checkedAt = Number(scene?.outputStatCheckedAtMs || scene?.videoFileCheckedAtMs || 0);
     const timestampIsRecent = checkedAt > 0 && Date.now() - checkedAt <= SCENE_OUTPUT_STAT_TTL_MS;
@@ -1161,7 +1235,7 @@ function forceResumeFirstIncompleteSceneIfNeeded() {
   safeAddPipelineLog(
     'renderer',
     'running',
-    `Resume guard: scene ${id} missing video; forcing pipeline back to this scene before continuing.`,
+    `Resume guard: scene ${id} missing required on-disk output; forcing pipeline back to this scene before continuing.`,
     { activeBatchIds }
   );
 
@@ -1183,13 +1257,13 @@ function getCompletedScenesCount() {
   }).length;
 }
 
-function getNextBatchForSegment(doneSceneId = 0) {
+function getNextBatchForSegment(_doneSceneId = 0) {
   if (!project?.scenes?.length) return [];
 
   const sorted = [...project.scenes].sort((a, b) => Number(a.id || 0) - Number(b.id || 0));
   const next = sorted.find((scene) => {
     const id = Number(scene.id || 0);
-    if (!id || id <= Number(doneSceneId || 0)) return false;
+    if (!id) return false;
     if (scene.status === 'skipped') return false;
     return !sceneHasVideoOutput(scene);
   });
@@ -1212,11 +1286,50 @@ async function runFullPipeline() {
   assertPipelineRunActive(runId);
   ensureChatChoiceFields();
   if (!project || !activeBatchIds.length) return;
-  forceResumeFirstIncompleteSceneIfNeeded();
   if (!outputFolder) {
     await chooseOutputFolder();
     if (!outputFolder) return;
   }
+  const startDiskAudit = await syncProjectSceneFolders({ repairFromDisk: true });
+  assertPipelineRunActive(runId);
+  if (!startDiskAudit?.ok || !Array.isArray(startDiskAudit.records) || startDiskAudit.records.length !== project.scenes.length) {
+    paused = true;
+    setRunning(false);
+    safeAddPipelineLog('renderer', 'error', 'Disk audit failed before Start/Resume; pipeline stopped before touching ChatGPT.', {
+      expectedSceneCount: project.scenes.length,
+      auditedSceneCount: Array.isArray(startDiskAudit?.records) ? startDiskAudit.records.length : 0,
+      error: startDiskAudit?.error || 'scene-output-audit-unavailable',
+    });
+    setStatus('Không thể xác minh output scene trên ổ đĩa. Pipeline đã dừng an toàn trước khi gửi prompt.', 'error');
+    return;
+  }
+  forceResumeFirstIncompleteSceneIfNeeded();
+  const schedulerAuditSceneIds = new Set(
+    (activeBatchIds || []).flatMap((id) => [Number(id) - 2, Number(id) - 1, Number(id), Number(id) + 1])
+      .filter((id) => Number.isInteger(id) && id > 0),
+  );
+  const schedulerAuditRecords = startDiskAudit.records
+    .filter((record) => schedulerAuditSceneIds.has(Number(record.sceneId || 0)))
+    .map((record) => ({
+      sceneId: Number(record.sceneId || 0),
+      keyframeExists: record.keyframeExists === true,
+      keyframeValid: record.keyframeValid === true,
+      keyframeValidationError: record.keyframeValidationError || '',
+      motionPromptExists: record.motionPromptExists === true,
+      motionPromptValid: record.motionPromptValid === true,
+      motionPromptValidationError: record.motionPromptValidationError || '',
+      videoExists: record.videoExists === true,
+    }));
+  safeAddPipelineLog(
+    'renderer',
+    'running',
+    `Disk scheduler audit selected scene ${activeBatchIds[0] || 'none'} after checking required outputs.`,
+    {
+      mode: isKeyframeMotionPromptOnlyModeEnabled() ? 'keyframe-motion-only' : 'full-pipeline',
+      selectedSceneIds: [...activeBatchIds],
+      nearbySceneOutputs: schedulerAuditRecords,
+    },
+  );
   if (!window.videoPlannerAPI?.runScenePipeline) {
     setStatus('Bridge pipeline chưa sẵn sàng. Hãy restart app.', 'error');
     return;
@@ -1433,6 +1546,9 @@ projectName: project.name,
         currentScene.imagePrompt = result.imagePromptUsed || currentScene.imagePrompt || imagePrompt;
         currentScene.motionPrompt = result.motionPrompt || currentScene.motionPrompt || '';
         currentScene.motionPromptPath = result.motionPromptPath || currentScene.motionPromptPath || 'motion_prompt.txt';
+        currentScene.keyframeOutputPath = result.keyframeOutputPath || currentScene.keyframeOutputPath || '';
+        currentScene.motionPromptOutputPath = result.motionPromptOutputPath || currentScene.motionPromptOutputPath || '';
+        currentScene.readyForVeoUp = result.readyForVeoUp === true;
         currentScene.videoPath = '';
         currentScene.videoValidated = false;
         currentScene.videoFileExists = false;
@@ -1446,6 +1562,9 @@ projectName: project.name,
         persist({ immediateAutosave: true, reason: 'keyframe-motion-complete' });
         render();
         safeAddPipelineLog('renderer', 'ok', `Scene ${currentScene.id}: keyframe + motion prompt complete; VeoUp skipped.`);
+        if (!result?.alreadyCompleted) {
+          await waitForInterSceneBreather(runId, currentScene.id);
+        }
         continue;
       }
       if (resultVideoPath && result?.videoValidated === true && String(resultVideoPath).includes(sceneFolderToken)) {
@@ -1521,6 +1640,9 @@ projectName: project.name,
           `Scene ${currentScene.id}: VeoUp failed; skipped and continuing to next scene.`,
           { videoStatus: result.videoStatus || '', videoError: result.videoError || '' }
         );
+        if (!result?.alreadyCompleted) {
+          await waitForInterSceneBreather(runId, currentScene.id);
+        }
         continue;
       }
 
@@ -1613,6 +1735,9 @@ projectName: project.name,
         if (currentScene.status === 'image_done') {
           i--;
         }
+        if (!result?.alreadyCompleted) {
+          await waitForInterSceneBreather(runId, currentScene.id);
+        }
         continue;
       }
       openAssetReview(currentScene.id);
@@ -1628,24 +1753,29 @@ projectName: project.name,
       }
       const message = error.message || String(error);
       if (message.includes('PIPELINE_PAUSED_AFTER_RECOVERY_LIMIT')) {
-        scene.error = message;
-        scene.status = 'error';
-        scene.recoveryLimitReached = true;
+        scene.error = '';
+        scene.status = scene.imagePath ? 'motion_prompt_pending' : 'image_pending';
+        scene.progressStep = scene.imagePath ? 'motion' : 'image';
+        scene.recoveryLimitReached = false;
+        scene.pipelineRetryCount = 0;
         scene.updatedAt = new Date().toISOString();
-        paused = true;
-        isRunning = false;
-        autoContinuing = false;
+        paused = false;
+        isRunning = true;
+        autoContinuing = true;
+        pendingManualRecoveryResetSceneIds.add(scene.id);
         projectRuntime = {
           ...projectRuntime,
-          active: false,
-          waitingForUserStart: true,
-          lastErrorClassification: 'recovery_limit_reached',
-          lastAction: 'paused_after_recovery_limit',
+          active: true,
+          waitingForUserStart: false,
+          lastErrorClassification: 'automatic_recovery_restart',
+          lastAction: 'automatic_restart_after_recovery_limit',
         };
-        persist({ immediateAutosave: true, reason: 'pipeline-recovery-limit' });
+        persist({ immediateAutosave: true, reason: 'pipeline-auto-restart-fallback' });
         render();
-        setStatus(`Scene ${scene.id} đã dùng đủ 2 chu kỳ phục hồi. Checkpoint đã được lưu; pipeline đã dừng an toàn.`, 'error');
-        return;
+        setStatus(`Scene ${scene.id}: tự chạy lại pipeline từ checkpoint sau lỗi phục hồi.`, 'running');
+        i--;
+        await pipelineDelay(15000, runId);
+        continue;
       }
       const loginProvider = parseLoginRequiredError(message, scene);
       if (loginProvider) {
@@ -1700,6 +1830,19 @@ projectName: project.name,
     }
   }
 
+  const finalDiskAudit = await syncProjectSceneFolders({ repairFromDisk: true });
+  assertPipelineRunActive(runId);
+  if (!finalDiskAudit?.ok || !Array.isArray(finalDiskAudit.records) || finalDiskAudit.records.length !== project.scenes.length) {
+    paused = true;
+    setRunning(false);
+    safeAddPipelineLog('renderer', 'error', 'Disk audit failed before auto-advance; batch cursor was not moved.', {
+      expectedSceneCount: project.scenes.length,
+      auditedSceneCount: Array.isArray(finalDiskAudit?.records) ? finalDiskAudit.records.length : 0,
+      error: finalDiskAudit?.error || 'scene-output-audit-unavailable',
+    });
+    setStatus('Không thể xác minh output scene trên ổ đĩa. Đã giữ nguyên batch và dừng trước khi tự chuyển scene.', 'error');
+    return;
+  }
   const totalCompletedScenesCount = getCompletedScenesCount();
   if (totalCompletedScenesCount < targetSceneCount) {
     const lastSceneId = activeBatchIds.length ? Math.max(...activeBatchIds) : 0;
@@ -2228,8 +2371,21 @@ function appendPipelineLog(text, kind = 'idle', options = {}) {
 
 function showPipelineNotice(payload = {}) {
   const message = payload.message || 'Pipeline cần chú ý.';
-  setStatus(message, String(payload.type || '').includes('limit') ? 'error' : 'running');
-  if (payload.type === 'chatgpt-image-retry') return;
+  const noticeType = String(payload.type || '');
+  const isAutomaticRecoveryNotice = [
+    'chatgpt-image-retry',
+    'pipeline-auto-restart',
+    'pipeline-paused',
+  ].includes(noticeType);
+  setStatus(
+    message,
+    isAutomaticRecoveryNotice
+      ? 'running'
+      : noticeType.includes('limit')
+        ? 'error'
+        : 'running'
+  );
+  if (isAutomaticRecoveryNotice) return;
   window.alert(message);
 }
 
@@ -4134,6 +4290,7 @@ function updateScanButtonVisibility() {
         expectedSceneIds: project.scenes.map((scene) => Number(scene.id || scene.sceneId)).filter(Number.isInteger),
         projectName: project.name || '',
         trigger: 'manual-scan',
+        allowPartial: true,
         autoStartVideoGeneration: true,
         previewStartButtonOnly: Boolean(veoupPreviewStartOnlyToggle?.checked)
       });
@@ -4143,8 +4300,12 @@ function updateScanButtonVisibility() {
           : res.status === 'loaded'
             ? 'Đã nạp vào VeoUp'
             : 'Đã gửi sang VeoUp';
-        setStatus(`${action}: ${res.imageCount} scene.`, 'ok');
-        alert(`${action} ${res.imageCount} scene.`);
+        const skippedSceneIds = Array.isArray(res.skippedSceneIds) ? res.skippedSceneIds : [];
+        const partialNote = skippedSceneIds.length
+          ? ` Đã bỏ qua ${skippedSceneIds.length} scene chưa sạch: ${skippedSceneIds.join(', ')}.`
+          : '';
+        setStatus(`${action}: ${res.imageCount} scene.${partialNote}`, skippedSceneIds.length ? 'running' : 'ok');
+        alert(`${action} ${res.imageCount} scene.${partialNote}`);
       } else {
         const errMsg = res?.error || 'Có lỗi xảy ra.';
         setStatus(`Lỗi quét project hoặc chạy VeoUp: ${errMsg}`, 'error');

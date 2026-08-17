@@ -4,9 +4,18 @@ const { BrowserWindow } = require("electron");
 const { AsyncLocalStorage } = require("async_hooks");
 const fs = require("fs/promises");
 const path = require("path");
+const {
+  writeJsonFileAtomic,
+  enqueueProjectWrite,
+} = require("../project");
+const { materializeSceneRequestFiles } = require("./scene_request_files");
+const {
+  validateKeyframeFile,
+  validateMotionPromptTextContent,
+} = require("./asset_validation");
 
 const { appendAppLog, maskRouterText } = require("../logging");
-const { pathExists, sleep, getFfmpegBinaryPath, normalizeContinuityReferenceSettings, findSceneKeyframePathSafe, validateContinuityReferenceImage } = require("../utils");
+const { pathExists, sleep, getFfmpegBinaryPath, normalizeContinuityReferenceSettings, findSceneKeyframePathSafe } = require("../utils");
 const { getDurablePipelineBackoffMs } = require("../recovery");
 const { logMemoryMilestone } = require("../memory");
 const {
@@ -39,15 +48,12 @@ const {
   isChatGptRequestRotationEligible,
   countChatGptAssistantRootsScript,
   countChatGptImageAgentTurnsScript,
-  adoptExistingSceneImage,
-  decodeImageBufferToPng,
-  validateSavedImageFile,
   clearAllChatGptPipelineLocks,
 } = require("../chatgpt");
 const {
   executeVeoUpAutomation,
-  scanProjectAndRunVeoUp,
-  buildVeoUpPromptsReadyFile,
+  stageSceneForVeoUp,
+  invalidateSceneVeoUpCollection,
   isVeoUpStageError,
 } = require("../veoup");
 
@@ -118,23 +124,30 @@ const scenePipelineLocks = new Map();
 const scenePipelineFailureTracker = {};
 const MAX_SCENE_RECOVERY_CYCLES = 2;
 
-async function readChatGptAssistantCountForInit(sceneId = 0) {
+async function readChatGptConversationStateForInit(sceneId = 0) {
   const page = await getCdpPage("chatgpt", true, { bringToFront: true }).catch(() => null);
   if (!page) return null;
   try {
-    const state = await evaluateOnCdpPage(
-      page,
-      `(${countChatGptAssistantRootsScript.toString()})()`,
-    ).catch(() => null);
-    const count = Number(state?.count ?? state ?? 0);
-    if (!Number.isFinite(count)) return null;
-    await appendAppLog(null, {
-      source: "main",
-      kind: "running",
-      text: `ChatGPT chat-init gate: assistantCount=${count}.`,
-      details: { sceneId, assistantCount: count },
-    }).catch(() => null);
-    return count;
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      const state = await getConversationState(page).catch(() => null);
+      const conversationLength = Number(state?.conversationLength);
+      if (state?.ok && Number.isFinite(conversationLength)) {
+        const result = {
+          conversationLength,
+          currentChatId: String(state?.currentChatId || "").trim(),
+          latestUserMessageHash: String(state?.latestUserMessageHash || ""),
+        };
+        await appendAppLog(null, {
+          source: "main",
+          kind: "running",
+          text: `ChatGPT chat-init gate: conversationLength=${conversationLength}.`,
+          details: { sceneId, ...result },
+        }).catch(() => null);
+        return result;
+      }
+      if (attempt < 3) await sleep(500);
+    }
+    return null;
   } finally {
     await page.close().catch(() => null);
   }
@@ -346,6 +359,7 @@ function sanitizeScenePipelineResult(result = {}) {
     sourceVideoPath: safeText(result.sourceVideoPath, 1000),
     sourceDownloadPath: safeText(result.sourceDownloadPath, 1000),
     completionStatus: safeText(result.completionStatus, 100),
+    alreadyCompleted: Boolean(result.alreadyCompleted),
     keyframeMotionPromptOnly: Boolean(result.keyframeMotionPromptOnly),
     motionPromptPath: safeText(result.motionPromptPath, 1000),
     videoProvider: safeText(result.videoProvider, 100),
@@ -414,26 +428,23 @@ async function checkIfAllScenesComplete(projectDir) {
 
   const validSceneDirs = [];
   for (const sceneDir of sceneDirs) {
-    // Check if motion_prompt.txt exists and has content
+    // Cached assets must satisfy the same quality gates as newly generated
+    // NV1/NV2 outputs before they can contribute to scene completion.
     const motionPromptPath = path.join(sceneDir, "motion_prompt.txt");
-    let hasMotionPrompt = false;
-    try {
-      const stat = await fs.stat(motionPromptPath);
-      if (stat.size > 0) {
-        hasMotionPrompt = true;
-      }
-    } catch (err) {
-      // ignore
-    }
-
-    if (!hasMotionPrompt) {
+    const motionPrompt = await fs
+      .readFile(motionPromptPath, "utf8")
+      .catch(() => "");
+    if (!validateMotionPromptTextContent(motionPrompt).ok) {
       continue;
     }
 
     // Check if any keyframe image exists
     const sceneId = parseInt(path.basename(sceneDir).match(/\d+/)[0], 10);
     const keyframePath = await findSceneKeyframePathSafe(sceneDir, sceneId);
-    if (keyframePath) {
+    const keyframeValidation = keyframePath
+      ? await validateKeyframeFile(keyframePath)
+      : { ok: false };
+    if (keyframeValidation.ok) {
       validSceneDirs.push(sceneDir);
     }
   }
@@ -457,26 +468,24 @@ async function readPipelineSceneState(projectDir = "", sceneId = 0) {
 async function writePipelineSceneState(projectDir, sceneId, fields = {}) {
   try {
     const stateFile = path.join(projectDir, "pipeline_state.json");
-    let state = {};
-    if (await pathExists(stateFile)) {
-      try {
-        const raw = await fs.readFile(stateFile, "utf8");
-        if (raw) state = JSON.parse(raw);
-      } catch (e) {
-        // ignore
+    await enqueueProjectWrite(stateFile, async () => {
+      let state = {};
+      if (await pathExists(stateFile)) {
+        try {
+          const raw = await fs.readFile(stateFile, "utf8");
+          if (raw) state = JSON.parse(raw);
+        } catch (_error) {
+          state = {};
+        }
       }
-    }
-
-    if (!state[sceneId]) {
-      state[sceneId] = {};
-    }
-    state[sceneId] = {
-      ...state[sceneId],
-      ...fields,
-      updatedAt: new Date().toISOString(),
-    };
-
-    await fs.writeFile(stateFile, JSON.stringify(state, null, 2), "utf8");
+      if (!state || typeof state !== "object" || Array.isArray(state)) state = {};
+      state[sceneId] = {
+        ...(state[sceneId] || {}),
+        ...fields,
+        updatedAt: new Date().toISOString(),
+      };
+      await writeJsonFileAtomic(stateFile, state, 2);
+    });
     await appendAppLog(null, {
       source: "main",
       kind: "running",
@@ -488,6 +497,7 @@ async function writePipelineSceneState(projectDir, sceneId, fields = {}) {
       "[writePipelineSceneState] Failed to write pipeline state:",
       err,
     );
+    throw err;
   }
 }
 
@@ -518,7 +528,9 @@ async function persistDurableStage(
 }
 
 async function resetSceneRecoveryForManualStart(options = {}, attemptKey = "") {
-  if (options?.manualRecoveryReset !== true) return { reset: false };
+  const automaticRecoveryReset = options?.automaticRecoveryReset === true;
+  const manualRecoveryReset = options?.manualRecoveryReset === true;
+  if (!manualRecoveryReset && !automaticRecoveryReset) return { reset: false };
   const sceneId = Number(options?.sceneId || 0);
   const projectDir =
     options.outputFolder || options.projectPath || options.outputPath || "";
@@ -546,7 +558,7 @@ async function resetSceneRecoveryForManualStart(options = {}, attemptKey = "") {
   for (const candidate of [...new Set(keyframeCandidates)]) {
     if (
       isSceneScopedFilePath(candidate, sceneId) &&
-      (await pathExists(candidate).catch(() => false))
+      (await validateKeyframeFile(candidate).catch(() => ({ ok: false }))).ok
     ) {
       keyframePath = candidate;
       break;
@@ -563,17 +575,16 @@ async function resetSceneRecoveryForManualStart(options = {}, attemptKey = "") {
       (/^nv2_/i.test(currentStage) || sceneSnapshot.pipelineStage === "NV2_SENT"),
   );
   const now = new Date().toISOString();
+  const resetMode = automaticRecoveryReset ? "automatic" : "manual";
 
   scenePipelineFailureTracker[attemptKey] = 0;
   if (shouldRetryNv2) {
     await writeSceneSnapshot(sceneDir, {
-      manualNv2RetryRequested: true,
-      manualNv2RetryRunId: String(
-        options.runId || getScopedPipelineRunId() || "",
-      ),
-      manualNv2RetryRequestedAt: now,
-      manualNv2RetryCount:
-        Number(sceneSnapshot.manualNv2RetryCount || 0) + 1,
+      manualNv2RetryRequested: false,
+      manualNv2RetryRunId: "",
+      nv2ResumeWithoutResend: true,
+      nv2ResumeWithoutResendAt: now,
+      nv2ResumeTrigger: resetMode,
       motionValidated: false,
     });
   }
@@ -585,29 +596,62 @@ async function resetSceneRecoveryForManualStart(options = {}, attemptKey = "") {
     recoveryLimitReached: false,
     retryCount: 0,
     attemptCount: 0,
-    lastError: "",
+    lastError: automaticRecoveryReset
+      ? String(options.automaticRecoveryLastError || previous.lastError || "")
+      : "",
     pausedAt: "",
-    manualRecoveryResetAt: now,
-    manualRecoveryResetRunId: String(
-      options.runId || getScopedPipelineRunId() || "",
-    ),
+    ...(automaticRecoveryReset
+      ? {
+          automaticRecoveryResetAt: now,
+          automaticRecoveryResetRunId: String(
+            options.runId || getScopedPipelineRunId() || "",
+          ),
+          autoRestartCount: Number(options.autoRestartCount || 1),
+        }
+      : {
+          manualRecoveryResetAt: now,
+          manualRecoveryResetRunId: String(
+            options.runId || getScopedPipelineRunId() || "",
+          ),
+        }),
     keyframePath: keyframePath || previous.keyframePath || "",
   });
-  options.__manualRecoveryResetApplied = true;
+  if (automaticRecoveryReset) options.__automaticRecoveryResetApplied = true;
+  else options.__manualRecoveryResetApplied = true;
 
   await appendAppLog(null, {
     source: "main",
     kind: "running",
-    text: `Scene ${sceneId}: manual recovery reset accepted; retry budget reopened without deleting valid assets.`,
+    text: `Scene ${sceneId}: ${resetMode} recovery reset accepted; retry budget reopened without deleting valid assets.`,
     details: {
       sceneId,
       currentStage,
       shouldRetryNv2,
+      resetMode,
+      autoRestartCount: automaticRecoveryReset
+        ? Number(options.autoRestartCount || 1)
+        : 0,
       preservedKeyframe: keyframePath ? path.basename(keyframePath) : "",
       motionPromptExists,
     },
   }).catch(() => null);
-  return { reset: true, currentStage, shouldRetryNv2, keyframePath };
+  return {
+    reset: true,
+    resetMode,
+    currentStage,
+    shouldRetryNv2,
+    keyframePath,
+  };
+}
+
+async function resetSceneRecoveryForAutomaticRestart(
+  options = {},
+  attemptKey = "",
+) {
+  return resetSceneRecoveryForManualStart(
+    { ...options, automaticRecoveryReset: true, manualRecoveryReset: false },
+    attemptKey,
+  );
 }
 
 function assertDurableSceneSuccess(result = {}) {
@@ -629,6 +673,12 @@ function assertDurableSceneSuccess(result = {}) {
     error.details = { result };
     throw error;
   }
+}
+
+function isNv2NoResendTerminalFailure(error) {
+  return /nv2-[^\s:]*no-resend|nv2-owned-response-wait-failed-no-resend|nv2-final-save-[^\s:]*no-resend/i.test(
+    String(error?.message || error || ""),
+  );
 }
 
 function isSceneScopedFilePath(filePath = "", sceneId = 0) {
@@ -778,30 +828,62 @@ async function runScenePipelineLocked(_event, options) {
     }).catch(() => null);
   }
 
-  const assistantCountForChatInit = await readChatGptAssistantCountForInit(sceneId);
-  if (assistantCountForChatInit === 0) {
+  const chatInitState = await readChatGptConversationStateForInit(sceneId);
+  if (!chatInitState) {
+    throw new Error("chatgpt-chat-init-state-unavailable");
+  }
+  const sceneDirForHydration = validPath
+    ? path.join(validPath, `scene_${String(sceneId).padStart(3, "0")}`)
+    : "";
+  const hydrationSnapshot = sceneDirForHydration
+    ? await readSceneSnapshot(sceneDirForHydration).catch(() => ({}))
+    : {};
+  const hydration = hydrationSnapshot?.hydration || {};
+  const pendingHydrationHasOwnedPrompt = Boolean(
+    chatInitState.latestUserMessageHash &&
+      [hydration.request1PromptHash, hydration.request2PromptHash].includes(
+        chatInitState.latestUserMessageHash,
+      ),
+  );
+  const pendingHydrationMatchesConversation = Boolean(
+    chatInitState.conversationLength > 0 &&
+      hydration.startedAt &&
+      (!hydration.request1Done || !hydration.request2Done) &&
+      chatInitState.currentChatId &&
+      ((hydration.conversationId &&
+        hydration.conversationId === chatInitState.currentChatId) ||
+        (!hydration.conversationId && pendingHydrationHasOwnedPrompt)),
+  );
+
+  if (chatInitState.conversationLength === 0) {
     setChatGptContextFresh(true);
     assertPipelineRunActive(runId);
     await appendAppLog(null, {
       source: "main",
       kind: "running",
       text: `ChatGPT empty chat detected: hydrating request 1/2 before active scene request.`,
-      details: { sceneId, assistantCount: assistantCountForChatInit },
+      details: { sceneId, conversationLength: 0 },
     }).catch(() => null);
     await hydrateFreshChatGptContextAfterRotation(options, sceneId);
     assertPipelineRunActive(runId);
-  } else if (assistantCountForChatInit > 0) {
-    setChatGptContextFresh(false);
-  } else if (getChatGptContextFresh()) {
+  } else if (pendingHydrationMatchesConversation) {
+    setChatGptContextFresh(true);
     assertPipelineRunActive(runId);
     await appendAppLog(null, {
       source: "main",
-      kind: "warning",
-      text: `ChatGPT chat-init gate unavailable; using fresh-context fallback.`,
-      details: { sceneId },
+      kind: "running",
+      text: `ChatGPT hydration checkpoint is incomplete in the current conversation; resuming before NV1.`,
+      details: {
+        sceneId,
+        conversationId: chatInitState.currentChatId,
+        request1Done: Boolean(hydration.request1Done),
+        request2Done: Boolean(hydration.request2Done),
+      },
     }).catch(() => null);
     await hydrateFreshChatGptContextAfterRotation(options, sceneId);
     assertPipelineRunActive(runId);
+  } else {
+    setChatGptContextFresh(false);
   }
 
   while (true) {
@@ -827,6 +909,13 @@ async function runScenePipelineLocked(_event, options) {
           sourceVideoPath:
             result.sourceVideoPath || result.sourceDownloadPath || "",
           completionStatus: result.completionStatus || "complete",
+          retryCount: 0,
+          attemptCount: 0,
+          autoRestartCount: 0,
+          recoveryLimitReached: false,
+          paused: false,
+          active: false,
+          waitingForUserStart: false,
           lastError: "",
         },
       ).catch(() => null);
@@ -925,14 +1014,11 @@ async function runScenePipelineLocked(_event, options) {
           text: `Scene ${sceneId} was already complete before this run; continuing to the next scene immediately.`,
         }).catch(() => null);
       } else {
-        // Inter-Scene Breather Padding applies only after work completed in this run.
         await appendAppLog(null, {
           source: "main",
-          kind: "running",
-          text: `Scene ${sceneId} completed in this run: sleeping 10000ms before returning success...`,
+          kind: "ok",
+          text: `Scene ${sceneId} durable success committed; returning result to renderer.`,
         }).catch(() => null);
-        await sleep(10000);
-        assertPipelineRunActive(runId);
       }
 
       return result;
@@ -962,6 +1048,35 @@ async function runScenePipelineLocked(_event, options) {
       const persistedStage = String(
         previousStageState.stage || previousStageState.currentStage || "",
       ).trim();
+      if (isNv2NoResendTerminalFailure(error)) {
+        scenePipelineFailureTracker[attemptKey] = MAX_SCENE_RECOVERY_CYCLES;
+        await persistDurableStage(
+          projectDirForStage,
+          sceneId,
+          "nv2_sent",
+          {
+            ok: false,
+            active: false,
+            paused: true,
+            waitingForUserStart: true,
+            recoveryLimitReached: true,
+            nv2NoResend: true,
+            lastError: error?.message || String(error),
+            lastErrorAt: new Date().toISOString(),
+          },
+        ).catch(() => null);
+        await notifyRenderer?.(
+          "pipeline-paused",
+          `Scene ${sceneId}: NV2 đã gửi nhưng không có response đủ điều kiện. Pipeline dừng tại checkpoint và không gửi lại NV2.`,
+          {
+            sceneId,
+            currentStage: "nv2_sent",
+            nv2NoResend: true,
+            error: error?.message || String(error),
+          },
+        ).catch(() => null);
+        throw error;
+      }
       const isPersistedVeoUpStage = /^veoup_/i.test(persistedStage);
       const isVeoUpFailure = isVeoUpStageError(error) || isPersistedVeoUpStage;
       const isChatGptRequestFailureEligibleForRotation =
@@ -1131,25 +1246,45 @@ async function runScenePipelineLocked(_event, options) {
         lastErrorAt: new Date().toISOString(),
       }).catch(() => null);
       if (retryCount >= MAX_SCENE_RECOVERY_CYCLES) {
-        await persistDurableStage(projectDir, sceneId, currentStage, {
-          ok: false,
-          paused: true,
-          active: false,
-          waitingForUserStart: true,
-          recoveryLimitReached: true,
-          retryCount,
-          attemptCount: retryCount,
-          lastError: error?.message || String(error),
-          pausedAt: new Date().toISOString(),
-        }).catch(() => null);
-        await notifyRenderer?.(
-          "pipeline-paused",
-          `Scene ${sceneId}: đã dùng đủ ${MAX_SCENE_RECOVERY_CYCLES} chu kỳ phục hồi. Pipeline đã lưu checkpoint và dừng để tránh lặp vô hạn.`,
-          { sceneId, retryCount, currentStage, recoveryLimitReached: true },
-        ).catch(() => null);
-        throw new Error(
-          `PIPELINE_PAUSED_AFTER_RECOVERY_LIMIT:scene-${sceneId}:${error?.message || String(error)}`,
+        const autoRestartCount =
+          Number(previousState.autoRestartCount || 0) + 1;
+        const autoRestartDelayMs = getDurablePipelineBackoffMs(
+          MAX_SCENE_RECOVERY_CYCLES + autoRestartCount,
         );
+        await resetSceneRecoveryForAutomaticRestart(
+          {
+            ...options,
+            autoRestartCount,
+            automaticRecoveryLastError: error?.message || String(error),
+          },
+          attemptKey,
+        );
+        await notifyRenderer?.(
+          "pipeline-auto-restart",
+          `Scene ${sceneId}: đã dùng đủ ${MAX_SCENE_RECOVERY_CYCLES} lần phục hồi. Tự chạy lại từ checkpoint sau ${Math.round(autoRestartDelayMs / 1000)} giây.`,
+          {
+            sceneId,
+            retryCount,
+            currentStage,
+            recoveryLimitReached: false,
+            autoRestartCount,
+            autoRestartDelayMs,
+          },
+        ).catch(() => null);
+        await appendAppLog(null, {
+          source: "main",
+          kind: "running",
+          text: `Scene ${sceneId} [${currentStage}]: automatic pipeline restart ${autoRestartCount}; continuing from checkpoint in ${Math.round(autoRestartDelayMs / 1000)}s.`,
+          details: {
+            retryCount,
+            autoRestartCount,
+            autoRestartDelayMs,
+            error: error?.message || String(error),
+          },
+        }).catch(() => null);
+        await sleep(autoRestartDelayMs);
+        assertPipelineRunActive(runId);
+        continue;
       }
       await appendAppLog(null, {
         source: "main",
@@ -1209,6 +1344,19 @@ async function runScenePipelineLockedInternal(_event, options) {
     projectDir,
     sceneId,
   ).catch(() => ({}));
+  if (
+    keyframeMotionPromptOnly &&
+    !options.prefetchOnly &&
+    (options.forceRegenerateImage || options.forceRegenerateMotionPrompt)
+  ) {
+    await invalidateSceneVeoUpCollection({
+      projectDir,
+      sceneId,
+      reason: options.forceRegenerateImage
+        ? "keyframe-regeneration-requested"
+        : "motion-prompt-regeneration-requested",
+    });
+  }
   await persistDurableStage(projectDir, sceneId, "prepare_scene", {
     projectName,
     keyframePath: existingDurableState.keyframePath || "",
@@ -1217,23 +1365,24 @@ async function runScenePipelineLockedInternal(_event, options) {
       path.join(sceneDir, "motion_prompt.txt"),
   }).catch(() => null);
   const hardTasks = await loadHardPromptTasks();
-  const continuityStageText =
-    Number(sceneId || 0) > 1
-      ? "Use the uploaded previous-scene keyframe image as continuity reference. Do not include future scenes."
-      : "Opening scene. No previous-scene reference image required.";
-  const task1ImagePrompt = buildImageStagePrompt({
-    nv1: hardTasks.task1 || imagePrompt,
-    sceneText,
+  const requestFiles = await materializeSceneRequestFiles({
+    sceneDir,
     sceneId,
-    continuityText: continuityStageText,
+    nv1: hardTasks.task1 || imagePrompt,
+    nv2: hardTasks.task2 || "",
+    sceneText,
   });
-  const task2VideoPrompt = hardTasks.task2 || "";
-  const finalImagePrompt = task1ImagePrompt;
-  await fs.writeFile(
-    path.join(sceneDir, "image_prompt.txt"),
-    finalImagePrompt,
-    "utf8",
-  );
+  const finalImagePrompt = await fs.readFile(requestFiles.nv1.filePath, "utf8");
+  await persistDurableStage(projectDir, sceneId, "request_files_materialized", {
+    nv1RequestPath: requestFiles.nv1.filePath,
+    nv1RequestSha256: requestFiles.nv1.contentSha256,
+    nv1ControlPromptHash: requestFiles.nv1.controlPromptHash,
+    nv1PayloadFingerprint: requestFiles.nv1.payloadFingerprint,
+    nv2RequestPath: requestFiles.nv2.filePath,
+    nv2RequestSha256: requestFiles.nv2.contentSha256,
+    nv2ControlPromptHash: requestFiles.nv2.controlPromptHash,
+    nv2PayloadFingerprint: requestFiles.nv2.payloadFingerprint,
+  });
   const existingMotionPromptPath = path.join(sceneDir, "motion_prompt.txt");
   if (
     !motionPrompt?.trim() &&
@@ -1250,6 +1399,21 @@ async function runScenePipelineLockedInternal(_event, options) {
         kind: "ok",
         text: `Scene ${sceneId}: đã có motion_prompt.txt, bỏ qua ChatGPT NV2 và gửi keyframe + Motion Prompt sang VeoUp.`,
       });
+    }
+  }
+  if (motionPrompt?.trim()) {
+    const cachedMotionValidation = validateMotionPromptTextContent(
+      motionPrompt,
+    );
+    if (!cachedMotionValidation.ok) {
+      await appendAppLog(null, {
+        source: "main",
+        kind: "warning",
+        text: `Scene ${sceneId}: rejected cached motion prompt (${cachedMotionValidation.error}); NV2 will run again without reusing it.`,
+      }).catch(() => null);
+      motionPrompt = "";
+    } else {
+      motionPrompt = cachedMotionValidation.text;
     }
   }
   if (motionPrompt)
@@ -1279,18 +1443,31 @@ async function runScenePipelineLockedInternal(_event, options) {
   let imagePath = isSceneScopedFilePath(options.imagePath || "", sceneId)
     ? options.imagePath
     : "";
-  if (imagePath && !(await pathExists(imagePath))) imagePath = "";
+  if (imagePath) {
+    const providedImageValidation = await validateKeyframeFile(imagePath);
+    if (!providedImageValidation.ok) imagePath = "";
+  }
   if (
     !imagePath &&
     !options.forceRegenerateImage &&
     (await pathExists(expectedImagePath))
   ) {
-    imagePath = expectedImagePath;
-    options.__nv1Succeeded = true;
-    await persistDurableStage(projectDir, sceneId, "nv1_image_validated", {
-      keyframePath: imagePath,
-      lastError: "",
-    }).catch(() => null);
+    const cachedImageValidation = await validateKeyframeFile(expectedImagePath);
+    if (cachedImageValidation.ok) {
+      imagePath = expectedImagePath;
+      options.__nv1Succeeded = true;
+      await persistDurableStage(projectDir, sceneId, "nv1_image_validated", {
+        keyframePath: imagePath,
+        lastError: "",
+      }).catch(() => null);
+    } else {
+      await appendAppLog(null, {
+        source: "main",
+        kind: "warning",
+        text: `Scene ${sceneId}: rejected cached keyframe (${cachedImageValidation.error}); NV1 will regenerate it.`,
+        details: cachedImageValidation,
+      }).catch(() => null);
+    }
   }
 
   if (!imagePath) {
@@ -1356,42 +1533,6 @@ async function runScenePipelineLockedInternal(_event, options) {
       }).catch(() => null);
     }
 
-    // Try adopting existing scene image from chat history before starting NV1 requests
-    if (imageProvider?.method !== "api" && !getChatGptContextFresh()) {
-      const page = await getCdpPage("chatgpt", true).catch(() => null);
-      if (page) {
-        try {
-          const adoptRes = await adoptExistingSceneImage(
-            page,
-            beforeImageAgentTurnCount,
-            sceneId,
-          ).catch(() => null);
-          if (adoptRes?.ok && adoptRes.base64) {
-            const sourceBuffer = Buffer.from(adoptRes.base64, "base64");
-            const decoded = decodeImageBufferToPng(sourceBuffer, adoptRes.contentType);
-            await fs.mkdir(path.dirname(expectedImagePath), { recursive: true });
-            await fs.writeFile(expectedImagePath, decoded.buffer);
-            await validateSavedImageFile(expectedImagePath);
-
-            imagePath = expectedImagePath;
-            options.__nv1Succeeded = true;
-            await persistDurableStage(projectDir, sceneId, "nv1_image_validated", {
-              keyframePath: imagePath,
-              chatGptConversationUrl: existingDurableState.chatGptConversationUrl || "",
-            }).catch(() => null);
-
-            await appendAppLog(null, {
-              source: "main",
-              kind: "ok",
-              text: `Scene ${sceneId}: Adopted existing completed image from chat successfully before NV1. Skipping generate.`,
-            });
-          }
-        } finally {
-          await page.close().catch(() => null);
-        }
-      }
-    }
-
     if (!imagePath) {
       console.log(`[PIPELINE][Scene ${sceneId}] START NV1 ChatGPT image`);
       await persistDurableStage(projectDir, sceneId, "nv1_prepare", {
@@ -1415,7 +1556,8 @@ async function runScenePipelineLockedInternal(_event, options) {
               config: imageProvider,
             })
           : await generateImageAndMotionWithChatGPT({
-              imagePrompt: finalImagePrompt,
+              imagePrompt: "",
+              requestArtifact: requestFiles.nv1,
               sceneDir,
               sceneId,
               referenceImagePaths,
@@ -1467,12 +1609,25 @@ async function runScenePipelineLockedInternal(_event, options) {
       .then((value) => value.trim())
       .catch(() => "");
     if (motionPrompt) {
-      options.__nv2Succeeded = true;
-      await appendAppLog(null, {
-        source: "main",
-        kind: "ok",
-        text: `Scene ${sceneId}: dùng motion_prompt.txt có sẵn, không gửi ChatGPT NV2.`,
-      });
+      const cachedMotionValidation = validateMotionPromptTextContent(
+        motionPrompt,
+      );
+      if (cachedMotionValidation.ok) {
+        motionPrompt = cachedMotionValidation.text;
+        options.__nv2Succeeded = true;
+        await appendAppLog(null, {
+          source: "main",
+          kind: "ok",
+          text: `Scene ${sceneId}: dùng motion_prompt.txt có sẵn, không gửi ChatGPT NV2.`,
+        });
+      } else {
+        motionPrompt = "";
+        await appendAppLog(null, {
+          source: "main",
+          kind: "warning",
+          text: `Scene ${sceneId}: motion_prompt.txt có sẵn không đạt quality gate (${cachedMotionValidation.error}); tiếp tục NV2.`,
+        }).catch(() => null);
+      }
     }
   }
 
@@ -1482,7 +1637,7 @@ async function runScenePipelineLockedInternal(_event, options) {
       throw new Error(
         `Scene ${sceneId}: missing validated image before MOTION_STAGE.`,
       );
-    const imageValidation = await validateContinuityReferenceImage(imagePath).catch((error) => ({ ok: false, error: error.message }));
+    const imageValidation = await validateKeyframeFile(imagePath).catch((error) => ({ ok: false, error: error.message }));
     if (!imageValidation?.ok)
       throw new Error(
         `Scene ${sceneId}: invalid image before MOTION_STAGE: ${imageValidation?.error || "image-validation-failed"}`,
@@ -1507,8 +1662,11 @@ async function runScenePipelineLockedInternal(_event, options) {
     await appendAppLog(null, {
       source: "main",
       kind: "running",
-      text: `Scene ${sceneId}: Reading NV2_MOTION_PROMPT.txt.`,
-      details: { nv2Chars: String(task2VideoPrompt || "").length },
+      text: `Scene ${sceneId}: Using versioned NV2 request file.`,
+      details: {
+        requestFile: requestFiles.nv2.fileName,
+        requestId: requestFiles.nv2.contentSha256.slice(0, 12),
+      },
     });
     options.__chatGptBrowserActionExecuted = true;
     console.log(`[PIPELINE][Scene ${sceneId}] START NV2 ChatGPT motion prompt`);
@@ -1518,7 +1676,8 @@ async function runScenePipelineLockedInternal(_event, options) {
     }).catch(() => null);
     motionPrompt = await generateMotionPromptWithChatGPT({
       imagePath,
-      prompt: task2VideoPrompt,
+      prompt: "",
+      requestArtifact: requestFiles.nv2,
       sceneDir,
       sceneId,
       sceneText,
@@ -1526,6 +1685,15 @@ async function runScenePipelineLockedInternal(_event, options) {
       keyframeMotionPromptOnly,
       runId,
     });
+    const generatedMotionValidation = validateMotionPromptTextContent(
+      motionPrompt,
+    );
+    if (!generatedMotionValidation.ok) {
+      throw new Error(
+        `Scene ${sceneId}: generated motion prompt failed quality gate: ${generatedMotionValidation.error}`,
+      );
+    }
+    motionPrompt = generatedMotionValidation.text;
     assertPipelineRunActive(runId);
     await fs.mkdir(sceneDir, { recursive: true });
     await fs.writeFile(
@@ -1552,6 +1720,19 @@ async function runScenePipelineLockedInternal(_event, options) {
       text: `PIPELINE Scene ${sceneId}: đã lưu motion_prompt.txt.`,
     });
   }
+  const finalMotionValidation = validateMotionPromptTextContent(motionPrompt);
+  if (!finalMotionValidation.ok) {
+    throw new Error(
+      `Scene ${sceneId}: refusing to complete with invalid motion prompt: ${finalMotionValidation.error}`,
+    );
+  }
+  motionPrompt = finalMotionValidation.text;
+  const finalKeyframeValidation = await validateKeyframeFile(imagePath);
+  if (!finalKeyframeValidation.ok) {
+    throw new Error(
+      `Scene ${sceneId}: refusing to complete with invalid keyframe: ${finalKeyframeValidation.error}`,
+    );
+  }
   await fs.writeFile(
     path.join(sceneDir, "motion_prompt.txt"),
     motionPrompt,
@@ -1563,6 +1744,13 @@ async function runScenePipelineLockedInternal(_event, options) {
   }).catch(() => null);
 
   if (keyframeMotionPromptOnly && !options.prefetchOnly) {
+    const veoUpCollection = await stageSceneForVeoUp({
+      projectDir,
+      sceneId,
+      keyframePath: imagePath,
+      motionPrompt,
+      motionPromptPath: existingMotionPromptPath,
+    });
     await persistDurableStage(projectDir, sceneId, "keyframe_motion_complete", {
       ok: true,
       keyframeMotionPromptOnly: true,
@@ -1571,6 +1759,9 @@ async function runScenePipelineLockedInternal(_event, options) {
       videoPath: "",
       videoValidated: false,
       completionStatus: "keyframe_motion_complete",
+      readyForVeoUp: true,
+      veoUpKeyframePath: veoUpCollection.keyframePath,
+      veoUpMotionPromptPath: veoUpCollection.motionPromptPath,
       lastError: "",
     }).catch(() => null);
     await writePipelineSceneState(projectDir, sceneId, {
@@ -1587,6 +1778,9 @@ async function runScenePipelineLockedInternal(_event, options) {
       lastFramePath: "",
       completionStatus: "keyframe_motion_complete",
       status: "complete",
+      readyForVeoUp: true,
+      veoUpKeyframePath: veoUpCollection.keyframePath,
+      veoUpMotionPromptPath: veoUpCollection.motionPromptPath,
     });
     await appendAppLog(null, {
       source: "main",
@@ -1603,6 +1797,9 @@ async function runScenePipelineLockedInternal(_event, options) {
       imagePromptUsed: finalImagePrompt,
       motionPrompt,
       motionPromptPath: existingMotionPromptPath,
+      keyframeOutputPath: veoUpCollection.keyframePath,
+      motionPromptOutputPath: veoUpCollection.motionPromptPath,
+      readyForVeoUp: true,
       videoPath: "",
       videoValidated: false,
       videoStatus: "skipped-keyframe-motion-only",
@@ -2070,13 +2267,14 @@ module.exports = {
   validateSceneVideoAndLastFrame,
   finalizeValidatedSceneVideo,
   checkIfAllScenesComplete,
-  buildVeoUpPromptsReadyFile,
   isVeoUpStageError,
   readPipelineSceneState,
   writePipelineSceneState,
   persistDurableStage,
   resetSceneRecoveryForManualStart,
+  resetSceneRecoveryForAutomaticRestart,
   assertDurableSceneSuccess,
+  isNv2NoResendTerminalFailure,
   isSceneScopedFilePath,
   startNextSceneChatGptPrefetch,
   imageFileToDataUrl,

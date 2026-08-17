@@ -33,7 +33,7 @@ assert(cleanup.includes('Invoke-VeoUpPerRowCleanup $window'), 'fallback per-row 
 assert(cleanup.includes('confirmedStaleBeforeCleanup = $true'), 'hard failure must record confirmed stale');
 assert(!cleanup.includes("return [pscustomobject]@{ ok = $false; error = 'veoup-red-xoa-button-not-found'; before = $before }"), 'missing Xoa alone must not fail before fallback cleanup');
 
-const preGate = sliceBetween('Write-Host "[VeoUp] Verifying clean input state before new scene submission..."', 'Write-Host "[VeoUp] Importing exact keyframe files:');
+const preGate = sliceBetween('Write-Host "[VeoUp] Verifying clean input state before new scene submission..."', 'Write-Host "[VeoUp] Importing $($payload.imageCount) validated keyframe file(s)');
 assert(preGate.includes('Invoke-VeoUpInputCleanup $payload -BeforeSubmission'), 'pre-submission cleanup retry missing');
 assert(preGate.includes("error = 'veoup-pre-submission-cleanup-failed'"), 'confirmed stale cleanup failure must return ok:false before import');
 assert(preGate.indexOf("error = 'veoup-pre-submission-cleanup-failed'") < preGate.indexOf('exit 0'), 'failure result must exit before import');

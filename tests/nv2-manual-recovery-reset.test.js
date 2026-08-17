@@ -37,6 +37,11 @@ function sha256(filePath) {
   return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
 }
 
+const VALID_KEYFRAME = Buffer.concat([
+  Buffer.from("89504e470d0a1a0a", "hex"),
+  Buffer.alloc(5000),
+]);
+
 (async () => {
   const projectDir = fs.mkdtempSync(
     path.join(os.tmpdir(), "vidora-nv2-manual-recovery-"),
@@ -46,7 +51,7 @@ function sha256(filePath) {
     const sceneDir = path.join(projectDir, "scene_021");
     const keyframePath = path.join(sceneDir, "scene_021_keyframe.png");
     fs.mkdirSync(sceneDir, { recursive: true });
-    fs.writeFileSync(keyframePath, Buffer.from("valid-keyframe-must-survive"));
+    fs.writeFileSync(keyframePath, VALID_KEYFRAME);
     const keyframeHashBefore = sha256(keyframePath);
     const untouchedSceneState = {
       sceneId: 22,
@@ -125,11 +130,9 @@ function sha256(filePath) {
     );
     assert.strictEqual(savedSnapshot.pipelineStage, "NV2_SENT");
     assert.strictEqual(savedSnapshot.imageValidated, true);
-    assert.strictEqual(savedSnapshot.manualNv2RetryRequested, true);
-    assert.strictEqual(
-      savedSnapshot.manualNv2RetryRunId,
-      "run-manual-recovery-21",
-    );
+    assert.strictEqual(savedSnapshot.manualNv2RetryRequested, false);
+    assert.strictEqual(savedSnapshot.manualNv2RetryRunId, "");
+    assert.strictEqual(savedSnapshot.nv2ResumeWithoutResend, true);
 
     const promptHash = hashChatGptSnapshotText("NV2 prompt");
     const oldAssistantHash = hashChatGptSnapshotText("old assistant text");
@@ -190,15 +193,16 @@ function sha256(filePath) {
     assert(rendererSource.includes("manualRecoveryReset,"));
     assert(rendererSource.includes("scene.recoveryLimitReached = false"));
     assert(pipelineSource.includes("scenePipelineFailureTracker[attemptKey] = 0"));
-    assert(pipelineSource.includes("manualNv2RetryRequested: true"));
+    assert(!pipelineSource.includes("manualNv2RetryRequested: true"));
     const resetFunctionSource = pipelineSource.slice(
       pipelineSource.indexOf("async function resetSceneRecoveryForManualStart"),
       pipelineSource.indexOf("function assertDurableSceneSuccess"),
     );
     assert(!resetFunctionSource.includes("fs.unlink"));
     assert(chatGptSource.includes("buildNv2OwnedPromptBaseline"));
-    assert(chatGptSource.includes("!forceNv2Resend"));
-    assert(chatGptSource.includes("motion_prompt_manual_recovery"));
+    assert(!chatGptSource.includes("forceNv2Resend"));
+    assert(!chatGptSource.includes("motion_prompt_manual_recovery"));
+    assert(chatGptSource.includes("nv2-response-timeout-no-resend"));
     assert(chatGptSource.includes("runId,"));
     assert(mainSource.includes("saved.recoveryLimitReached === true"));
 

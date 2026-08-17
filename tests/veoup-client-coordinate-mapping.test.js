@@ -52,8 +52,11 @@ assert(veoupSource.includes("chua chon anh|chon anh|them anh|select image|choose
 assert(veoupSource.includes('$imageImportUiClick = Click-VeoUpImageImportTarget $window'), 'image import must try UIA target before coordinate fallback');
 assert(!veoupSource.includes("SendWait('%i')"), 'Alt+I fallback must not run');
 assert(!veoupSource.includes("SendWait('{TAB}')"), 'Tab fallback must not run');
-assert(veoupSource.includes("fileSelectionText: collectedKeyframes.map((item) => quoteForFileDialog(item.path)).join(' ')"), 'must select exact validated scene keyframe paths');
-assert(!veoupSource.includes("Set-ClipboardText ([string]$payload.keyframesFolder)"), 'must not select from separate keyframes folder');
+assert(!/\bfileSelectionText\s*:/.test(veoupSource), 'batch must not paste a character-limited list of absolute paths');
+assert(veoupSource.includes('singleFileSelectionText:'), 'per-scene flow must retain the single-file path input');
+assert(veoupSource.includes("Set-ClipboardText ([string]$payload.keyframesFolder)"), 'batch must navigate to the exact prepared keyframes folder');
+assert(veoupSource.includes("SendWait('+{TAB}')"), 'batch must move from File name to the file list');
+assert(veoupSource.includes("SendWait('^a')"), 'batch must select all files in the exact prepared folder');
 assert(veoupSource.includes('return { ok: false, error: error?.message || String(error), outputFolder: resolvedOutputFolder };'), 'VeoUp failure must return hard failure with scoped output folder');
 assert(/Calibrated Blue Box click did not open the file dialog\.[\s\S]{0,240}exit 1/.test(veoupSource), 'import failure must exit before success');
 

@@ -7,7 +7,7 @@ const veoup = fs.readFileSync(path.join(root, 'electron/veoupAutomation.js'), 'u
 const main = fs.readFileSync(path.join(root, 'electron/main.js'), 'utf8');
 
 const invokeStart = veoup.indexOf('function Invoke-FinalStartButton($Payload) {');
-const invokeEnd = veoup.indexOf('Write-Host "[VeoUp] Importing exact keyframe files:', invokeStart);
+const invokeEnd = veoup.indexOf('Write-Host "[VeoUp] Importing $($payload.imageCount) validated keyframe file(s)', invokeStart);
 assert(invokeStart >= 0 && invokeEnd > invokeStart, 'Generate submission function missing');
 const invokeGenerate = veoup.slice(invokeStart, invokeEnd);
 

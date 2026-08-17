@@ -48,7 +48,7 @@ assert(finalStart.includes('ok = $true; sourceDownloadPath = $video.path; videoP
 assert(veoup.includes('Invoke-VeoUpInputCleanup $payload -BeforeSubmission'), 'pre-submission cleanup retry missing');
 assert(veoup.includes('[VeoUp] Verifying clean input state before new scene submission...'), 'pre-submission clean-state log missing');
 assert(veoup.includes("error = 'veoup-pre-submission-cleanup-failed'"), 'stale pre-submission cleanup failure must stop before import');
-assert(veoup.indexOf("error = 'veoup-pre-submission-cleanup-failed'") < veoup.indexOf('Write-Host "[VeoUp] Importing exact keyframe files:'), 'pre-submission cleanup gate must run before keyframe import');
+assert(veoup.indexOf("error = 'veoup-pre-submission-cleanup-failed'") < veoup.indexOf('Write-Host "[VeoUp] Importing $($payload.imageCount) validated keyframe file(s)'), 'pre-submission cleanup gate must run before keyframe import');
 assert(veoup.includes('postGenerationCleanupError = [string]$generateResult.cleanupError'), 'success result must expose cleanup failure marker');
 assert(!/Remove-Item\s+\$video\.path|Remove-Item\s+\$generateResult\.videoPath|Remove-Item\s+\$generateResult\.sourceDownloadPath/i.test(veoup), 'cleanup must not delete generated MP4');
 

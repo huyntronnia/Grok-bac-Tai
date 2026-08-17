@@ -1,8 +1,9 @@
-const { app, nativeImage } = require("electron");
+const { app } = require("electron");
 const ffmpegPath = require("ffmpeg-static");
 const fs = require("fs/promises");
 const path = require("path");
 const { EMAIL_PATTERN } = require("../logging");
+const { validateKeyframeFile } = require("../pipeline/asset_validation");
 
 const HARD_PROMPT_FILENAME = "2 NHIỆM VỤ BẰNG PROMPT.txt";
 
@@ -57,41 +58,7 @@ async function findSceneKeyframePathSafe(sceneDir, sceneId) {
 }
 
 async function validateContinuityReferenceImage(filePath = "") {
-  if (!filePath || !(await pathExists(filePath)))
-    return { ok: false, error: "missing-file", filePath };
-  const stat = await fs.stat(filePath).catch(() => null);
-  if (!stat || stat.size < 2048)
-    return {
-      ok: false,
-      error: "file-too-small",
-      filePath,
-      size: stat?.size || 0,
-    };
-  const image = nativeImage.createFromPath(filePath);
-  if (image.isEmpty())
-    return {
-      ok: false,
-      error: "image-decode-failed",
-      filePath,
-      size: stat.size,
-    };
-  const size = image.getSize();
-  if (size.width < 64 || size.height < 64)
-    return {
-      ok: false,
-      error: "image-dimensions-too-small",
-      filePath,
-      size: stat.size,
-      width: size.width,
-      height: size.height,
-    };
-  return {
-    ok: true,
-    filePath,
-    size: stat.size,
-    width: size.width,
-    height: size.height,
-  };
+  return validateKeyframeFile(filePath);
 }
 
 async function pathExists(filePath) {

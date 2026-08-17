@@ -8,6 +8,8 @@ const { spawn, exec } = require('child_process');
 const { globalShortcut } = require('electron');
 
 const { appendAppLog } = require("../logging");
+const { writeTextFileAtomic } = require("../project");
+const { prepareVeoUpBatchSelectionFolder } = require("./collection_store");
 
 
 
@@ -528,13 +530,13 @@ async function prepareVeoUpKeyframesFolder(outputFolder = '', keyframes = []) {
   return { keyframesDir, keyframes: sortBySceneNumber(prepared) };
 }
 
-async function exportVeoUpPromptFile(outputFolder = '', prompts = []) {
+async function exportVeoUpPromptFile(outputFolder = '', prompts = [], fileName = VEOUP_PROMPTS_READY_FILENAME) {
   const promptText = sortBySceneNumber(prompts)
     .map((item) => normalizeWhitespace(item.text))
     .filter(Boolean)
     .join('\n');
-  const promptFilePath = path.join(outputFolder, VEOUP_PROMPTS_READY_FILENAME);
-  await fsp.writeFile(promptFilePath, promptText, 'utf8');
+  const promptFilePath = path.join(outputFolder, fileName);
+  await writeTextFileAtomic(promptFilePath, promptText);
   return { promptFilePath, promptText, promptLineCount: promptText ? promptText.split('\n').length : 0 };
 }
 
@@ -1340,6 +1342,77 @@ function Set-ClipboardText([string]$Text) {
   Safe-SetClipboardText $Text
 }
 
+function Wait-ForOpenFileDialogClosed([int]$TimeoutMs = 8000) {
+  $deadline = (Get-Date).AddMilliseconds([Math]::Max(500, $TimeoutMs))
+  do {
+    if ((Get-ActiveWindowClassName) -ne '#32770') { return $true }
+    Start-Sleep -Milliseconds 150
+  } while ((Get-Date) -lt $deadline)
+  return $false
+}
+
+function Confirm-OpenFileDialogSelection {
+  $active = Get-ActiveWindowInfo
+  if ($active.ClassName -ne '#32770') {
+    return [pscustomobject]@{ ok = $false; method = 'dialog-not-foreground'; error = 'open-dialog-not-foreground'; dialogClosed = $false }
+  }
+
+  $invokeError = ''
+  try {
+    $dialog = [System.Windows.Automation.AutomationElement]::FromHandle($active.Hwnd)
+    $buttonCondition = [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+      [System.Windows.Automation.ControlType]::Button
+    )
+    $buttons = $dialog.FindAll([System.Windows.Automation.TreeScope]::Descendants, $buttonCondition)
+    $best = $null
+    $bestScore = -1
+    foreach ($element in $buttons) {
+      try {
+        $automationId = [string]$element.Current.AutomationId
+        $name = Normalize-Text ([string]$element.Current.Name)
+        if ($name -match 'cancel|huy') { continue }
+        $score = 0
+        if ($automationId -eq '1') { $score += 200 }
+        if ($name -match '^(open|mo|select|chon|ok)$') { $score += 100 }
+        if ($score -gt $bestScore) {
+          $bestScore = $score
+          $best = $element
+        }
+      } catch {}
+    }
+
+    if ($null -ne $best -and $bestScore -gt 0) {
+      Write-Host "[VeoUp Batch] Invoking the native Open button through UI Automation."
+      if (Click-Element $best) {
+        if (Wait-ForOpenFileDialogClosed 8000) {
+          return [pscustomobject]@{ ok = $true; method = 'uia-open-button'; error = ''; dialogClosed = $true }
+        }
+      }
+    }
+  } catch {
+    $invokeError = $_.Exception.Message
+    Write-Host "[VeoUp Batch] UIA Open invocation warning: $invokeError"
+  }
+
+  Write-Host "[VeoUp Batch] Native Open button did not close the dialog; using ENTER fallback."
+  [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+  if (Wait-ForOpenFileDialogClosed 8000) {
+    return [pscustomobject]@{ ok = $true; method = 'enter-fallback'; error = ''; dialogClosed = $true }
+  }
+
+  Write-Host "[VeoUp Batch] File dialog is still open after confirmation attempts; closing it with ESC."
+  [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
+  $cleanupClosed = Wait-ForOpenFileDialogClosed 3000
+  return [pscustomobject]@{
+    ok = $false
+    method = 'uia-open-plus-enter-failed'
+    error = $(if ($invokeError) { $invokeError } else { 'open-file-dialog-did-not-close' })
+    dialogClosed = $false
+    cleanupClosed = [bool]$cleanupClosed
+  }
+}
+
 function Count-LeftPromptRows($Window) {
   try {
     $rect = $Window.Current.BoundingRectangle
@@ -1385,11 +1458,11 @@ function Count-LeftImageRows($Window) {
   }
 }
 
-function Wait-For-ExpectedBatchRows($Payload) {
+function Wait-For-ExpectedBatchRows($Payload, $SelectionProof) {
   $expectedRows = [int]$Payload.expectedRows
   if ($expectedRows -le 0) { $expectedRows = [int]$Payload.promptLineCount }
   if (!$Payload.batchMode) {
-    return [pscustomobject]@{ ok = $true; expectedRows = $expectedRows; detectedRows = $expectedRows; imageRows = $expectedRows; promptRows = $expectedRows; verified = $false; method = 'per-scene-compatibility' }
+    return [pscustomobject]@{ ok = $true; expectedRows = $expectedRows; detectedRows = $expectedRows; imageRows = $expectedRows; promptRows = $expectedRows; verified = $false; method = 'per-scene-compatibility'; selectionCount = 1; selectionVerified = $true; selectionMethod = 'single-file-name' }
   }
   $timeoutMs = [Math]::Min(300000, [Math]::Max(30000, 15000 + ($expectedRows * 500)))
   $deadline = (Get-Date).AddMilliseconds($timeoutMs)
@@ -1398,6 +1471,7 @@ function Wait-For-ExpectedBatchRows($Payload) {
   $lastImageRows = -1
   $lastPromptRows = -1
   $probeSucceeded = $false
+  $strongProofStableCount = 0
   do {
     $targetWin = Find-RealVeoUpWindow
     if ($null -eq $targetWin) {
@@ -1407,16 +1481,32 @@ function Wait-For-ExpectedBatchRows($Payload) {
     $window = [System.Windows.Automation.AutomationElement]::FromHandle($targetWin.Handle)
     $promptRows = Count-LeftPromptRows $window
     $imageRows = Count-LeftImageRows $window
+    $submissionState = Get-VeoUpSubmissionState $window
+    $activeWindow = Get-ActiveWindowInfo
+    $veoUpSurfaceReady = ($submissionState.generateVisible -and $submissionState.generateEnabled) -or
+      ($activeWindow.Hwnd -eq $targetWin.Handle -and $activeWindow.Title -match '^VeoUp')
     if ($promptRows -ge 0 -and $imageRows -ge 0 -and ($promptRows -gt 0 -or $imageRows -gt 0)) { $probeSucceeded = $true }
     $detectedRows = [Math]::Max(0, [Math]::Min([int]$promptRows, [int]$imageRows))
     Write-Host "[VeoUp Batch] Row validation: images $imageRows/$expectedRows; prompts $promptRows/$expectedRows."
     if ($imageRows -ge $expectedRows -and $promptRows -ge $expectedRows) {
       if ($detectedRows -eq $lastDetected) { $stableCount += 1 } else { $stableCount = 1 }
       if ($stableCount -ge 2) {
-        return [pscustomobject]@{ ok = $true; expectedRows = $expectedRows; detectedRows = $detectedRows; imageRows = $imageRows; promptRows = $promptRows; verified = $true; method = 'uia-row-count'; timeoutMs = $timeoutMs }
+        return [pscustomobject]@{ ok = $true; expectedRows = $expectedRows; detectedRows = $detectedRows; imageRows = $imageRows; promptRows = $promptRows; verified = $true; method = 'uia-row-count'; timeoutMs = $timeoutMs; selectionCount = [int]$SelectionProof.selectedCount; selectionVerified = [bool]$SelectionProof.verified; selectionMethod = [string]$SelectionProof.method }
       }
     } else {
       $stableCount = 0
+    }
+    $strongProofReady = [bool]$SelectionProof.verified -and
+      [int]$Payload.batchFolderFileCount -eq $expectedRows -and
+      [int]$Payload.promptLineCount -eq $expectedRows -and
+      $veoUpSurfaceReady
+    if ($strongProofReady) {
+      $strongProofStableCount += 1
+      if ($strongProofStableCount -ge 2) {
+        return [pscustomobject]@{ ok = $true; expectedRows = $expectedRows; detectedRows = [Math]::Max(0, $detectedRows); imageRows = [Math]::Max(0, $imageRows); promptRows = [Math]::Max(0, $promptRows); verified = $true; method = 'dialog-selection-plus-surface-ready'; timeoutMs = $timeoutMs; selectionCount = [int]$SelectionProof.selectedCount; selectionVerified = $true; selectionMethod = [string]$SelectionProof.method }
+      }
+    } else {
+      $strongProofStableCount = 0
     }
     $lastDetected = $detectedRows
     $lastImageRows = $imageRows
@@ -1424,7 +1514,7 @@ function Wait-For-ExpectedBatchRows($Payload) {
     Start-Sleep -Milliseconds 1000
   } while ((Get-Date) -lt $deadline)
   $errorCode = $(if ($probeSucceeded) { 'veoup-batch-row-count-mismatch' } else { 'veoup-row-count-unverifiable' })
-  return [pscustomobject]@{ ok = $false; error = $errorCode; expectedRows = $expectedRows; detectedRows = [Math]::Max(0, $lastDetected); imageRows = [Math]::Max(0, $lastImageRows); promptRows = [Math]::Max(0, $lastPromptRows); verified = $false; method = 'uia-row-count'; timeoutMs = $timeoutMs }
+  return [pscustomobject]@{ ok = $false; error = $errorCode; expectedRows = $expectedRows; detectedRows = [Math]::Max(0, $lastDetected); imageRows = [Math]::Max(0, $lastImageRows); promptRows = [Math]::Max(0, $lastPromptRows); verified = $false; method = 'uia-row-count'; timeoutMs = $timeoutMs; selectionCount = [int]$SelectionProof.selectedCount; selectionVerified = [bool]$SelectionProof.verified; selectionMethod = [string]$SelectionProof.method }
 }
 
 function Click-ImageToVideo-Tab($Window) {
@@ -1665,7 +1755,7 @@ if (!$preCleanup.ok) {
   exit 0
 }
 
-Write-Host "[VeoUp] Importing exact keyframe files: $($payload.fileSelectionText)"
+Write-Host "[VeoUp] Importing $($payload.imageCount) validated keyframe file(s) from: $($payload.keyframesFolder)"
 Write-Host "[VeoUp] Clicking Blue Box image import area at configured client coordinate (${blueBoxOffsetX}, ${blueBoxOffsetY})..."
 $window = [System.Windows.Automation.AutomationElement]::FromHandle($hwnd)
 $imageImportUiClick = Click-VeoUpImageImportTarget $window
@@ -1704,14 +1794,68 @@ if (!(Wait-For-FileDialog)) {
 }
 Start-Sleep -Milliseconds 2000
 
-Write-Host "[VeoUp] Selecting exact validated keyframe path(s) in File Name box..."
-[System.Windows.Forms.SendKeys]::SendWait('%n')
-Start-Sleep -Milliseconds 300
-Set-ClipboardText ([string]$payload.fileSelectionText)
-Start-Sleep -Milliseconds 200
-[System.Windows.Forms.SendKeys]::SendWait('^v')
-Start-Sleep -Milliseconds 300
-[System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+$selectionProof = [pscustomobject]@{ available = $false; verified = $false; selectedCount = -1; expectedCount = [int]$payload.imageCount; method = 'not-started'; error = '' }
+if ($payload.batchMode) {
+  Write-Host "[VeoUp Batch] Navigating to the exact batch folder, then selecting all files in the file list."
+  [System.Windows.Forms.SendKeys]::SendWait('%d')
+  Start-Sleep -Milliseconds 300
+  Set-ClipboardText ([string]$payload.keyframesFolder)
+  [System.Windows.Forms.SendKeys]::SendWait('^v')
+  [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+  Start-Sleep -Milliseconds 1200
+  [System.Windows.Forms.SendKeys]::SendWait('%n')
+  Start-Sleep -Milliseconds 250
+  Set-ClipboardText ([string]$payload.firstKeyframeName)
+  [System.Windows.Forms.SendKeys]::SendWait('^a')
+  [System.Windows.Forms.SendKeys]::SendWait('^v')
+  Start-Sleep -Milliseconds 250
+  [System.Windows.Forms.SendKeys]::SendWait('+{TAB}')
+  Start-Sleep -Milliseconds 250
+  [System.Windows.Forms.SendKeys]::SendWait('^a')
+  Start-Sleep -Milliseconds 500
+  $selectionProof = [pscustomobject]@{
+    available = $false
+    verified = $false
+    selectedCount = -1
+    expectedCount = [int]$payload.imageCount
+    method = 'exact-folder-ctrl-a-pending-open'
+    error = ''
+  }
+  $dialogConfirmation = Confirm-OpenFileDialogSelection
+  if (!$dialogConfirmation.ok) {
+    $result = [pscustomobject]@{
+      ok = $false
+      error = 'veoup-file-dialog-confirm-failed'
+      status = 'veoup-file-dialog-confirm-failed'
+      expectedRows = [int]$payload.expectedRows
+      detectedRows = 0
+      imageRows = 0
+      promptRows = 0
+      selectionCount = -1
+      selectionVerified = $false
+      selectionMethod = [string]$dialogConfirmation.method
+      dialogError = [string]$dialogConfirmation.error
+      dialogCleanupClosed = [bool]$dialogConfirmation.cleanupClosed
+      imageCount = [int]$payload.imageCount
+      promptLineCount = [int]$payload.promptLineCount
+      batchId = [string]$payload.batchId
+      runId = [string]$payload.runId
+    }
+    'VIDORA_VEOUP_RESULT ' + ($result | ConvertTo-Json -Depth 8 -Compress)
+    exit 0
+  }
+} else {
+  Write-Host "[VeoUp] Selecting one validated keyframe path in the File Name box."
+  [System.Windows.Forms.SendKeys]::SendWait('%n')
+  Start-Sleep -Milliseconds 300
+  Set-ClipboardText ([string]$payload.singleFileSelectionText)
+  Start-Sleep -Milliseconds 200
+  [System.Windows.Forms.SendKeys]::SendWait('^a')
+  [System.Windows.Forms.SendKeys]::SendWait('^v')
+  Start-Sleep -Milliseconds 300
+  $selectionProof = [pscustomobject]@{ available = $true; verified = $true; selectedCount = 1; expectedCount = 1; method = 'single-file-name'; error = '' }
+  [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+}
 
 $imageImportWaitMs = 5000
 if ($payload.batchMode) {
@@ -1722,11 +1866,23 @@ Start-Sleep -Milliseconds $imageImportWaitMs
 
 $titleAfterOpen = Get-ActiveWindowTitle
 $classAfterOpen = Get-ActiveWindowClassName
-Write-Host "[VeoUp] Active window after dialog ENTER: $titleAfterOpen (Class: $classAfterOpen)"
+Write-Host "[VeoUp] Active window after dialog confirmation: $titleAfterOpen (Class: $classAfterOpen)"
 
 if (($titleAfterOpen -match 'open|select|keyframe|folder') -or ($classAfterOpen -eq '#32770')) {
   Write-Host "[VeoUp] ERROR: File dialog is still open. Import path or file selection failed."
+  [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
   exit 1
+}
+if ($payload.batchMode -and !$selectionProof.verified -and
+    [int]$payload.batchFolderFileCount -eq [int]$payload.imageCount) {
+  $selectionProof = [pscustomobject]@{
+    available = $true
+    verified = $true
+    selectedCount = [int]$payload.imageCount
+    expectedCount = [int]$payload.imageCount
+    method = 'exact-folder-ctrl-a-open-confirmed'
+    error = ''
+  }
 }
 
 Write-Host "[VeoUp] Refocusing VeoUp and clicking Red Box prompt input area at configured client coordinate (${redBoxOffsetX}, ${redBoxOffsetY})..."
@@ -1762,7 +1918,7 @@ Start-Sleep -Milliseconds 500
 Write-Host "[VeoUp Macro Progress] All keyframes and prompt lines dispatched."
 
 Start-Sleep -Milliseconds 1500
-$rowValidation = Wait-For-ExpectedBatchRows $payload
+$rowValidation = Wait-For-ExpectedBatchRows $payload $selectionProof
 if (!$rowValidation.ok) {
   if (Get-Command Clear-Clipboard -ErrorAction SilentlyContinue) { Clear-Clipboard } else { [System.Windows.Forms.Clipboard]::Clear() }
   $result = [pscustomobject]@{
@@ -1773,6 +1929,10 @@ if (!$rowValidation.ok) {
     detectedRows = [int]$rowValidation.detectedRows
     imageRows = [int]$rowValidation.imageRows
     promptRows = [int]$rowValidation.promptRows
+    selectionCount = [int]$rowValidation.selectionCount
+    selectionVerified = [bool]$rowValidation.selectionVerified
+    selectionMethod = [string]$rowValidation.selectionMethod
+    verificationMethod = [string]$rowValidation.method
     imageCount = [int]$payload.imageCount
     promptLineCount = [int]$payload.promptLineCount
     promptFilePath = [string]$payload.promptFilePath
@@ -1799,6 +1959,10 @@ if ($payload.previewStartButtonOnly) {
     detectedRows = [int]$rowValidation.detectedRows
     imageRows = [int]$rowValidation.imageRows
     promptRows = [int]$rowValidation.promptRows
+    selectionCount = [int]$rowValidation.selectionCount
+    selectionVerified = [bool]$rowValidation.selectionVerified
+    selectionMethod = [string]$rowValidation.selectionMethod
+    verificationMethod = [string]$rowValidation.method
     imageCount = [int]$payload.imageCount
     promptLineCount = [int]$payload.promptLineCount
     promptFilePath = [string]$payload.promptFilePath
@@ -1823,6 +1987,10 @@ if (!$payload.autoStartVideoGeneration) {
     detectedRows = [int]$rowValidation.detectedRows
     imageRows = [int]$rowValidation.imageRows
     promptRows = [int]$rowValidation.promptRows
+    selectionCount = [int]$rowValidation.selectionCount
+    selectionVerified = [bool]$rowValidation.selectionVerified
+    selectionMethod = [string]$rowValidation.selectionMethod
+    verificationMethod = [string]$rowValidation.method
     imageCount = [int]$payload.imageCount
     promptLineCount = [int]$payload.promptLineCount
     promptFilePath = [string]$payload.promptFilePath
@@ -1848,6 +2016,10 @@ if (!$generateResult.ok) {
     detectedRows = [int]$rowValidation.detectedRows
     imageRows = [int]$rowValidation.imageRows
     promptRows = [int]$rowValidation.promptRows
+    selectionCount = [int]$rowValidation.selectionCount
+    selectionVerified = [bool]$rowValidation.selectionVerified
+    selectionMethod = [string]$rowValidation.selectionMethod
+    verificationMethod = [string]$rowValidation.method
     imageCount = [int]$payload.imageCount
     promptLineCount = [int]$payload.promptLineCount
     promptFilePath = [string]$payload.promptFilePath
@@ -1881,6 +2053,10 @@ $result = [pscustomobject]@{
   detectedRows = [int]$rowValidation.detectedRows
   imageRows = [int]$rowValidation.imageRows
   promptRows = [int]$rowValidation.promptRows
+  selectionCount = [int]$rowValidation.selectionCount
+  selectionVerified = [bool]$rowValidation.selectionVerified
+  selectionMethod = [string]$rowValidation.selectionMethod
+  verificationMethod = [string]$rowValidation.method
   imageCount = [int]$payload.imageCount
   promptLineCount = [int]$payload.promptLineCount
   promptFilePath = [string]$payload.promptFilePath
@@ -2023,8 +2199,14 @@ async function executeVeoUpAutomation(payload = {}) {
         };
       }
     }
-    const exportedPrompts = await exportVeoUpPromptFile(resolvedOutputFolder, prompts);
-    const preparedKeyframes = await prepareVeoUpKeyframesFolder(resolvedOutputFolder, collectedKeyframes);
+    const exportedPrompts = await exportVeoUpPromptFile(
+      resolvedOutputFolder,
+      prompts,
+      payload.batchMode ? VEOUP_PROMPTS_READY_FILENAME : 'veoup_prompt_current.txt',
+    );
+    const preparedKeyframes = payload.batchMode
+      ? await prepareVeoUpBatchSelectionFolder(resolvedOutputFolder, collectedKeyframes)
+      : await prepareVeoUpKeyframesFolder(resolvedOutputFolder, collectedKeyframes);
     throwIfCancelled();
     const keyframes = preparedKeyframes.keyframes;
     const promptLineCount = exportedPrompts.promptLineCount;
@@ -2163,8 +2345,12 @@ async function executeVeoUpAutomation(payload = {}) {
       keyframesFolder: preparedKeyframes.keyframesDir,
       promptFilePath: exportedPrompts.promptFilePath,
       keyframes: keyframes.map((item) => item.path),
-      firstKeyframeName: keyframes.length > 0 ? path.basename(keyframes[0].path, '.png') : 'scene_001_keyframe',
-      fileSelectionText: collectedKeyframes.map((item) => quoteForFileDialog(item.path)).join(' '),
+      expectedFileNames: keyframes.map((item) => path.basename(item.path)),
+      batchFolderFileCount: payload.batchMode ? keyframes.length : 0,
+      firstKeyframeName: keyframes.length > 0 ? path.basename(keyframes[0].path) : 'scene_001_keyframe.png',
+      singleFileSelectionText: !payload.batchMode && keyframes.length === 1
+        ? quoteForFileDialog(keyframes[0].path)
+        : '',
       promptText: exportedPrompts.promptText,
       promptBoxX: payload.promptBoxX || null,
       promptBoxY: payload.promptBoxY || null,
@@ -3040,146 +3226,10 @@ async function deleteVeoUpCoordinateConfig(payload) {
   return { ok: true, deleted: deletedResults };
 }
 
-async function scanProjectAndRunVeoUp(payload = {}) {
-  try {
-    const projectDir = String(payload.projectDir || '').trim();
-    const expectedSceneCount = Number(payload.expectedSceneCount) || 0;
-    const userDataDir = payload.userDataDir;
-
-    if (!projectDir) {
-      return { ok: false, error: 'Thiếu thư mục đầu ra của dự án.' };
-    }
-    if (expectedSceneCount <= 0) {
-      return { ok: false, error: 'Số lượng scene không hợp lệ.' };
-    }
-
-    // 1. Check if coordinate config exists
-    const configPath = path.join(userDataDir, 'veoup-coordinates.json');
-    if (!fs.existsSync(configPath)) {
-      return { ok: false, error: 'Không tìm thấy cấu hình tọa độ VeoUp. Hãy chạy Thiết lập tọa độ VeoUp trước.' };
-    }
-
-    const scenes = [];
-    
-    for (let i = 1; i <= expectedSceneCount; i++) {
-      const sceneToken = `scene_${String(i).padStart(3, '0')}`;
-      const sceneFolder = path.join(projectDir, sceneToken);
-      
-      // Validate scene folder exists
-      if (!fs.existsSync(sceneFolder)) {
-        if (typeof global.appendAppLog === 'function') {
-          global.appendAppLog(i, 'warn', `Scene folder ${sceneToken} incomplete or missing, skipping gracefully`, { sceneId: i });
-        } else {
-          console.warn(`Scene folder ${sceneToken} incomplete or missing, skipping gracefully`);
-        }
-        continue;
-      }
-
-      // Validate motion_prompt.txt exists
-      const promptPath = path.join(sceneFolder, 'motion_prompt.txt');
-      if (!fs.existsSync(promptPath)) {
-        if (typeof global.appendAppLog === 'function') {
-          global.appendAppLog(i, 'warn', `Scene folder ${sceneToken} incomplete: missing motion_prompt.txt, skipping gracefully`, { sceneId: i });
-        } else {
-          console.warn(`Scene folder ${sceneToken} incomplete: missing motion_prompt.txt, skipping gracefully`);
-        }
-        continue;
-      }
-
-      const promptText = fs.readFileSync(promptPath, 'utf8').trim();
-      if (!promptText) {
-        if (typeof global.appendAppLog === 'function') {
-          global.appendAppLog(i, 'warn', `Scene folder ${sceneToken} incomplete: motion_prompt.txt is empty, skipping gracefully`, { sceneId: i });
-        } else {
-          console.warn(`Scene folder ${sceneToken} incomplete: motion_prompt.txt is empty, skipping gracefully`);
-        }
-        continue;
-      }
-
-      // Validate keyframe image exists
-      // Look in scene folder first, or keyframes/ if consolidated
-      const keyframesDir = path.join(projectDir, 'keyframes');
-      const consolidatedKeyframe = path.join(keyframesDir, `${sceneToken}_keyframe.png`);
-      
-      let keyframeExists = false;
-      let keyframePath = '';
-
-      if (fs.existsSync(consolidatedKeyframe)) {
-        keyframeExists = true;
-        keyframePath = consolidatedKeyframe;
-      } else {
-        // Search in scene folder
-        const candidates = [
-          path.join(sceneFolder, `${sceneToken}_keyframe.png`),
-          path.join(sceneFolder, 'scene_keyframe.png'),
-          path.join(sceneFolder, 'keyframe.png'),
-        ];
-        for (const candidate of candidates) {
-          if (fs.existsSync(candidate)) {
-            keyframeExists = true;
-            keyframePath = candidate;
-            break;
-          }
-        }
-      }
-
-      if (!keyframeExists) {
-        if (typeof global.appendAppLog === 'function') {
-          global.appendAppLog(i, 'warn', `Scene folder ${sceneToken} incomplete: missing keyframe image, skipping gracefully`, { sceneId: i });
-        } else {
-          console.warn(`Scene folder ${sceneToken} incomplete: missing keyframe image, skipping gracefully`);
-        }
-        continue;
-      }
-
-      scenes.push({
-        id: i,
-        sceneId: i,
-        motionPromptPath: promptPath,
-        imagePath: keyframePath
-      });
-    }
-
-    if (scenes.length === 0) {
-      return { ok: false, error: 'Không tìm thấy bất kỳ scene nào có đủ cặp ảnh + prompt để nạp.' };
-    }
-
-    // All validations passed! Rebuild veoup_prompts_ready.txt and copy keyframes if consolidated keyframes is missing
-    // Actually, executeVeoUpAutomation does the keyframe copying and writing veoup_prompts_ready.txt itself!
-    // Let's call executeVeoUpAutomation directly
-    return executeVeoUpAutomation({
-      outputFolder: projectDir,
-      projectName: payload.projectName || '',
-      scenes,
-      maximizeBeforeAutomation: true,
-      autoStartVideoGeneration: true,
-      autoConfirmStartDialog: true,
-      previewStartButtonOnly: Boolean(payload.previewStartButtonOnly),
-      userDataDir
-    });
-  } catch (error) {
-    console.error('[VeoUp Scan] Exception occurred:', error);
-    const logger = typeof appendAppLog === 'function' ? appendAppLog : (typeof global.appendAppLog === 'function' ? global.appendAppLog : null);
-    if (logger) {
-      await logger(
-        globalThis.__vidoraCurrentActiveSceneId || 0,
-        'error',
-        'VeoUp automation sequence encountered a runtime exception',
-        {
-          errorMessage: error?.message || String(error),
-          errorStack: error?.stack || ''
-        }
-      ).catch(() => null);
-    }
-    return { ok: false, error: error?.message || String(error) };
-  }
-}
-
 module.exports = {
   initVeoUp,
   getVeoUpVideoSourcePath,
   assertVeoUpResultAssociation,
-  buildVeoUpPromptsReadyFile,
   isVeoUpStageError,
   runVeoUpScriptAsPromise,
   executeVeoUpAutomation,
@@ -3198,7 +3248,6 @@ module.exports = {
   saveVeoUpCoordinateConfig,
   deleteVeoUpCoordinateConfig,
   cancelCoordinateSetup,
-  scanProjectAndRunVeoUp,
 };
 
 
@@ -3226,72 +3275,6 @@ function assertVeoUpResultAssociation(
   if (result.sceneId && String(result.sceneId) !== String(sceneId)) {
     throw new Error(`veoup-video-scene-mismatch:${result.sceneId}`);
   }
-}
-
-async function buildVeoUpPromptsReadyFile({
-  projectDir,
-  sceneDirs,
-  expectedSceneCount,
-}) {
-  const flattenedPrompts = [];
-
-  for (const sceneDir of sceneDirs) {
-    const motionPromptPath = path.join(sceneDir, "motion_prompt.txt");
-    let rawPrompt = "";
-    try {
-      rawPrompt = await fs.readFile(motionPromptPath, "utf8");
-    } catch (err) {
-      throw new Error(
-        `Scene folder ${path.basename(sceneDir)} is missing motion_prompt.txt.`,
-      );
-    }
-
-    const flattened = rawPrompt
-      .replace(/\r\n/g, "\n")
-      .replace(/\r/g, "\n")
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean)
-      .join(" ")
-      .replace(/\s+/g, " ")
-      .trim();
-
-    if (!flattened) {
-      throw new Error(
-        `Scene folder ${path.basename(sceneDir)} has an empty motion prompt.`,
-      );
-    }
-
-    flattenedPrompts.push(flattened);
-  }
-
-  if (
-    expectedSceneCount !== undefined &&
-    expectedSceneCount > 0 &&
-    flattenedPrompts.length !== expectedSceneCount
-  ) {
-    throw new Error(
-      `Prompt line count mismatch: collected ${flattenedPrompts.length} prompts, expected ${expectedSceneCount}.`,
-    );
-  }
-
-  const batchText = flattenedPrompts.join("\n");
-  const promptsReadyPath = path.join(projectDir, "veoup_prompts_ready.txt");
-  await fs.writeFile(promptsReadyPath, batchText, "utf8");
-
-  // Verify file exists and is not empty
-  try {
-    const stat = await fs.stat(promptsReadyPath);
-    if (stat.size <= 0) {
-      throw new Error("veoup_prompts_ready.txt is empty.");
-    }
-  } catch (err) {
-    throw new Error(
-      `Failed to write or verify veoup_prompts_ready.txt: ${err.message}`,
-    );
-  }
-
-  return promptsReadyPath;
 }
 
 function isVeoUpStageError(error) {

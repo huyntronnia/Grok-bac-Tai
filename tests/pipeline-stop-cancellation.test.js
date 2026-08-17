@@ -47,7 +47,8 @@ assert(main.includes('function trackPipelineChildProcess'), 'main child-process 
 assert(main.includes('pipelineRunScope.run({ runId }'), 'runScenePipeline must execute inside run scope');
 assert(main.includes('assertPipelineRunActive(runId)'), 'main scene pipeline must assert run activity');
 assert(!main.includes('pipelineCancellation.cancelledRunIds.delete(runId);'), 'main must not revive a cancelled runId when late IPC arrives');
-assert(main.includes('await sleep(10000)'), 'inter-scene breather still present for cancellation coverage');
+assert(!main.includes('await sleep(10000)'), 'main IPC must return durable scene success before the inter-scene breather');
+assert(renderer.includes('await waitForInterSceneBreather(runId, currentScene.id)'), 'renderer must own the cancellable inter-scene breather');
 assert(main.includes('isPipelineCancelledError(error)'), 'main cancellation errors must be recognized');
 assert(main.includes('registerChildProcess: (child) => trackPipelineChildProcess(child, runId)'), 'VeoUp child process must be tracked');
 assert(main.includes('runId,'), 'main must pass runId to VeoUp automation');

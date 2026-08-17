@@ -3,11 +3,15 @@ const { sleep } = require("../utils");
 const {
   verifyDraftOwnership,
   hashChatGptSnapshotText,
+  normalizeChatGptSnapshotText,
 } = require("../state");
 const {
   evaluateOnCdpPage,
   getConversationState,
 } = require("./chatgpt_core");
+const {
+  getConversationStateWithExpectedAttachments,
+} = require("./chatgpt_upload");
 const {
   focusPromptInputScript,
   setPromptInputValueScript,
@@ -34,6 +38,13 @@ function initChatGptSend(runtime = {}) {
   if (typeof runtime.assertPipelineRunActive === "function") {
     assertPipelineRunActive = runtime.assertPipelineRunActive;
   }
+}
+
+function composerPromptAlreadyExact(composerText = "", prompt = "") {
+  const expected = normalizeChatGptSnapshotText(prompt);
+  return Boolean(
+    expected && normalizeChatGptSnapshotText(composerText) === expected,
+  );
 }
 
 function isLikelyChatGptSendButtonText(text) {
@@ -129,16 +140,21 @@ async function forceClickChatGptComposerSubmit(client) {
   );
 }
 
+const CHATGPT_SHORT_PROMPT_SETTLE_MS = 1500;
+
 async function waitForHeavyChatGptPromptDomCooldown(prompt = "", context = {}) {
   const length = String(prompt || "").length;
-  if (length <= 5000) return { ok: true, skipped: true, length };
+  const settleMs = length > 5000 ? 4000 : CHATGPT_SHORT_PROMPT_SETTLE_MS;
   await appendAppLog(null, {
     source: "main",
     kind: "running",
-    text: `ChatGPT Cooldown: waiting 4s for heavy prompt to settle (${length} chars).`,
+    text:
+      length > 5000
+        ? `ChatGPT Cooldown: waiting 4s for heavy prompt to settle (${length} chars).`
+        : `ChatGPT Cooldown: waiting ${settleMs}ms for control prompt to settle.`,
   });
-  await sleep(4000);
-  return { ok: true, skipped: false, length };
+  await sleep(settleMs);
+  return { ok: true, skipped: false, length, settleMs };
 }
 
 async function waitForChatGptReadyForNewPrompt(
@@ -303,6 +319,19 @@ async function runChatGptRobustSendLadder(
     };
   }
 
+  const shouldWaitForComposerReady = Boolean(
+    context.expectedFilePaths.length > 0 || context.waitForSendButtonReady,
+  );
+  if (shouldWaitForComposerReady) {
+    const payloadReady = await waitForComposerPayloadReady(
+      client,
+      prompt,
+      context.expectedFilePaths,
+      context,
+    );
+    if (!payloadReady?.ok) return payloadReady;
+  }
+
   setChatGptSendState(sceneId, "READY");
   await appendAppLog(sceneId, {
     source: "main",
@@ -310,13 +339,26 @@ async function runChatGptRobustSendLadder(
     text: `[MILESTONE] PROMPT_INSERT_FINISHED for scene ${sceneId}`,
   }).catch(() => null);
 
-  // 6. Cooldown
-  await appendAppLog(sceneId, {
-    source: "main",
-    kind: "running",
-    text: `[MILESTONE] WAIT_SEND_READY_BEGIN for scene ${sceneId}`,
-  }).catch(() => null);
-  await waitForHeavyChatGptPromptDomCooldown(prompt, context);
+  // 6. The hydration path has already polled the enabled Send button. Other
+  // prompt paths keep their existing DOM cooldown before the click.
+  if (!context.clickImmediatelyWhenReady) {
+    await appendAppLog(sceneId, {
+      source: "main",
+      kind: "running",
+      text: `[MILESTONE] WAIT_SEND_READY_BEGIN for scene ${sceneId}`,
+    }).catch(() => null);
+    await waitForHeavyChatGptPromptDomCooldown(prompt, context);
+  } else {
+    await appendAppLog(sceneId, {
+      source: "main",
+      kind: "running",
+      text: `ChatGPT hydration Send is enabled; clicking immediately.`,
+      details: {
+        stage: context.stage || "",
+        timeoutMs: Number(context.sendReadyTimeoutMs || 0),
+      },
+    }).catch(() => null);
+  }
 
   const monitor = require("./chatgpt_runtime_monitor");
 
@@ -686,11 +728,18 @@ async function sendPromptViaCdpInput(client, prompt, options = {}) {
     context: {
       stage: options.stage || "send-prompt",
       sceneId: options.sceneId || "",
+      expectedFilePaths: options.expectedFilePaths || [],
+      payloadFingerprint: options.payloadFingerprint || "",
+      waitForSendButtonReady: Boolean(options.waitForSendButtonReady),
+      sendReadyTimeoutMs: Number(options.sendReadyTimeoutMs || 0),
+      sendReadyRetryTimeoutMs: Number(options.sendReadyRetryTimeoutMs || 0),
+      sendReadyStableTicks: Number(options.sendReadyStableTicks || 0),
+      clickImmediatelyWhenReady: Boolean(options.clickImmediatelyWhenReady),
     },
   });
 
   let finalResult = ladderResult;
-  if (!ladderResult?.ok) {
+  if (!ladderResult?.ok && !(options.expectedFilePaths || []).length) {
     const forced = await forceSubmitChatGptComposerWithCdp(
       client,
       prompt,
@@ -1004,6 +1053,25 @@ async function waitForNv2GenerationStartGuard(
 
 async function sendNv2PromptViaDeepCdpInput(client, prompt, context = {}) {
   const beforeCount = Number(context.beforeCount || 0) || 0;
+  const sceneId = context.sceneId || "unknown";
+  const failNv2Send = async (error, details = {}) => {
+    setChatGptSendState(sceneId, "FAILED");
+    await appendAppLog(sceneId, {
+      source: "main",
+      kind: "warning",
+      text: `[MILESTONE] SEND_ABORTED for scene ${sceneId}: ${error}`,
+      details,
+    }).catch(() => null);
+    return { ok: false, error, ...details };
+  };
+
+  setChatGptSendState(sceneId, "PREPARING");
+  await appendAppLog(sceneId, {
+    source: "main",
+    kind: "running",
+    text: `[MILESTONE] PROMPT_INSERT_BEGIN for scene ${sceneId}`,
+    details: { stage: context.stage || "motion_prompt" },
+  }).catch(() => null);
   await client.Page.bringToFront().catch(() => null);
   await sleep(300);
   const busyState = await evaluateOnCdpPage(
@@ -1011,33 +1079,56 @@ async function sendNv2PromptViaDeepCdpInput(client, prompt, context = {}) {
     `(${inspectNv2ComposerSubmitStateScript.toString()})('', ${beforeCount})`,
   ).catch(() => ({ generationAcknowledged: false }));
   if (busyState?.generationAcknowledged && !busyState?.sendReady) {
-    return {
-      ok: false,
-      error: "ChatGPT is busy/streaming; duplicate motion prompt send blocked.",
-      state: busyState,
-    };
+    return failNv2Send(
+      "ChatGPT is busy/streaming; duplicate motion prompt send blocked.",
+      { state: busyState },
+    );
   }
 
   const focused = await focusNv2ComposerWithCdp(client, prompt, context);
-  if (!focused?.ok)
-    return {
-      ok: false,
-      error: focused?.error || "Không focus được ô nhập NV2.",
-      focused,
-    };
+  if (!focused?.ok) {
+    return failNv2Send(
+      focused?.error || "Không focus được ô nhập NV2.",
+      { focused },
+    );
+  }
 
-  await evaluateOnCdpPage(
+  const existingDraftState = await evaluateOnCdpPage(
     client,
-    `(${clearNv2ComposerScript.toString()})()`,
+    `(${inspectNv2ComposerSubmitStateScript.toString()})(${JSON.stringify(prompt)}, ${beforeCount})`,
   ).catch(() => null);
-  await sleep(150);
-  await focusNv2ComposerWithCdp(client, prompt, context);
-  await client.Input.insertText({ text: prompt });
-  await evaluateOnCdpPage(
-    client,
-    `(${dispatchNv2ComposerInputEventsScript.toString()})(${JSON.stringify(prompt)})`,
-  ).catch(() => null);
-  let loaded = null;
+  const reuseExactDraft = Boolean(
+    existingDraftState?.activeComposer &&
+      composerPromptAlreadyExact(existingDraftState?.composerText, prompt),
+  );
+  let loaded = reuseExactDraft ? existingDraftState : null;
+  if (reuseExactDraft) {
+    await appendAppLog(sceneId, {
+      source: "main",
+      kind: "ok",
+      text: `Scene ${sceneId}: exact NV2 composer draft preserved; skipped clear/reinsert.`,
+      details: { stage: context.stage || "motion_prompt" },
+    }).catch(() => null);
+  } else {
+    await evaluateOnCdpPage(
+      client,
+      `(${clearNv2ComposerScript.toString()})()`,
+    ).catch(() => null);
+    await sleep(150);
+    await focusNv2ComposerWithCdp(client, prompt, context);
+    const insertResult = await client.Input.insertText({ text: prompt })
+      .then(() => ({ ok: true }))
+      .catch((error) => ({ ok: false, error: error.message }));
+    if (!insertResult.ok) {
+      return failNv2Send("nv2-control-prompt-insert-failed", {
+        insertError: insertResult.error || "unknown",
+      });
+    }
+    await evaluateOnCdpPage(
+      client,
+      `(${dispatchNv2ComposerInputEventsScript.toString()})(${JSON.stringify(prompt)})`,
+    ).catch(() => null);
+  }
   const started = Date.now();
   while (Date.now() - started < 8000) {
     loaded = await evaluateOnCdpPage(
@@ -1067,14 +1158,37 @@ async function sendNv2PromptViaDeepCdpInput(client, prompt, context = {}) {
       details: loaded,
     }).catch(() => null);
 
-    return {
-      ok: false,
-      error: "nv2-composer-not-ready-for-submit",
+    return failNv2Send("nv2-composer-not-ready-for-submit", {
       state: loaded,
-    };
+    });
   }
 
+  if (Array.isArray(context.expectedFilePaths) && context.expectedFilePaths.length > 0) {
+    const payloadReady = await waitForComposerPayloadReady(
+      client,
+      prompt,
+      context.expectedFilePaths,
+      context,
+    );
+    if (!payloadReady?.ok) return payloadReady;
+  }
+
+  await sleep(CHATGPT_SHORT_PROMPT_SETTLE_MS);
+
+  setChatGptSendState(sceneId, "READY");
+  await appendAppLog(sceneId, {
+    source: "main",
+    kind: "ok",
+    text: `[MILESTONE] PROMPT_INSERT_FINISHED for scene ${sceneId}`,
+  }).catch(() => null);
+
   await focusNv2ComposerWithCdp(client, prompt, context);
+  setChatGptSendState(sceneId, "CLICKING");
+  await appendAppLog(sceneId, {
+    source: "main",
+    kind: "running",
+    text: `[MILESTONE] SEND_CLICK_BEGIN for scene ${sceneId}`,
+  }).catch(() => null);
   await client.Input.dispatchKeyEvent({
     type: "keyDown",
     key: "Enter",
@@ -1115,6 +1229,15 @@ async function sendNv2PromptViaDeepCdpInput(client, prompt, context = {}) {
     state?.fullPromptLoaded &&
     state?.sendButton
   ) {
+    if (Array.isArray(context.expectedFilePaths) && context.expectedFilePaths.length > 0) {
+      const payloadReady = await waitForComposerPayloadReady(
+        client,
+        prompt,
+        context.expectedFilePaths,
+        context,
+      );
+      if (!payloadReady?.ok) return payloadReady;
+    }
     const x = state.sendButton.x + state.sendButton.width / 2;
     const y = state.sendButton.y + state.sendButton.height / 2;
     await appendAppLog(null, {
@@ -1158,13 +1281,23 @@ async function sendNv2PromptViaDeepCdpInput(client, prompt, context = {}) {
       beforeCount,
       context,
     );
-    if (!guarded?.ok) return guarded;
+    if (!guarded?.ok) {
+      return failNv2Send(guarded?.error || "nv2-generation-not-started", {
+        state: guarded?.state || null,
+        waitedMs: guarded?.waitedMs || 0,
+      });
+    }
     state = guarded.state;
   }
 
   if (context.sceneId) {
     setChatGptSendState(context.sceneId, "SENT");
   }
+  await appendAppLog(sceneId, {
+    source: "main",
+    kind: "ok",
+    text: `[MILESTONE] SEND_CLICK_FINISHED for scene ${sceneId}`,
+  }).catch(() => null);
   return {
     ok: true,
     mode: state?.mode || "generation-acknowledged",
@@ -1172,6 +1305,170 @@ async function sendNv2PromptViaDeepCdpInput(client, prompt, context = {}) {
     send: "enter-first-guarded-send-fallback",
     acknowledged: { ok: true, state },
     recoveryAttempts: 0,
+  };
+}
+
+function verifyComposerPayloadReady(prompt = "", expectedFilePaths = [], pageState = {}) {
+  const expectedPromptHash = hashChatGptSnapshotText(prompt);
+  const expectedPromptText = normalizeChatGptSnapshotText(prompt);
+  const composerPromptText = normalizeChatGptSnapshotText(
+    pageState?.composerText || "",
+  );
+  const promptMatchesText = Boolean(
+    expectedPromptText && composerPromptText === expectedPromptText,
+  );
+  const promptMatchesHash = Boolean(
+    expectedPromptHash && pageState?.composerPromptHash === expectedPromptHash,
+  );
+  if (!expectedPromptHash || (!promptMatchesText && !promptMatchesHash)) {
+    return {
+      ok: false,
+      error: "chatgpt-payload-prompt-mismatch",
+      expectedPromptHash,
+      composerPromptHash: pageState?.composerPromptHash || "",
+      expectedPromptLength: expectedPromptText.length,
+      composerPromptLength: composerPromptText.length,
+    };
+  }
+  if (!pageState?.composerReady || pageState?.composerState !== "READY_TO_SEND") {
+    return {
+      ok: false,
+      error: "chatgpt-payload-send-not-ready",
+      composerReady: Boolean(pageState?.composerReady),
+      composerState: pageState?.composerState || "",
+    };
+  }
+  return {
+    ok: true,
+    expectedPromptHash,
+    promptEvidence: promptMatchesText
+      ? "normalized-current-composer-text"
+      : "normalized-current-composer-hash",
+    state: pageState,
+  };
+}
+
+async function waitForComposerPayloadReady(
+  client,
+  prompt,
+  expectedFilePaths = [],
+  context = {},
+) {
+  const initialTimeoutMs = Math.max(
+    1000,
+    Number(context.sendReadyTimeoutMs || 12000),
+  );
+  const additionalTimeoutMs = Math.max(
+    0,
+    Number(context.sendReadyRetryTimeoutMs || 0),
+  );
+  const totalTimeoutMs = initialTimeoutMs + additionalTimeoutMs;
+  const requiredStableTicks = Math.max(
+    1,
+    Number(context.sendReadyStableTicks || 2),
+  );
+  const startedAt = Date.now();
+  let stableTicks = 0;
+  let lastResult = null;
+  let additionalWindowLogged = false;
+  while (Date.now() - startedAt < totalTimeoutMs) {
+    const elapsedMs = Date.now() - startedAt;
+    if (
+      additionalTimeoutMs > 0 &&
+      !additionalWindowLogged &&
+      elapsedMs >= initialTimeoutMs
+    ) {
+      additionalWindowLogged = true;
+      await appendAppLog(context.sceneId || null, {
+        source: "main",
+        kind: "running",
+        text: `ChatGPT Send is not ready after the first wait window; waiting one more window.`,
+        details: {
+          stage: context.stage || "",
+          initialTimeoutMs,
+          additionalTimeoutMs,
+          totalTimeoutMs,
+        },
+      }).catch(() => null);
+    }
+    const pageState = await getConversationStateWithExpectedAttachments(
+      client,
+      expectedFilePaths,
+    );
+    // Use the same live composer that was focused and populated immediately
+    // before this gate. The generic conversation snapshot can still select a
+    // stale React textarea after ChatGPT rerenders attachment cards.
+    const liveComposerState = await evaluateOnCdpPage(
+      client,
+      `(${inspectNv2ComposerSubmitStateScript.toString()})(${JSON.stringify(prompt)}, ${Number(context.beforeCount || 0)})`,
+    ).catch((error) => ({ ok: false, error: error.message }));
+    if (liveComposerState?.ok) {
+      const composerText = String(liveComposerState.composerText || "");
+      pageState.composerText = composerText;
+      pageState.composerPromptHash = hashChatGptSnapshotText(composerText);
+      pageState.composerHasPrompt =
+        normalizeChatGptSnapshotText(composerText).length > 0;
+      pageState.sendButtonVisible = Boolean(liveComposerState.sendReady);
+      pageState.composerReady = Boolean(
+        liveComposerState.activeComposer && liveComposerState.sendReady,
+      );
+      if (pageState.attachmentUploadInProgress) {
+        pageState.composerState = "ATTACHING_FILES";
+      } else if (pageState.attachmentCount > 0 && pageState.composerHasPrompt) {
+        pageState.composerState = liveComposerState.sendReady
+          ? "READY_TO_SEND"
+          : "PROMPT_READY";
+      }
+      pageState.liveComposerEvidence = {
+        selector: liveComposerState.selector || "",
+        activeComposer: Boolean(liveComposerState.activeComposer),
+        textLength: Number(liveComposerState.textLength || 0),
+        promptLength: Number(liveComposerState.promptLength || 0),
+        fullPromptLoaded: Boolean(liveComposerState.fullPromptLoaded),
+        sendReady: Boolean(liveComposerState.sendReady),
+      };
+    }
+    lastResult = verifyComposerPayloadReady(prompt, expectedFilePaths, pageState);
+    if (lastResult.ok) {
+      stableTicks += 1;
+      if (stableTicks >= requiredStableTicks) {
+        setChatGptSendState(context.sceneId || "unknown", "READY");
+        return {
+          ...lastResult,
+          stableTicks,
+          requiredStableTicks,
+          payloadFingerprint: context.payloadFingerprint || "",
+        };
+      }
+    } else {
+      stableTicks = 0;
+    }
+    await sleep(300);
+  }
+  setChatGptSendState(context.sceneId || "unknown", "FAILED");
+  await appendAppLog(context.sceneId || null, {
+    source: "main",
+    kind: "warning",
+    text: `ChatGPT payload gate timed out before Send for scene ${context.sceneId || "unknown"}.`,
+    details: {
+      error: lastResult?.error || "chatgpt-payload-gate-timeout",
+      expectedPromptHash: lastResult?.expectedPromptHash || "",
+      composerPromptHash: lastResult?.composerPromptHash || "",
+      expectedPromptLength: Number(lastResult?.expectedPromptLength || 0),
+      composerPromptLength: Number(lastResult?.composerPromptLength || 0),
+      attachmentError: lastResult?.attachmentError || "",
+      composerReady: Boolean(lastResult?.composerReady),
+      composerState: lastResult?.composerState || "",
+      initialTimeoutMs,
+      additionalTimeoutMs,
+      totalTimeoutMs,
+    },
+  }).catch(() => null);
+  return {
+    ok: false,
+    error: lastResult?.error || "chatgpt-payload-gate-timeout",
+    gate: lastResult,
+    payloadFingerprint: context.payloadFingerprint || "",
   };
 }
 
@@ -1553,6 +1850,7 @@ async function vidoraClearChatGptInputBeforePaste(client, context = {}) {
 
 module.exports = {
   initChatGptSend,
+  composerPromptAlreadyExact,
   isLikelyChatGptSendButtonText,
   clickSendButtonViaCdp,
   forceClickChatGptComposerSubmit,
@@ -1566,6 +1864,8 @@ module.exports = {
   focusNv2ComposerWithCdp,
   waitForNv2GenerationStartGuard,
   sendNv2PromptViaDeepCdpInput,
+  verifyComposerPayloadReady,
+  waitForComposerPayloadReady,
   vidoraReadChatGptComposerStateReal,
   vidoraClickChatGptRealSendButton,
   vidoraChatGptInputGate,

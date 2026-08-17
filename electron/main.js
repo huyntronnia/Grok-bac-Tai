@@ -48,6 +48,7 @@ const {
   hasLegacyEmbeddedAssets,
   removeEmbeddedAssets,
   containsInlineAssetData,
+  writeTextFileAtomic,
   writeJsonFileAtomic,
   enqueueProjectWrite,
 } = require("./main/project");
@@ -81,6 +82,7 @@ const {
 
 const {
   detectLoginScript,
+  getChatGptLocationStateScript,
   countAssistantMessagesScript,
   detectBrowserCrashPageScript,
   dismissChatGptBlockingUiScript,
@@ -218,12 +220,10 @@ const {
   saveVeoUpCoordinateConfig,
   deleteVeoUpCoordinateConfig,
   cancelCoordinateSetup,
-  scanProjectAndRunVeoUp,
   runVeoUpScriptAsPromise,
   createVeoUpBatchCoordinator,
   getVeoUpVideoSourcePath,
   assertVeoUpResultAssociation,
-  buildVeoUpPromptsReadyFile,
   isVeoUpStageError,
 } = require("./main/veoup");
 
@@ -254,7 +254,15 @@ const {
   validateSceneVideoAndLastFrame,
   imageFileToDataUrl,
   pipelineCancellation,
+  materializeSceneRequestFiles,
+  buildNv1RequestContent,
+  buildNv2RequestContent,
 } = require("./main/pipeline");
+
+const {
+  validateKeyframeFile,
+  validateMotionPromptTextContent,
+} = require("./main/pipeline/asset_validation");
 
 
 const {
@@ -905,10 +913,11 @@ async function restoreEmbeddedProjectAssets(payload = {}, projectFolder = "") {
 
 async function ensureProjectSceneFolders(
   _event,
-  { outputFolder = "", scenes = [] } = {},
+  { outputFolder = "", scenes = [], inspectOnly = false } = {},
 ) {
   if (!outputFolder) return { ok: false, error: "Missing output folder." };
-  await fs.mkdir(outputFolder, { recursive: true });
+  if (!inspectOnly) await fs.mkdir(outputFolder, { recursive: true });
+  const hardTasks = inspectOnly ? { task1: "", task2: "" } : await loadHardPromptTasks();
   const records = [];
   for (const scene of Array.isArray(scenes) ? scenes : []) {
     const sceneId = scene?.id || scene?.sceneId || records.length + 1;
@@ -916,20 +925,25 @@ async function ensureProjectSceneFolders(
       outputFolder,
       `scene_${String(sceneId).padStart(3, "0")}`,
     );
-    await fs.mkdir(sceneDir, { recursive: true });
-    if (scene?.original || scene?.rawSceneText)
-      await fs.writeFile(
+    if (!inspectOnly) await fs.mkdir(sceneDir, { recursive: true });
+    const currentSceneText =
+      scene?.original || scene?.rawSceneText || scene?.sceneText || "";
+    if (!inspectOnly && currentSceneText)
+      await writeTextFileAtomic(
         path.join(sceneDir, "scene.txt"),
-        scene.original || scene.rawSceneText || "",
-        "utf8",
+        currentSceneText,
       );
-    if (scene?.imagePrompt)
-      await fs.writeFile(
-        path.join(sceneDir, "image_prompt.txt"),
-        scene.imagePrompt,
-        "utf8",
-      );
-    if (scene?.motionPrompt)
+    let requestFiles = null;
+    if (!inspectOnly && currentSceneText) {
+      requestFiles = await materializeSceneRequestFiles({
+        sceneDir,
+        sceneId,
+        nv1: hardTasks.task1 || scene?.imagePrompt || "",
+        nv2: hardTasks.task2 || "",
+        sceneText: currentSceneText,
+      });
+    }
+    if (!inspectOnly && scene?.motionPrompt)
       await fs.writeFile(
         path.join(sceneDir, "motion_prompt.txt"),
         scene.motionPrompt,
@@ -947,6 +961,7 @@ async function ensureProjectSceneFolders(
       sceneDir,
       `scene_${String(sceneId).padStart(3, "0")}_last_frame.png`,
     );
+    const motionPromptPath = path.join(sceneDir, "motion_prompt.txt");
     const files = await fs.readdir(sceneDir).catch(() => []);
     const fallbackImage = files.find((file) =>
       /\.(png|jpe?g|webp)$/i.test(file),
@@ -965,18 +980,54 @@ async function ensureProjectSceneFolders(
     const keyframeStat = await fs.stat(foundKeyframePath).catch(() => null);
     const videoStat = await fs.stat(foundVideoPath).catch(() => null);
     const lastFrameStat = await fs.stat(lastFramePath).catch(() => null);
+    const motionPromptStat = inspectOnly
+      ? await fs.stat(motionPromptPath).catch(() => null)
+      : null;
+    const keyframeValidation = inspectOnly
+      ? keyframeStat?.isFile?.()
+        ? await validateKeyframeFile(foundKeyframePath).catch((error) => ({
+            ok: false,
+            error: error?.message || "keyframe-validation-failed",
+          }))
+        : { ok: false, error: "missing-file" }
+      : { ok: Boolean(keyframeStat?.isFile?.()) };
+    const motionPromptText = inspectOnly && motionPromptStat?.isFile?.()
+      ? await fs.readFile(motionPromptPath, "utf8").catch(() => "")
+      : "";
+    const motionPromptValidation = inspectOnly
+      ? validateMotionPromptTextContent(motionPromptText)
+      : { ok: false, error: "not-inspected" };
+    const assetStatCheckedAtMs = Date.now();
     records.push({
       sceneId,
       sceneDir,
       keyframePath: foundKeyframePath,
       keyframeExists: Boolean(keyframeStat?.isFile?.()),
+      keyframeValid: keyframeValidation.ok === true,
+      keyframeValidationError: keyframeValidation.ok
+        ? ""
+        : keyframeValidation.error || "keyframe-validation-failed",
       keyframeMtimeMs: keyframeStat?.mtimeMs || 0,
+      keyframeByteLength: Number(keyframeValidation.byteLength || keyframeStat?.size || 0),
+      motionPromptPath,
+      motionPromptExists: Boolean(motionPromptStat?.isFile?.()),
+      motionPromptValid: motionPromptValidation.ok === true,
+      motionPromptValidationError: motionPromptValidation.ok
+        ? ""
+        : motionPromptValidation.error || "motion-prompt-validation-failed",
+      motionPromptMtimeMs: motionPromptStat?.mtimeMs || 0,
+      motionPromptByteLength: Number(motionPromptStat?.size || 0),
+      assetStatCheckedAtMs,
       videoPath: foundVideoPath,
       videoExists: Boolean(videoStat?.isFile?.()),
       videoMtimeMs: videoStat?.mtimeMs || 0,
       lastFramePath,
       lastFrameExists: Boolean(lastFrameStat?.isFile?.()),
       lastFrameMtimeMs: lastFrameStat?.mtimeMs || 0,
+      nv1RequestPath: requestFiles?.nv1?.filePath || "",
+      nv1RequestSha256: requestFiles?.nv1?.contentSha256 || "",
+      nv2RequestPath: requestFiles?.nv2?.filePath || "",
+      nv2RequestSha256: requestFiles?.nv2?.contentSha256 || "",
     });
   }
   return { ok: true, outputFolder, records };
@@ -1278,15 +1329,7 @@ async function checkProactiveMemoryGuard(sceneId, pageState) {
 async function getChatGptLocationState(page) {
   return evaluateOnCdpPage(
     page,
-    `(() => {
-    try {
-      const path = location.pathname || '';
-      const id = (path.match(/\/c\/([^/?#]+)/) || [])[1] || '';
-      return { ok: true, origin: location.origin, path, conversationId: id, title: document.title || '' };
-    } catch (error) {
-      return { ok: false, error: error && error.message ? error.message : String(error) };
-    }
-  })()`,
+    `(${getChatGptLocationStateScript.toString()})()`,
   ).catch((error) => ({ ok: false, error: error.message }));
 }
 
@@ -1995,15 +2038,7 @@ function buildImageStagePrompt({
   sceneId = "",
   continuityText = "",
 } = {}) {
-  return [
-    '--- IMAGE_STAGE / NV1_TAO_ANH ---',
-    nv1,
-    `--- CURRENT SCENE ${sceneId || ""} SCRIPT ONLY ---`,
-    sceneText || "",
-    continuityText ? `--- CONTINUITY INPUTS ---\n${continuityText}` : "",
-  ]
-    .filter(Boolean)
-    .join("\n\n");
+  return buildNv1RequestContent({ nv1, sceneText, sceneId });
 }
 
 function buildMotionStagePrompt({
@@ -2011,14 +2046,7 @@ function buildMotionStagePrompt({
   sceneText = "",
   sceneId = "",
 } = {}) {
-  return [
-    '--- MOTION_STAGE / NV2_MOTION_PROMPT ---',
-    nv2,
-    `--- CURRENT SCENE ${sceneId || ""} SCRIPT ONLY ---`,
-    sceneText || "",
-  ]
-    .filter(Boolean)
-    .join("\n\n");
+  return buildNv2RequestContent({ nv2, sceneText, sceneId });
 }
 
 async function collectPrepromptRequestFiles({ outputFolder = "" } = {}) {
@@ -3480,59 +3508,6 @@ async function sendPromptViaWeb(_event, options) {
   return { responseText, promptPath, responsePath, cdp: true };
 }
 
-
-
-
-async function persistImageMotionOnlySharedOutputs({
-  projectDir,
-  sceneDir,
-  sceneId,
-  imagePath,
-  motionPrompt,
-}) {
-  const safeProjectDir = projectDir || path.dirname(sceneDir);
-  const sceneToken = `scene_${String(sceneId).padStart(3, "0")}`;
-  const keyframesDir = path.join(safeProjectDir, "keyframes");
-  const motionPromptsDir = path.join(safeProjectDir, "motion_prompts");
-  await fs.mkdir(keyframesDir, { recursive: true });
-  await fs.mkdir(motionPromptsDir, { recursive: true });
-
-  const sourceImagePath =
-    imagePath && (await pathExists(imagePath))
-      ? imagePath
-      : await findSceneKeyframePathSafe(sceneDir, sceneId);
-  let keyframeOutputPath = "";
-  if (sourceImagePath) {
-    const extension = path.extname(sourceImagePath) || ".png";
-    keyframeOutputPath = path.join(
-      keyframesDir,
-      `${sceneToken}_keyframe${extension}`,
-    );
-    if (path.resolve(sourceImagePath) !== path.resolve(keyframeOutputPath)) {
-      await fs.copyFile(sourceImagePath, keyframeOutputPath);
-    }
-  }
-
-  let motionPromptOutputPath = "";
-  if (String(motionPrompt || "").trim()) {
-    motionPromptOutputPath = path.join(
-      motionPromptsDir,
-      `${sceneToken}_motion_prompt.txt`,
-    );
-    await fs.writeFile(
-      motionPromptOutputPath,
-      String(motionPrompt || "").trim(),
-      "utf8",
-    );
-  }
-
-  return {
-    keyframeOutputPath,
-    motionPromptOutputPath,
-    keyframesDir,
-    motionPromptsDir,
-  };
-}
 
 
 
@@ -5280,6 +5255,7 @@ async function scanProjectAndRunVeoUpHandler(_event, payload = {}) {
       trigger: payload.trigger || "manual-scan",
       autoStartVideoGeneration: payload.autoStartVideoGeneration !== false,
       previewStartButtonOnly: Boolean(payload.previewStartButtonOnly),
+      allowPartial: payload.allowPartial === true,
       runId: String(payload.runId || "").trim(),
     });
   } catch (err) {

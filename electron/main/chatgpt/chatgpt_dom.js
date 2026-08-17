@@ -55,6 +55,27 @@ function detectLoginScript() {
   };
 }
 
+function getChatGptLocationStateScript() {
+  try {
+    const path = String(location.pathname || "");
+    const segments = path.split("/").filter(Boolean);
+    const conversationId =
+      segments[0] === "c" ? String(segments[1] || "") : "";
+    return {
+      ok: true,
+      origin: location.origin,
+      path,
+      conversationId,
+      title: document.title || "",
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      error: error && error.message ? error.message : String(error),
+    };
+  }
+}
+
 function detectBrowserCrashPageScript() {
   const text = String(document.body?.innerText || "")
     .replace(/\s+/g, " ")
@@ -810,7 +831,18 @@ function inspectNv2ComposerSubmitStateScript(prompt, beforeCount = 0) {
       Number(style?.opacity ?? 1) > 0
     );
   };
-  const composerSelectors = ["main form textarea", '[contenteditable="true"]'];
+  const composerSelectors = [
+    "#prompt-textarea",
+    'textarea[data-testid*="composer"]',
+    '[data-testid="composer"] textarea',
+    '[data-testid="composer"] [contenteditable="true"]',
+    "main form textarea",
+    'main form [contenteditable="true"]',
+    "textarea",
+    '[contenteditable="true"]',
+  ];
+  const seenComposerNodes = new Set();
+  const activeElement = document.activeElement;
   const composers = composerSelectors
     .flatMap((selector) =>
       [...document.querySelectorAll(selector)].map((node) => ({
@@ -818,12 +850,24 @@ function inspectNv2ComposerSubmitStateScript(prompt, beforeCount = 0) {
         selector,
       })),
     )
-    .filter(({ node }) => visible(node))
-    .sort(
-      (a, b) =>
-        b.node.getBoundingClientRect().bottom -
-        a.node.getBoundingClientRect().bottom,
-    );
+    .filter(({ node }) => {
+      if (!node || seenComposerNodes.has(node) || !visible(node)) return false;
+      seenComposerNodes.add(node);
+      const rect = node.getBoundingClientRect();
+      return rect.width > 80 && rect.height > 12 && node.getAttribute?.("aria-hidden") !== "true";
+    })
+    .map((candidate) => {
+      const { node } = candidate;
+      const rect = node.getBoundingClientRect();
+      let score = rect.bottom + Math.min(rect.width, 1200) / 20;
+      if (node === activeElement || node.contains?.(activeElement)) score += 10000;
+      if (node.id === "prompt-textarea") score += 5000;
+      if (node.closest?.('[data-testid="composer"]')) score += 3000;
+      if (node.closest?.("form")) score += 1500;
+      if (node.closest?.("main")) score += 500;
+      return { ...candidate, score };
+    })
+    .sort((left, right) => right.score - left.score);
   const composer = composers[0] || null;
   const node = composer?.node || null;
   const activeNode = document.activeElement;
@@ -910,6 +954,7 @@ function inspectNv2ComposerSubmitStateScript(prompt, beforeCount = 0) {
     ok: Boolean(node),
     selector: composer?.selector || "",
     activeComposer,
+    composerText: text,
     textLength: text.length,
     promptLength: wanted.length,
     fullPromptLoaded,
@@ -1203,7 +1248,16 @@ function setPromptInputValueScript(prompt) {
 }
 
 function deepFocusNv2ComposerScript() {
-  const selectors = ["main form textarea", '[contenteditable="true"]'];
+  const selectors = [
+    "#prompt-textarea",
+    'textarea[data-testid*="composer"]',
+    '[data-testid="composer"] textarea',
+    '[data-testid="composer"] [contenteditable="true"]',
+    "main form textarea",
+    'main form [contenteditable="true"]',
+    "textarea",
+    '[contenteditable="true"]',
+  ];
   const visible = (node) => {
     const rect = node?.getBoundingClientRect?.();
     const style = node ? window.getComputedStyle(node) : null;
@@ -1215,6 +1269,7 @@ function deepFocusNv2ComposerScript() {
       style?.visibility !== "hidden"
     );
   };
+  const seen = new Set();
   const item = selectors
     .flatMap((selector) =>
       [...document.querySelectorAll(selector)].map((node) => ({
@@ -1222,12 +1277,23 @@ function deepFocusNv2ComposerScript() {
         selector,
       })),
     )
-    .filter(({ node }) => visible(node))
-    .sort(
-      (a, b) =>
-        b.node.getBoundingClientRect().bottom -
-        a.node.getBoundingClientRect().bottom,
-    )[0];
+    .filter(({ node }) => {
+      if (!node || seen.has(node) || !visible(node)) return false;
+      seen.add(node);
+      const rect = node.getBoundingClientRect();
+      return rect.width > 80 && rect.height > 12 && node.getAttribute?.("aria-hidden") !== "true";
+    })
+    .map((candidate) => {
+      const { node } = candidate;
+      const rect = node.getBoundingClientRect();
+      let score = rect.bottom + Math.min(rect.width, 1200) / 20;
+      if (node.id === "prompt-textarea") score += 5000;
+      if (node.closest?.('[data-testid="composer"]')) score += 3000;
+      if (node.closest?.("form")) score += 1500;
+      if (node.closest?.("main")) score += 500;
+      return { ...candidate, score };
+    })
+    .sort((left, right) => right.score - left.score)[0];
   if (!item) return { ok: false, error: "nv2-composer-not-found" };
   const { node, selector } = item;
   node.scrollIntoView({ block: "center", inline: "nearest" });
@@ -1253,9 +1319,16 @@ function deepFocusNv2ComposerScript() {
 }
 
 function clearNv2ComposerScript() {
-  const node =
+  const selectors =
+    '#prompt-textarea, textarea[data-testid*="composer"], [data-testid="composer"] textarea, [data-testid="composer"] [contenteditable="true"], main form textarea, main form [contenteditable="true"], textarea, [contenteditable="true"]';
+  const active = document.activeElement;
+  const activeComposer = active?.matches?.(selectors)
+    ? active
+    : active?.closest?.(selectors);
+  const node = activeComposer || document.querySelector("#prompt-textarea") ||
+    document.querySelector('[data-testid="composer"] [contenteditable="true"]') ||
     document.querySelector("main form textarea") ||
-    document.querySelector('[contenteditable="true"]');
+    document.querySelector('main form [contenteditable="true"]');
   if (!node) return { ok: false, error: "nv2-composer-not-found" };
   if ("value" in node) node.value = "";
   else node.textContent = "";
@@ -1279,9 +1352,16 @@ function clearNv2ComposerScript() {
 }
 
 function dispatchNv2ComposerInputEventsScript(prompt) {
-  const node =
+  const selectors =
+    '#prompt-textarea, textarea[data-testid*="composer"], [data-testid="composer"] textarea, [data-testid="composer"] [contenteditable="true"], main form textarea, main form [contenteditable="true"], textarea, [contenteditable="true"]';
+  const active = document.activeElement;
+  const activeComposer = active?.matches?.(selectors)
+    ? active
+    : active?.closest?.(selectors);
+  const node = activeComposer || document.querySelector("#prompt-textarea") ||
+    document.querySelector('[data-testid="composer"] [contenteditable="true"]') ||
     document.querySelector("main form textarea") ||
-    document.querySelector('[contenteditable="true"]');
+    document.querySelector('main form [contenteditable="true"]');
   if (!node) return { ok: false, error: "nv2-composer-not-found" };
   node.focus();
   node.dispatchEvent(
@@ -2085,7 +2165,11 @@ function extractConversationSnapshot(options = {}) {
 
   const hashText = (value = "") => {
     if (light) return "";
-    const text = String(value || "").replace(/\s+/g, " ").trim();
+    const text = String(value || "")
+      .normalize("NFC")
+      .replace(/[\u200B-\u200D\u2060\uFEFF]/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
     let hash = 2166136261;
     for (let index = 0; index < text.length; index += 1) {
       hash ^= text.charCodeAt(index);
@@ -2164,7 +2248,51 @@ function extractConversationSnapshot(options = {}) {
   const bodyTail = bodyText.slice(-4000);
   const url = window.location.href;
 
-  const composer = document.querySelector("#prompt-textarea, textarea, [contenteditable='true']");
+  // ChatGPT can keep stale/hidden textarea or contenteditable nodes mounted.
+  // Always choose the live visible composer instead of the first DOM match.
+  const composerSelectors = [
+    "#prompt-textarea",
+    'textarea[data-testid*="composer"]',
+    '[data-testid="composer"] textarea',
+    '[data-testid="composer"] [contenteditable="true"]',
+    'main form textarea',
+    'main form [contenteditable="true"]',
+    "textarea",
+    '[contenteditable="true"]',
+  ];
+  const seenComposerNodes = new Set();
+  const activeElement = document.activeElement;
+  const composerCandidates = composerSelectors
+    .flatMap((selector) =>
+      [...document.querySelectorAll(selector)].map((node) => ({ node, selector })),
+    )
+    .filter(({ node }) => {
+      if (!node || seenComposerNodes.has(node)) return false;
+      seenComposerNodes.add(node);
+      const rect = node.getBoundingClientRect?.();
+      return Boolean(
+        visible(node) &&
+          rect &&
+          rect.width > 80 &&
+          rect.height > 12 &&
+          rect.bottom > 0 &&
+          rect.top < window.innerHeight &&
+          node.getAttribute?.("aria-hidden") !== "true",
+      );
+    })
+    .map((candidate) => {
+      const { node } = candidate;
+      const rect = node.getBoundingClientRect();
+      let score = rect.bottom + Math.min(rect.width, 1200) / 20;
+      if (node === activeElement || node.contains?.(activeElement)) score += 10000;
+      if (node.id === "prompt-textarea") score += 5000;
+      if (node.closest?.('[data-testid="composer"]')) score += 3000;
+      if (node.closest?.("form")) score += 1500;
+      if (node.closest?.("main")) score += 500;
+      return { ...candidate, score };
+    })
+    .sort((left, right) => right.score - left.score);
+  const composer = composerCandidates[0]?.node || null;
   const composerText = composer ? (composer.value || composer.textContent || '').trim() : '';
   const composerPromptHash = hashText(composerText);
   const composerHasPrompt = composerText.length > 0;
@@ -2510,10 +2638,15 @@ const getConversationStateScript = createOptimizedWrapper(`
     conversationLength: snap.userMessages.length + snap.assistantMessages.length,
     conversationFingerprint: fingerprintHash,
     composerHasPrompt: snap.composerText.length > 0,
+    composerText: snap.composerText,
     composerPromptHash: snap.composerPromptHash,
     attachmentCount: snap.attachmentsCount,
     attachmentNames: snap.attachmentNames,
     attachmentHashes: snap.attachmentHashes,
+    attachmentsCompleted: snap.attachmentsCompleted,
+    progressBarsCount: snap.progressBarsCount,
+    attachmentUploadInProgress: snap.composerState === "ATTACHING_FILES",
+    composerBusy: snap.composerBusy,
     composerReady: snap.composerReady && snap.sendButtonVisible,
     sendButtonVisible: snap.sendButtonVisible,
     stopButtonVisible: snap.stopButtonVisible,
@@ -2672,6 +2805,7 @@ module.exports = {
   setPromptInputValueScript,
   focusPromptInputScript,
   detectLoginScript,
+  getChatGptLocationStateScript,
   countAssistantMessagesScript,
   detectBrowserCrashPageScript,
   dismissChatGptBlockingUiScript,

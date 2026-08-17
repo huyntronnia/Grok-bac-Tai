@@ -3,4 +3,5 @@ module.exports = {
   ...require("./batch_manifest"),
   ...require("./batch_state_store"),
   ...require("./batch_coordinator"),
+  ...require("./collection_store"),
 };

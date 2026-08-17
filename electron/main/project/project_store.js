@@ -64,6 +64,76 @@ async function writeJsonFileAtomic(targetPath, payload, spacing = 2) {
   return writeTextFileAtomic(targetPath, text);
 }
 
+async function copyFileAtomic(sourcePath, targetPath) {
+  const requestedSource = String(sourcePath || "").trim();
+  const requestedTarget = String(targetPath || "").trim();
+  if (!requestedSource) throw new Error("Missing atomic copy source path.");
+  if (!requestedTarget) throw new Error("Missing atomic copy target path.");
+  const resolvedSource = path.resolve(requestedSource);
+  const resolvedTarget = path.resolve(requestedTarget);
+  const sourceStat = await fs.stat(resolvedSource);
+  if (!sourceStat.isFile() || sourceStat.size <= 0) {
+    throw new Error(`Atomic copy source is not a non-empty file: ${resolvedSource}`);
+  }
+  if (resolvedSource === resolvedTarget) {
+    return { filePath: resolvedTarget, bytesWritten: sourceStat.size, unchanged: true };
+  }
+
+  await fs.mkdir(path.dirname(resolvedTarget), { recursive: true });
+  const tempPath = path.join(
+    path.dirname(resolvedTarget),
+    `.${path.basename(resolvedTarget)}.tmp-${process.pid}-${crypto.randomUUID()}`,
+  );
+  let handle = null;
+  try {
+    await fs.copyFile(resolvedSource, tempPath);
+    handle = await fs.open(tempPath, "r+");
+    try {
+      await handle.sync();
+    } catch (error) {
+      if (!isIgnorableSyncError(error)) throw error;
+    }
+    await handle.close();
+    handle = null;
+    await replaceFile(resolvedTarget, tempPath);
+    return { filePath: resolvedTarget, bytesWritten: sourceStat.size };
+  } finally {
+    if (handle) await handle.close().catch(() => null);
+    await fs.rm(tempPath, { force: true }).catch(() => null);
+  }
+}
+
+async function linkOrCopyFileAtomic(sourcePath, targetPath) {
+  const requestedSource = String(sourcePath || "").trim();
+  const requestedTarget = String(targetPath || "").trim();
+  if (!requestedSource) throw new Error("Missing atomic link source path.");
+  if (!requestedTarget) throw new Error("Missing atomic link target path.");
+  const resolvedSource = path.resolve(requestedSource);
+  const resolvedTarget = path.resolve(requestedTarget);
+  if (resolvedSource === resolvedTarget) return copyFileAtomic(resolvedSource, resolvedTarget);
+
+  const sourceStat = await fs.stat(resolvedSource);
+  if (!sourceStat.isFile() || sourceStat.size <= 0) {
+    throw new Error(`Atomic link source is not a non-empty file: ${resolvedSource}`);
+  }
+  await fs.mkdir(path.dirname(resolvedTarget), { recursive: true });
+  const tempPath = path.join(
+    path.dirname(resolvedTarget),
+    `.${path.basename(resolvedTarget)}.link-${process.pid}-${crypto.randomUUID()}`,
+  );
+  try {
+    await fs.link(resolvedSource, tempPath);
+    await replaceFile(resolvedTarget, tempPath);
+    return { filePath: resolvedTarget, bytesWritten: 0, linked: true };
+  } catch (error) {
+    await fs.rm(tempPath, { force: true }).catch(() => null);
+    if (!["EXDEV", "EPERM", "EACCES", "ENOTSUP", "EINVAL"].includes(error?.code)) throw error;
+    return copyFileAtomic(resolvedSource, resolvedTarget);
+  } finally {
+    await fs.rm(tempPath, { force: true }).catch(() => null);
+  }
+}
+
 function enqueueProjectWrite(targetPath, operation) {
   const requestedTarget = String(targetPath || "").trim();
   if (!requestedTarget) {
@@ -87,6 +157,8 @@ function getProjectWriteQueueSize() {
 module.exports = {
   writeTextFileAtomic,
   writeJsonFileAtomic,
+  copyFileAtomic,
+  linkOrCopyFileAtomic,
   enqueueProjectWrite,
   getProjectWriteQueueSize,
 };

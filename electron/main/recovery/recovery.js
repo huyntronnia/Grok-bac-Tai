@@ -1,7 +1,7 @@
 const { appendAppLog } = require("../logging");
 
 let chatGptSceneOrdinal = 0;
-const DURABLE_PIPELINE_BACKOFF_MS = [5000, 10000, 15000, 30000];
+const DURABLE_PIPELINE_BACKOFF_MS = [10000, 30000, 60000, 120000];
 
 async function maybeResetChatGptPageForLongRun(client, rotateEveryScenes = 20) {
   chatGptSceneOrdinal += 1;

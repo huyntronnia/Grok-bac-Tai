@@ -1,0 +1,5 @@
+node_modules/
+dist/
+.tmp/
+vidora-windows-portable/
+vidora-windows-portable.zip

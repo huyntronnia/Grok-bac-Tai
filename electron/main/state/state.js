@@ -1,15 +1,22 @@
 const fs = require("fs/promises");
 const path = require("path");
 const { pathExists } = require("../utils");
+const { writeJsonFileAtomic, enqueueProjectWrite } = require("../project");
 
 function getPipelineStateFile(projectDir = "") {
   return projectDir ? path.join(projectDir, "pipeline_state.json") : "";
 }
 
-function hashChatGptSnapshotText(value = "") {
-  const text = String(value || "")
+function normalizeChatGptSnapshotText(value = "") {
+  return String(value || "")
+    .normalize("NFC")
+    .replace(/[\u200B-\u200D\u2060\uFEFF]/g, "")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function hashChatGptSnapshotText(value = "") {
+  const text = normalizeChatGptSnapshotText(value);
   let hash = 2166136261;
   for (let index = 0; index < text.length; index += 1) {
     hash ^= text.charCodeAt(index);
@@ -26,10 +33,7 @@ function normalizeChatTitleValue(title = "") {
 }
 
 function normalizeChatGptPromptCompareText(value = "") {
-  return String(value || "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .toLowerCase();
+  return normalizeChatGptSnapshotText(value).toLowerCase();
 }
 
 function getChatGptConversationIdFromPath(pathname = "") {
@@ -52,14 +56,14 @@ function verifyDraftOwnership(snapshot, pageState, expectedFilePaths = []) {
     const expectedNames = expectedFilePaths.map(f => path.basename(f).toLowerCase());
     const actualNames = (pageState.attachmentNames || []).map(n => n.toLowerCase());
     for (const name of expectedNames) {
-      const found = actualNames.some(act => act.includes(name) || name.includes(act));
+      const found = actualNames.some(act => act.includes(name));
       if (!found) return false;
     }
   } else if (snapshot.attachmentNames && snapshot.attachmentNames.length > 0) {
     const expectedNames = snapshot.attachmentNames.map(n => n.toLowerCase());
     const actualNames = (pageState.attachmentNames || []).map(n => n.toLowerCase());
     for (const name of expectedNames) {
-      const found = actualNames.some(act => act.includes(name) || name.includes(act));
+      const found = actualNames.some(act => act.includes(name));
       if (!found) return false;
     }
   }
@@ -77,8 +81,8 @@ function verifyDraftOwnership(snapshot, pageState, expectedFilePaths = []) {
 
 async function writeSceneSnapshot(sceneDir, data = {}) {
   if (!sceneDir) return;
-  try {
-    const snapshotFile = path.join(sceneDir, "scene_snapshot.json");
+  const snapshotFile = path.join(sceneDir, "scene_snapshot.json");
+  await enqueueProjectWrite(snapshotFile, async () => {
     let existing = {};
     if (await pathExists(snapshotFile)) {
       try {
@@ -92,10 +96,8 @@ async function writeSceneSnapshot(sceneDir, data = {}) {
       updatedAt: new Date().toISOString()
     };
     await fs.mkdir(sceneDir, { recursive: true });
-    await fs.writeFile(snapshotFile, JSON.stringify(updated, null, 2), "utf8");
-  } catch (err) {
-    console.error("[writeSceneSnapshot] failed:", err);
-  }
+    await writeJsonFileAtomic(snapshotFile, updated, 2);
+  });
 }
 
 async function readSceneSnapshot(sceneDir) {
@@ -113,18 +115,20 @@ async function readSceneSnapshot(sceneDir) {
 async function writeActionJournal(sceneDir, action) {
   if (!sceneDir) return;
   const journalPath = path.join(sceneDir, "action_journal.json");
-  let journal = [];
-  try {
-    if (await pathExists(journalPath)) {
-      const raw = await fs.readFile(journalPath, "utf8");
-      journal = raw ? JSON.parse(raw) : [];
-    }
-  } catch (_e) {}
-  journal.push({
-    timestamp: new Date().toISOString(),
-    action,
+  await enqueueProjectWrite(journalPath, async () => {
+    let journal = [];
+    try {
+      if (await pathExists(journalPath)) {
+        const raw = await fs.readFile(journalPath, "utf8");
+        journal = raw ? JSON.parse(raw) : [];
+      }
+    } catch (_e) {}
+    journal.push({
+      timestamp: new Date().toISOString(),
+      action,
+    });
+    await writeJsonFileAtomic(journalPath, journal, 2);
   });
-  await fs.writeFile(journalPath, JSON.stringify(journal, null, 2), "utf8").catch(() => null);
 }
 
 async function readActionJournal(sceneDir) {
@@ -404,6 +408,7 @@ function isChatGptDotLoadingCanvasAsset(asset = {}) {
 
 module.exports = {
   getPipelineStateFile,
+  normalizeChatGptSnapshotText,
   hashChatGptSnapshotText,
   normalizeChatTitleValue,
   normalizeChatGptPromptCompareText,

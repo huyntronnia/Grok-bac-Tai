@@ -44,7 +44,7 @@ assert(
   'Request 2 send acknowledgement gate must remain'
 );
 assert(
-  /await waitForChatGptHydrationResponse\(\s*page,\s*beforeScenes\?\.count \|\| 0,\s*{[\s\S]*?request: 2,/.test(block),
+  /await waitForChatGptHydrationResponse\(\s*page,\s*snapshot\.hydration\.request2BeforeCount,\s*{[\s\S]*?request: 2,/.test(block),
   'Request 2 must wait for assistant completion'
 );
 
@@ -59,8 +59,12 @@ assert(freshFalseIndex > request2WaitIndex, 'Pipeline must mark context fresh fa
 assert(newChatFalseIndex > freshFalseIndex, 'Pipeline must leave new-chat hydration mode after Request 2 completion');
 
 assert(
-  /await waitForChatGptHydrationResponse\(\s*page,\s*beforePreprompt\?\.count \|\| 0,\s*{[\s\S]*?request: 1,/.test(block),
+  /await waitForChatGptHydrationResponse\(\s*page,\s*snapshot\.hydration\.request1BeforeCount,\s*{[\s\S]*?request: 1,/.test(block),
   'Request 1 must still wait for assistant completion'
 );
+
+assert(block.includes('initialConversationState?.conversationLength'), 'new chat must use total user + assistant message count');
+assert(block.includes('request1Sent && request1Owned'), 'Request 1 sent checkpoint must resume waiting without duplicate upload');
+assert(block.includes('request2Sent && request2Owned'), 'Request 2 sent checkpoint must resume waiting without duplicate upload');
 
 console.log('chatgpt hydration request 2 tests passed');

@@ -1,38 +1,12 @@
 const fs = require("fs/promises");
 const path = require("path");
 const crypto = require("crypto");
+const {
+  reconcileVeoUpCollection,
+} = require("./collection_store");
 
 function sceneToken(sceneId) {
   return `scene_${String(sceneId).padStart(3, "0")}`;
-}
-
-async function fileStat(filePath = "") {
-  if (!filePath) return null;
-  try {
-    const stat = await fs.stat(filePath);
-    return stat.isFile() && stat.size > 0 ? stat : null;
-  } catch (_error) {
-    return null;
-  }
-}
-
-function isPathInsideRoot(filePath = "", rootPath = "") {
-  if (!filePath || !rootPath) return false;
-  const relative = path.relative(path.resolve(rootPath), path.resolve(filePath));
-  return relative === "" || (
-    relative !== ".." &&
-    !relative.startsWith(`..${path.sep}`) &&
-    !path.isAbsolute(relative)
-  );
-}
-
-function resolveSceneCandidate(value, projectDir, sceneId) {
-  const text = String(value || "").trim();
-  if (!text) return "";
-  if (path.isAbsolute(text)) return path.resolve(text);
-  const normalized = text.replace(/\\/g, "/");
-  if (normalized.includes("/")) return path.resolve(projectDir, normalized);
-  return path.resolve(projectDir, sceneToken(sceneId), normalized);
 }
 
 function normalizePrompt(text = "") {
@@ -44,10 +18,6 @@ function normalizePrompt(text = "") {
     .join(" ")
     .replace(/\s+/g, " ")
     .trim();
-}
-
-function isSavedPromptPlaceholder(value = "") {
-  return /^\[saved:\s*motion_prompt\.txt\]$/i.test(String(value || "").trim());
 }
 
 function normalizeExpectedSceneIds({ expectedSceneIds, expectedSceneCount, scenes }) {
@@ -72,53 +42,6 @@ async function scanSceneIds(projectDir) {
     .map((entry) => Number(entry.name.match(/\d+/)?.[0] || 0))
     .filter((id) => Number.isInteger(id) && id > 0)
     .sort((a, b) => a - b);
-}
-
-async function findKeyframe(projectDir, sceneId, scene = {}) {
-  const token = sceneToken(sceneId);
-  const sceneDir = path.join(projectDir, token);
-  const candidates = [
-    scene.keyframeOutputPath,
-    scene.imagePath,
-    path.join(projectDir, "keyframes", `${token}_keyframe.png`),
-    path.join(sceneDir, `${token}_keyframe.png`),
-    path.join(sceneDir, "scene_keyframe.png"),
-    path.join(sceneDir, "keyframe.png"),
-  ]
-    .map((candidate) => resolveSceneCandidate(candidate, projectDir, sceneId))
-    .filter(Boolean);
-
-  for (const candidate of [...new Set(candidates)]) {
-    if (!isPathInsideRoot(candidate, projectDir)) continue;
-    if (!/\.png$/i.test(candidate)) continue;
-    const stat = await fileStat(candidate);
-    if (stat) return { path: candidate, stat };
-  }
-  return null;
-}
-
-async function findMotionPrompt(projectDir, sceneId, scene = {}) {
-  const sceneDir = path.join(projectDir, sceneToken(sceneId));
-  const candidates = [
-    scene.motionPromptOutputPath,
-    scene.motionPromptPath,
-    path.join(sceneDir, "motion_prompt.txt"),
-  ]
-    .map((candidate) => resolveSceneCandidate(candidate, projectDir, sceneId))
-    .filter(Boolean);
-
-  for (const candidate of [...new Set(candidates)]) {
-    if (!isPathInsideRoot(candidate, projectDir)) continue;
-    const stat = await fileStat(candidate);
-    if (!stat) continue;
-    const text = normalizePrompt(await fs.readFile(candidate, "utf8").catch(() => ""));
-    if (text) return { path: candidate, text, stat };
-  }
-
-  const inlineText = isSavedPromptPlaceholder(scene.motionPrompt)
-    ? ""
-    : normalizePrompt(scene.motionPrompt || "");
-  return inlineText ? { path: "", text: inlineText, stat: null } : null;
 }
 
 function hashText(value = "") {
@@ -167,45 +90,31 @@ async function buildVeoUpBatchManifest(options = {}) {
   duplicates.push(...expectedDuplicates);
   expectedSceneIds = [...new Set(expectedSceneIds)].sort((a, b) => a - b);
 
-  const entries = [];
-  const missing = [];
-  for (const sceneId of expectedSceneIds) {
-    const scene = sceneMap.get(sceneId) || {};
-    const [keyframe, prompt] = await Promise.all([
-      findKeyframe(projectDir, sceneId, scene),
-      findMotionPrompt(projectDir, sceneId, scene),
-    ]);
-    if (!keyframe || !prompt) {
-      missing.push({
-        sceneId,
-        missingKeyframe: !keyframe,
-        missingMotionPrompt: !prompt,
-      });
-      continue;
-    }
-    entries.push({
-      sceneId,
-      keyframePath: keyframe.path,
-      keyframeSize: Number(keyframe.stat.size || 0),
-      keyframeMtimeMs: Number(keyframe.stat.mtimeMs || 0),
-      motionPromptPath: prompt.path,
-      motionPrompt: prompt.text,
-      motionPromptHash: hashText(prompt.text),
-    });
-  }
-
+  const reconciliation = await reconcileVeoUpCollection({
+    projectDir,
+    expectedSceneIds,
+    scenes,
+  });
+  const entries = reconciliation.entries || [];
+  const missing = reconciliation.missing || [];
+  const allowPartial = options.allowPartial === true;
+  const complete = entries.length === expectedSceneIds.length && missing.length === 0;
   const ok = expectedSceneIds.length > 0 &&
-    entries.length === expectedSceneIds.length &&
-    missing.length === 0 &&
+    entries.length > 0 &&
+    (allowPartial || complete) &&
     duplicates.length === 0;
+  const partial = ok && !complete;
   return {
     ok,
-    status: ok ? "validated" : "validation_failed",
+    status: ok ? (partial ? "validated_partial" : "validated") : "validation_failed",
     error: ok ? "" : "veoup-batch-manifest-incomplete",
     projectDir,
     expectedSceneIds,
     expectedSceneCount: expectedSceneIds.length,
     readySceneCount: entries.length,
+    partial,
+    skippedSceneIds: missing.map((item) => item.sceneId),
+    repairedSceneIds: reconciliation.repairedSceneIds || [],
     entries,
     missing,
     duplicates: [...new Set(duplicates)].sort((a, b) => a - b),
@@ -214,10 +123,11 @@ async function buildVeoUpBatchManifest(options = {}) {
 
 function createVeoUpBatchFingerprint(manifest = {}, options = {}) {
   const stable = {
-    version: 1,
+    version: 2,
     projectDir: path.resolve(String(manifest.projectDir || "")),
     entries: (manifest.entries || []).map((entry) => ({
       sceneId: entry.sceneId,
+      keyframeHash: entry.keyframeHash || "",
       keyframeSize: entry.keyframeSize,
       keyframeMtimeMs: Math.round(Number(entry.keyframeMtimeMs || 0)),
       motionPromptHash: entry.motionPromptHash,
