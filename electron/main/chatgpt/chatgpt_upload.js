@@ -862,7 +862,6 @@ async function uploadOneFileToCompatibleInput(page, filePath) {
       filePath,
     ).catch((error) => ({ ok: false, error: error.message }));
     if (chooserUpload?.ok) return chooserUpload;
-    return chooserUpload;
   }
   const selected = await markCompatibleFileInput(page, filePath);
   if (!selected?.ok) return selected;

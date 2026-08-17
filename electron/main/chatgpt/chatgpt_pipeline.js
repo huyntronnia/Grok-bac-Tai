@@ -1074,7 +1074,7 @@ async function generateMotionPromptWithChatGPTOnce(
             text: `Scene ${sceneId}: Uploading current scene keyframe before NV2.`,
             details: { image: path.basename(imagePath || "") },
           });
-          const nv2ImageUpload = await uploadFilesToChatGptSequentially(
+          let nv2ImageUpload = await uploadFilesToChatGptSequentially(
             page,
             nv2Payload.expectedFilePaths,
             sceneId,
@@ -1083,6 +1083,32 @@ async function generateMotionPromptWithChatGPTOnce(
               request: "nv2-keyframe-and-request-file",
             },
           );
+          if (!nv2ImageUpload?.ok) {
+            await appendAppLog(sceneId, {
+              source: "main",
+              kind: "warning",
+              text: `Scene ${sceneId}: Initial NV2 keyframe upload failed (${nv2ImageUpload?.error}); reloading conversation page for DOM refresh...`,
+              details: { error: nv2ImageUpload?.error },
+            }).catch(() => null);
+            await reloadCurrentChatAndVerify(
+              page,
+              expectedConversationId,
+              sceneId,
+              "nv2-initial-upload-recovery",
+              { allowFailedDraftRefresh: true },
+            ).catch(() => null);
+            await clearUnexpectedAttachments(page, []).catch(() => null);
+            await sleep(1500);
+            nv2ImageUpload = await uploadFilesToChatGptSequentially(
+              page,
+              nv2Payload.expectedFilePaths,
+              sceneId,
+              {
+                trailingUploadLog: `Scene ${sceneId}: Retrying keyframe upload after page reload...`,
+                request: "nv2-keyframe-and-request-file-retry",
+              },
+            );
+          }
           if (!nv2ImageUpload?.ok) {
             throw new Error(`Scene ${sceneId}: ChatGPT NV2 keyframe upload failed: ${nv2ImageUpload?.error || "unknown"}`);
           }
