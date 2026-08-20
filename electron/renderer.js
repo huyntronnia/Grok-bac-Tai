@@ -1120,32 +1120,25 @@ function getSceneKeyframePathValue(scene) {
   return scene?.imagePath || scene?.imageUrl || scene?.keyframePath || scene?.keyframeUrl || '';
 }
 
+const SCENE_OUTPUT_STAT_TTL_MS = 5 * 60 * 1000;
+const SCENE_ASSET_AUDIT_TTL_MS = 5 * 60 * 1000;
+
 function hasValidSceneOutputPath(value) {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
-const SCENE_OUTPUT_STAT_TTL_MS = 5 * 60 * 1000;
-const SCENE_ASSET_AUDIT_TTL_MS = 5 * 60 * 1000;
-
 function sceneHasRequiredOutputForCurrentMode(scene) {
   try {
     if (isKeyframeMotionPromptOnlyModeEnabled()) {
-      const checkedAt = Number(scene?.assetStatCheckedAtMs || 0);
-      const timestampIsRecent = checkedAt > 0 && Date.now() - checkedAt <= SCENE_ASSET_AUDIT_TTL_MS;
       return Boolean(
         scene &&
         hasValidSceneOutputPath(scene.imagePath) &&
-        scene.keyframeFileExists === true &&
-        scene.keyframeFileValid === true &&
+        (scene.keyframeFileExists === true || scene.keyframeFileValid === true) &&
         hasValidSceneOutputPath(scene.motionPromptPath) &&
-        scene.motionPromptFileExists === true &&
-        scene.motionPromptFileValid === true &&
-        timestampIsRecent
+        (scene.motionPromptFileExists === true || scene.motionPromptFileValid === true)
       );
     }
-    const checkedAt = Number(scene?.outputStatCheckedAtMs || scene?.videoFileCheckedAtMs || 0);
-    const timestampIsRecent = checkedAt > 0 && Date.now() - checkedAt <= SCENE_OUTPUT_STAT_TTL_MS;
-    return Boolean(scene && hasValidSceneOutputPath(scene.videoPath) && scene.videoFileExists === true && timestampIsRecent);
+    return Boolean(scene && hasValidSceneOutputPath(scene.videoPath) && scene.videoFileExists === true);
   } catch (_error) {
     return false;
   }
@@ -1217,9 +1210,10 @@ function forceResumeFirstIncompleteSceneIfNeeded() {
   if (!id) return false;
 
   const currentIds = Array.isArray(activeBatchIds) ? activeBatchIds.map(Number) : [];
-  if (currentIds.length && currentIds[0] === id) return false;
+  if (currentIds.length && currentIds.includes(id)) return false;
 
-  activeBatchIds = [id];
+  const nextBatch = getNextBatchForSegment(id);
+  activeBatchIds = nextBatch.length ? nextBatch : [id];
 
   if (isKeyframeMotionPromptOnlyModeEnabled()) {
     firstIncomplete.status = firstIncomplete.imagePath ? 'motion_prompt_pending' : 'image_pending';

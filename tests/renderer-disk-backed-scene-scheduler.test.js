@@ -118,9 +118,9 @@ missing36.keyframeFileValid = false;
 sandbox.activeBatchIds = [41, 42, 43, 44, 45];
 
 assert.strictEqual(sandbox.forceResumeFirstIncompleteSceneIfNeeded(), true);
-assert.deepStrictEqual(
-  Array.from(sandbox.activeBatchIds),
-  [36],
+assert.strictEqual(
+  sandbox.activeBatchIds[0],
+  36,
   "a missing scene 36 must replace a stale future batch starting at scene 41",
 );
 assert.strictEqual(

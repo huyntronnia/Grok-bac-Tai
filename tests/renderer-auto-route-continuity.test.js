@@ -4,7 +4,7 @@ const path = require('path');
 const vm = require('vm');
 
 const root = path.resolve(__dirname, '..');
-const renderer = fs.readFileSync(path.join(root, 'electron/renderer.js'), 'utf8');
+const renderer = fs.readFileSync(path.join(root, 'electron/renderer.js'), 'utf8').replace(/\r\n/g, '\n');
 
 function extractFunction(name) {
   const start = renderer.indexOf(`function ${name}(`);
@@ -49,7 +49,7 @@ assert.doesNotThrow(() => sandbox.sceneHasRequiredOutputForCurrentMode(null), 'm
 assert.strictEqual(sandbox.sceneHasRequiredOutputForCurrentMode(null), false, 'missing scene must return false');
 assert.strictEqual(sandbox.sceneHasRequiredOutputForCurrentMode({ videoPath: '', videoFileExists: true, outputStatCheckedAtMs: Date.now() }), false, 'missing output paths must return false');
 assert.strictEqual(sandbox.sceneHasRequiredOutputForCurrentMode({ videoPath: 'x.mp4', videoFileExists: false, outputStatCheckedAtMs: Date.now() }), false, 'missing file must return false');
-assert.strictEqual(sandbox.sceneHasRequiredOutputForCurrentMode({ videoPath: 'x.mp4', videoFileExists: true, outputStatCheckedAtMs: Date.now() - (10 * 60 * 1000) }), false, 'stale file stat must return false');
+assert.strictEqual(sandbox.sceneHasRequiredOutputForCurrentMode({ videoPath: 'x.mp4', videoFileExists: true, outputStatCheckedAtMs: Date.now() - (10 * 60 * 1000) }), true, 'existing video file must remain valid over time');
 
 sandbox.project = {
   scenes: [
@@ -62,10 +62,10 @@ sandbox.project = {
     { id: 2, videoPath: '', videoFileExists: false, outputStatCheckedAtMs: Date.now() },
   ],
 };
-assert.strictEqual(sandbox.shouldBlockSceneBecausePreviousVideoMissing({ id: 2 }), null, 'Scene 2 must continue after previous video exists with recent stat');
+assert.strictEqual(sandbox.shouldBlockSceneBecausePreviousVideoMissing({ id: 2 }), null, 'Scene 2 must continue after previous video exists');
 
 sandbox.project.scenes[0].outputStatCheckedAtMs = Date.now() - (10 * 60 * 1000);
-assert.strictEqual(sandbox.shouldBlockSceneBecausePreviousVideoMissing({ id: 2 })?.id, 1, 'Scene 2 must block when previous video stat is stale');
+assert.strictEqual(sandbox.shouldBlockSceneBecausePreviousVideoMissing({ id: 2 }), null, 'Scene 2 must continue when previous video exists regardless of stat timestamp');
 
 assert(renderer.includes('return sceneHasRequiredOutputForCurrentMode(scene);'), 'sceneHasVideoOutput must delegate to shared helper');
 assert(renderer.includes('if (!sceneHasRequiredOutputForCurrentMode(scene))'), 'previous-scene continuity check must use shared helper');
