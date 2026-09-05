@@ -168,18 +168,34 @@ async function refreshCurrentChatForLongRunMemory(
       page,
       `(() => {
         const path = location.pathname || "";
+        const href = location.href || "";
+        const match = path.match(/\\/(?:c|chats)\\/([a-zA-Z0-9_-]+)/i) ||
+                      path.match(/\\/g\\/[^/]+\\/c\\/([a-zA-Z0-9_-]+)/i) ||
+                      href.match(/[?&]chat=([a-zA-Z0-9_-]+)/i);
         return {
           path,
-          conversationId: (path.match(/\\/c\\/([^/?#]+)/) || [])[1] || "",
+          conversationId: match ? match[1] : "",
         };
       })()`,
     ).catch(() => ({}));
     if (!before?.conversationId) {
-      throw new Error("long-run-memory-refresh-missing-conversation-id");
+      await appendAppLog(null, {
+        source: "main",
+        kind: "warning",
+        text: `ChatGPT long-run memory refresh skipped: conversationId not detected in path (${before?.path || "root"}).`,
+        details: { sceneId, path: before?.path },
+      }).catch(() => null);
+      return { ok: false, skipped: true, reason: "missing-conversation-id" };
     }
     const state = await getConversationState(page).catch(() => ({}));
     if (state?.stopButtonVisible || state?.streaming) {
-      throw new Error("long-run-memory-refresh-chat-still-generating");
+      await appendAppLog(null, {
+        source: "main",
+        kind: "warning",
+        text: `ChatGPT long-run memory refresh skipped: chat is still generating.`,
+        details: { sceneId },
+      }).catch(() => null);
+      return { ok: false, skipped: true, reason: "chat-still-generating" };
     }
     const reloaded = await requestReloadWithReason(
       page,
@@ -188,7 +204,13 @@ async function refreshCurrentChatForLongRunMemory(
       { allowWaitAcceptAtSafeBoundary: true },
     );
     if (!reloaded) {
-      throw new Error("long-run-memory-refresh-blocked");
+      await appendAppLog(null, {
+        source: "main",
+        kind: "warning",
+        text: `ChatGPT long-run memory refresh skipped: reload was blocked by safety boundary.`,
+        details: { sceneId },
+      }).catch(() => null);
+      return { ok: false, skipped: true, reason: "reload-blocked" };
     }
     await waitForCdpLoad(page).catch(() => null);
     await sleep(4000);
@@ -197,16 +219,24 @@ async function refreshCurrentChatForLongRunMemory(
       page,
       `(() => {
         const path = location.pathname || "";
+        const href = location.href || "";
+        const match = path.match(/\\/(?:c|chats)\\/([a-zA-Z0-9_-]+)/i) ||
+                      path.match(/\\/g\\/[^/]+\\/c\\/([a-zA-Z0-9_-]+)/i) ||
+                      href.match(/[?&]chat=([a-zA-Z0-9_-]+)/i);
         return {
           path,
-          conversationId: (path.match(/\\/c\\/([^/?#]+)/) || [])[1] || "",
+          conversationId: match ? match[1] : "",
         };
       })()`,
     ).catch(() => ({}));
     if (after?.conversationId !== before.conversationId) {
-      throw new Error(
-        `long-run-memory-refresh-conversation-changed:${before.conversationId}:${after?.conversationId || "none"}`,
-      );
+      await appendAppLog(null, {
+        source: "main",
+        kind: "warning",
+        text: `ChatGPT long-run memory refresh: conversation changed from ${before.conversationId} to ${after.conversationId}.`,
+        details: { before: before.conversationId, after: after.conversationId },
+      }).catch(() => null);
+      return { ok: false, skipped: true, reason: "conversation-changed" };
     }
     await appendAppLog(null, {
       source: "main",
@@ -1003,7 +1033,16 @@ async function runScenePipelineLocked(_event, options) {
             sessionSceneCounter,
           },
         }).catch(() => null);
-        await refreshCurrentChatForLongRunMemory(sceneId, runId, reason);
+        try {
+          await refreshCurrentChatForLongRunMemory(sceneId, runId, reason);
+        } catch (memErr) {
+          await appendAppLog(null, {
+            source: "main",
+            kind: "warning",
+            text: `ChatGPT long-run memory maintenance encountered an issue but was safely skipped: ${memErr?.message || memErr}.`,
+            details: { sceneId, error: memErr?.message || String(memErr) },
+          }).catch(() => null);
+        }
         sessionSceneCounter = 0;
       }
       const sceneAlreadyCompleted = Boolean(result?.alreadyCompleted);

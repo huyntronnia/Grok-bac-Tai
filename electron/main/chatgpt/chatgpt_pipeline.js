@@ -4112,10 +4112,19 @@ async function extractLatestChatGPTGeneratedImageBytesScript(
   const selectedRoots = responseRoots.slice(
     Math.min(minRoot, responseRoots.length),
   );
-  const waitingForNewImageAgentTurn = responseRoots.length <= minRoot;
-  const scanMinRoot = minRoot;
-  const usingLatestRootFallback = false;
-  const roots = selectedRoots;
+  let waitingForNewImageAgentTurn = responseRoots.length <= minRoot;
+  let scanMinRoot = minRoot;
+  let usingLatestRootFallback = false;
+  let roots = selectedRoots;
+  if (waitingForNewImageAgentTurn && responseRoots.length > 0 && minRoot > 0) {
+    const latestTurn = responseRoots.at(-1);
+    if (latestTurn) {
+      usingLatestRootFallback = true;
+      waitingForNewImageAgentTurn = false;
+      roots = [latestTurn];
+      scanMinRoot = responseRoots.length - 1;
+    }
+  }
   const rejected = [];
   const candidates = [];
   const visibleButtons = [

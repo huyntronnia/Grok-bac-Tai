@@ -1139,6 +1139,9 @@ const SCENE_ASSET_AUDIT_TTL_MS = 5 * 60 * 1000;
 function sceneHasRequiredOutputForCurrentMode(scene) {
   try {
     if (isKeyframeMotionPromptOnlyModeEnabled()) {
+      const isMarkedComplete = scene?.completionStatus === 'keyframe_motion_complete' ||
+                               scene?.completionStatus === 'complete' ||
+                               scene?.status === 'done';
       const checkedAt = Number(scene?.assetStatCheckedAtMs || 0);
       const timestampIsRecent = checkedAt > 0 && Date.now() - checkedAt <= SCENE_ASSET_AUDIT_TTL_MS;
       return Boolean(
@@ -1149,12 +1152,13 @@ function sceneHasRequiredOutputForCurrentMode(scene) {
         hasValidSceneOutputPath(scene.motionPromptPath) &&
         scene.motionPromptFileExists === true &&
         scene.motionPromptFileValid === true &&
-        timestampIsRecent
+        (timestampIsRecent || isMarkedComplete)
       );
     }
+    const isMarkedComplete = scene?.completionStatus === 'complete' || scene?.status === 'video_done';
     const checkedAt = Number(scene?.outputStatCheckedAtMs || scene?.videoFileCheckedAtMs || 0);
     const timestampIsRecent = checkedAt > 0 && Date.now() - checkedAt <= SCENE_OUTPUT_STAT_TTL_MS;
-    return Boolean(scene && hasValidSceneOutputPath(scene.videoPath) && scene.videoFileExists === true && timestampIsRecent);
+    return Boolean(scene && hasValidSceneOutputPath(scene.videoPath) && scene.videoFileExists === true && (timestampIsRecent || isMarkedComplete));
   } catch (_error) {
     return false;
   }
@@ -1876,7 +1880,7 @@ projectName: project.name,
           s.updatedAt = new Date().toISOString();
         }
       }
-      await syncProjectSceneFolders();
+      await syncProjectSceneFolders({ repairFromDisk: true });
       persist();
       render();
 
@@ -2034,7 +2038,7 @@ async function waitForProviderReady(providerValue, label) {
 }
 
 function isRetryableChatGptWorkflowError(message = '') {
-  return /CHATGPT_ERROR:|composer-busy|prompt-pasted-but-send-not-ready|send-button-share-image|send-button-wrong-target|image-upload-timeout|image-preview-not-detected|chatgpt-response-timeout|chatgpt-output-choice-required|chatgpt-too-long-conversation|chatgpt-memory-cache-heavy|chatgpt-tab-crashed|network-stall|unsafe-sidebar-modal|unknown-ui-state|pre-extract-wait|chatgpt-image-tool-error|text-only-answer|no-usable-image|real_stall|still loading|Timed out waiting for a complete ChatGPT generated image asset|Timed out waiting|missing-motion-prompt-signals|retryable-bad-motion-text|bad-response-idle|no-assistant-after-send/i.test(String(message || ''));
+  return /CHATGPT_ERROR:|composer-busy|prompt-pasted-but-send-not-ready|send-button-share-image|send-button-wrong-target|image-upload-timeout|image-preview-not-detected|chatgpt-response-timeout|chatgpt-output-choice-required|chatgpt-too-long-conversation|chatgpt-memory-cache-heavy|chatgpt-tab-crashed|network-stall|unsafe-sidebar-modal|unknown-ui-state|pre-extract-wait|chatgpt-image-tool-error|text-only-answer|no-usable-image|real_stall|still loading|Timed out waiting for a complete ChatGPT generated image asset|Timed out waiting|missing-motion-prompt-signals|retryable-bad-motion-text|bad-response-idle|no-assistant-after-send|chatgpt-upload-did-not-create-visible-attachment|chatgpt-attachment-settle-timeout|chatgpt-upload-readiness-timeout|chatgpt-payload-prompt-mismatch|chatgpt-payload-fingerprint-mismatch|chatgpt-same-chat-refresh-failed|prompt-send-ack-without-user-message-ownership|prompt-send-retry-user-message-ownership-not-confirmed|chatgpt-payload-attachment-prepare-failed|chatgpt-payload-recovery-attachment-prepare-failed|ChatGPT sequential upload failed|ChatGPT NV2 keyframe upload failed|NV2 recovery keyframe upload failed|long-run-memory-refresh|Prompt send rejected|chatgpt-stuck-turn-detected/i.test(String(message || ''));
 }
 function parseLoginRequiredError(message = '', scene = null) {
   const text = String(message || '');

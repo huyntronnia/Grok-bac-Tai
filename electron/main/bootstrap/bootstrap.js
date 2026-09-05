@@ -54,6 +54,7 @@ function createMainWindow() {
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
+      backgroundThrottling: false,
       preload: path.join(electronDir, "preload.js"),
     },
   });
