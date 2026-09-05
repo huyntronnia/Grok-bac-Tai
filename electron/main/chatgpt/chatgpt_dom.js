@@ -2442,7 +2442,10 @@ function extractConversationSnapshot(options = {}) {
   const latestAssistantHasText = latestAssistantText.length > 10;
 
   const stoppedTextDetected = /stopped creating image|image generation stopped|creation stopped|stopped generating/i.test(bodyTail);
-  const policyRefusalDetected = /policy|refusal|violate|tiêu chuẩn cộng đồng|chính sách/i.test(bodyTail);
+  const policyRefusalDetected = !latestAssistantHasImage && (
+    /\b(content policy|policy violation|violate our content)\b/i.test(latestAssistantText) ||
+    (/\b(vi phạm chính sách nội dung|tiêu chuẩn cộng đồng)\b/i.test(latestAssistantText) && !latestAssistantText.includes("quyền riêng tư"))
+  );
   const loggedOut = /Sign in|Log in|Đăng nhập|Sign up|Đăng ký/i.test(document.title || "") || !!document.querySelector('input[type="password"]');
   const disconnected = /disconnected|reconnect|mất kết nối/i.test(bodyTail);
 

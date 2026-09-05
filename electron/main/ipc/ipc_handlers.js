@@ -25,6 +25,10 @@ function initIpcHandlers(runtime) {
     checkWebLogin,
     clearChatGptCacheHandler,
     openFreshChatGptHandler,
+    manualStartStageHandler,
+    manualCaptureStageHandler,
+    manualGetStatusHandler,
+    manualCancelStageHandler,
     sendPromptViaWeb,
     runScenePipeline,
     stopPipeline,
@@ -112,6 +116,22 @@ function initIpcHandlers(runtime) {
   ipcMain.handle(
     "chatgpt:open-fresh-chat",
     safeIpcHandler(openFreshChatGptHandler),
+  );
+  ipcMain.handle(
+    "chatgpt:manual-start-stage",
+    safeIpcHandler(manualStartStageHandler),
+  );
+  ipcMain.handle(
+    "chatgpt:manual-capture-stage",
+    safeIpcHandler(manualCaptureStageHandler),
+  );
+  ipcMain.handle(
+    "chatgpt:manual-get-status",
+    safeIpcHandler(manualGetStatusHandler),
+  );
+  ipcMain.handle(
+    "chatgpt:manual-cancel-stage",
+    safeIpcHandler(manualCancelStageHandler),
   );
   ipcMain.handle("browser:send-prompt", sendPromptViaWeb);
   ipcMain.handle("pipeline:run-scene", safeIpcHandler(runScenePipeline));

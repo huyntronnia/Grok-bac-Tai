@@ -2263,6 +2263,26 @@ async function openFreshChatGptHandler() {
   return { ok: true, mode: "manual-only", url: location };
 }
 
+async function manualStartStageHandler(_event, payload = {}) {
+  const { projectPath, sceneId, stage } = payload || {};
+  return manualChatGptController.startManualStage(projectPath, sceneId, stage, { getCdpPage });
+}
+
+async function manualCaptureStageHandler(_event, payload = {}) {
+  const { projectPath, sceneId, stage } = payload || {};
+  return manualChatGptController.captureManualStage(projectPath, sceneId, stage, { getCdpPage });
+}
+
+async function manualGetStatusHandler(_event, payload = {}) {
+  const { projectPath, sceneId } = payload || {};
+  return manualChatGptController.getManualStatus(projectPath, sceneId);
+}
+
+async function manualCancelStageHandler(_event, payload = {}) {
+  const { projectPath, sceneId } = payload || {};
+  return manualChatGptController.cancelManualStage(projectPath, sceneId);
+}
+
 function normalizeWebProvider(provider) {
   return "chatgpt";
 }
@@ -5188,18 +5208,22 @@ app.on("window-all-closed", () => {
 
 app.on("browser-window-created", (_event, win) => {
   try {
-    win.on("closed", () =>
-      vidoraTraceExit("browser-window:closed", {
-        title: win.getTitle?.() || "",
-      }),
-    );
-    win.webContents.on("render-process-gone", (_event2, details) => {
+    win.on("closed", () => {
+      let title = "";
+      try {
+        if (win && !win.isDestroyed?.()) title = win.getTitle?.() || "";
+      } catch (_) {}
+      vidoraTraceExit("browser-window:closed", { title });
+    });
+    win.webContents?.on?.("render-process-gone", (_event2, details) => {
       vidoraTraceExit("webContents:render-process-gone", details || {});
     });
-    win.webContents.on("unresponsive", () => {
-      vidoraTraceExit("webContents:unresponsive", {
-        title: win.getTitle?.() || "",
-      });
+    win.webContents?.on?.("unresponsive", () => {
+      let title = "";
+      try {
+        if (win && !win.isDestroyed?.()) title = win.getTitle?.() || "";
+      } catch (_) {}
+      vidoraTraceExit("webContents:unresponsive", { title });
     });
   } catch (_) { }
 });
@@ -5360,6 +5384,10 @@ app.whenReady().then(() => {
       checkWebLogin,
       clearChatGptCacheHandler,
       openFreshChatGptHandler,
+      manualStartStageHandler,
+      manualCaptureStageHandler,
+      manualGetStatusHandler,
+      manualCancelStageHandler,
       sendPromptViaWeb,
       runScenePipeline,
       stopPipeline,

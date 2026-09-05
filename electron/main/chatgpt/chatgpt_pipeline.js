@@ -353,9 +353,19 @@ async function generateImageAndMotionWithChatGPT({
     snapshot.chatGptConversationId &&
     currentConversationId !== snapshot.chatGptConversationId
   ) {
-    throw new Error(
-      `chatgpt-conversation-changed-before-nv1:${snapshot.chatGptConversationId}:${currentConversationId || "none"}`,
+    const isManualMode = Boolean(
+      options.manualChatGPT ||
+      options.pipelineMode === 'manualChatGPT' ||
+      globalThis.__vidoraManualChatGPTMode
     );
+    if (isManualMode || currentConversationId) {
+      snapshot.chatGptConversationId = currentConversationId || snapshot.chatGptConversationId;
+      expectedConversationId = snapshot.chatGptConversationId;
+    } else {
+      throw new Error(
+        `chatgpt-conversation-changed-before-nv1:${snapshot.chatGptConversationId}:${currentConversationId || "none"}`,
+      );
+    }
   }
 
   const loginState = await evaluateOnCdpPage(
@@ -859,9 +869,18 @@ async function generateMotionPromptWithChatGPTOnce(
       throw new Error("nv2-conversation-ownership-unavailable-before-send");
     }
     if (snapshot.chatGptConversationId && currentConversationId !== snapshot.chatGptConversationId) {
-      throw new Error(
-        `chatgpt-conversation-changed-before-nv2:${snapshot.chatGptConversationId}:${currentConversationId || "none"}`,
+      const isManualMode = Boolean(
+        options.manualChatGPT ||
+        options.pipelineMode === 'manualChatGPT' ||
+        globalThis.__vidoraManualChatGPTMode
       );
+      if (isManualMode || currentConversationId) {
+        snapshot.chatGptConversationId = currentConversationId || snapshot.chatGptConversationId;
+      } else {
+        throw new Error(
+          `chatgpt-conversation-changed-before-nv2:${snapshot.chatGptConversationId}:${currentConversationId || "none"}`,
+        );
+      }
     }
 
     if (!requestArtifact?.filePath || !requestArtifact?.controlPrompt) {

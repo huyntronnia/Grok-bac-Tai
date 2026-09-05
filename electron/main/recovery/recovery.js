@@ -70,7 +70,7 @@ function isChatGptPolicyRefusalText(text = "") {
   return (
     t.includes("vi phạm các quy định") ||
     t.includes("quy định của chúng tôi về bạo lực") ||
-    t.includes("có thể vi phạm") ||
+    (!t.includes("quyền riêng tư") && !t.includes("privacy policy") && t.includes("có thể vi phạm") && (t.includes("chính sách") || t.includes("tiêu chuẩn") || t.includes("quy định"))) ||
     t.includes("i can’t help create") ||
     t.includes("i can’t assist with") ||
     (t.includes("policy") && t.includes("violence"))

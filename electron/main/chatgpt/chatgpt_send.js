@@ -692,6 +692,9 @@ async function forceSubmitChatGptComposerWithCdp(
 }
 
 async function sendPromptViaCdpInput(client, prompt, options = {}) {
+  if (options?.pipelineMode === "manualChatGPT" || options?.manualChatGPT === true || globalThis.__vidoraManualChatGPTMode === true) {
+    throw new Error("manual mode does not send prompts");
+  }
   await client.Page?.bringToFront?.().catch(() => null);
   await sleep(500);
 

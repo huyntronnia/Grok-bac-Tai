@@ -219,6 +219,14 @@
                 <span>Generate Keyframe + Motion Prompt only</span>
               </label>
               <button
+                id="manual-chatgpt-btn"
+                class="ghost primary"
+                type="button"
+                aria-pressed="false"
+              >
+                Manual ChatGPT Mode
+              </button>
+              <button
                 id="veoup-scan-run-btn"
                 class="ghost success"
                 type="button"
@@ -241,6 +249,56 @@
               >
                 Dừng tool
               </button>
+            </div>
+          </div>
+
+          <div id="manual-chatgpt-card" class="workflow-card manual-chatgpt-card" hidden>
+            <div class="card-head split">
+              <div>
+                <h3>Manual ChatGPT Capture Panel</h3>
+                <p>Người dùng tự nhập và gửi prompt trong ChatGPT. Xử lý toàn bộ scene trước khi VeoUp được phép chạy.</p>
+                <div class="manual-progress-summary" style="margin-top: 8px;">
+                  <strong>Project Progress: </strong>
+                  <span id="manual-project-progress">0 / 0 scenes ready</span> | 
+                  <strong>VeoUp Gate: </strong>
+                  <span id="manual-veoup-gate-status" class="gate-status locked">LOCKED</span>
+                </div>
+              </div>
+              <span id="manual-stage-badge" class="state-pill idle">Idle</span>
+            </div>
+            <div class="manual-controls-grid">
+              <div class="manual-stage-box">
+                <strong>Request 1 (Intro)</strong>
+                <div class="btn-group">
+                  <button id="manual-start-req1-btn" class="ghost small" type="button">Start Req 1</button>
+                  <button id="manual-capture-req1-btn" class="ghost primary small" type="button">Capture Req 1</button>
+                </div>
+                <span id="manual-req1-status" class="status-label">Chưa bắt đầu</span>
+              </div>
+              <div class="manual-stage-box">
+                <strong>Request 2 (Continuity)</strong>
+                <div class="btn-group">
+                  <button id="manual-start-req2-btn" class="ghost small" type="button">Start Req 2</button>
+                  <button id="manual-capture-req2-btn" class="ghost primary small" type="button">Capture Req 2</button>
+                </div>
+                <span id="manual-req2-status" class="status-label">Chưa bắt đầu</span>
+              </div>
+              <div class="manual-stage-box">
+                <strong>NV1 (Keyframe Image)</strong>
+                <div class="btn-group">
+                  <button id="manual-start-nv1-btn" class="ghost small" type="button">Start NV1</button>
+                  <button id="manual-capture-nv1-btn" class="ghost primary small" type="button">Capture NV1</button>
+                </div>
+                <span id="manual-nv1-status" class="status-label">Chưa bắt đầu</span>
+              </div>
+              <div class="manual-stage-box">
+                <strong>NV2 (Motion Prompt)</strong>
+                <div class="btn-group">
+                  <button id="manual-start-nv2-btn" class="ghost small" type="button">Start NV2</button>
+                  <button id="manual-capture-nv2-btn" class="ghost primary small" type="button">Capture NV2</button>
+                </div>
+                <span id="manual-nv2-status" class="status-label">Chưa bắt đầu</span>
+              </div>
             </div>
           </div>
 
