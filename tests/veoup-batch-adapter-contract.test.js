@@ -8,11 +8,11 @@ const root = path.resolve(__dirname, "..");
 const veoup = fs.readFileSync(
   path.join(root, "electron", "main", "veoup", "veoup.js"),
   "utf8",
-);
+).replace(/\r\n/g, "\n");
 const coordinator = fs.readFileSync(
   path.join(root, "electron", "main", "veoup", "batch_coordinator.js"),
   "utf8",
-);
+).replace(/\r\n/g, "\n");
 
 function sliceBetween(source, startMarker, endMarker) {
   const start = source.indexOf(startMarker);

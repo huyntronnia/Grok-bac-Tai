@@ -111,12 +111,14 @@ fs.readFileSync = function(pathArg, options) {
   }
   let content = originalReadFileSync.apply(this, arguments);
 
+  if (typeof content === 'string') {
+    content = content.replace(/\r\n/g, '\n');
+  }
+
   if (typeof pathArg === 'string') {
     const normalizedPath = pathArg.replace(/\\/g, '/');
     if (normalizedPath.endsWith('electron/main.js')) {
       if (typeof content === 'string') {
-        content = content.replace(/\r\n/g, '\n');
-        
         // Append all extracted files to maintain backward compatibility with static analysis tests
         const path = require('path');
         const fs = require('fs');
@@ -148,10 +150,6 @@ fs.readFileSync = function(pathArg, options) {
         // Normalize setChatGptContextFresh calls back to variable assignments for static analysis tests
         content = content.replace(/setChatGptContextFresh\(false\);/g, 'isChatGptContextFresh = false;');
         content = content.replace(/setChatGptContextFresh\(true\);/g, 'isChatGptContextFresh = true;');
-      }
-    } else if (normalizedPath.endsWith('renderer.js') || normalizedPath.endsWith('veoupAutomation.js')) {
-      if (typeof content === 'string') {
-        content = content.replace(/\r\n/g, '\n');
       }
     }
   }
