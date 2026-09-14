@@ -31,6 +31,7 @@ function initIpcHandlers(runtime) {
     manualCancelStageHandler,
     manualGetSceneAuditHandler,
     manualDetectProgressHandler,
+    manualCopyPromptHandler,
     openSceneFolderHandler,
     sendPromptViaWeb,
     runScenePipeline,
@@ -143,6 +144,14 @@ function initIpcHandlers(runtime) {
   ipcMain.handle(
     "chatgpt:manual-detect-progress",
     safeIpcHandler(manualDetectProgressHandler),
+  );
+  ipcMain.handle(
+    "pipeline:manual-force-capture",
+    safeIpcHandler(manualCaptureStageHandler),
+  );
+  ipcMain.handle(
+    "pipeline:manual-copy-prompt",
+    safeIpcHandler(manualCopyPromptHandler),
   );
   ipcMain.handle(
     "shell:open-folder",

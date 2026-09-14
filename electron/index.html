@@ -282,6 +282,21 @@
               </div>
             </div>
 
+            <!-- Step Guidance Banner -->
+            <div id="manual-step-guidance-banner" class="manual-step-guidance-banner" style="margin: 12px 0; padding: 12px 16px; border-radius: 8px; background: rgba(56, 189, 248, 0.1); border: 1px solid rgba(56, 189, 248, 0.3); display: flex; align-items: center; justify-content: space-between;">
+              <div class="guidance-text-wrap" style="display: flex; align-items: center; gap: 10px;">
+                <span class="guidance-icon" style="font-size: 1.3rem;">💡</span>
+                <div>
+                  <strong id="manual-guidance-title">Bước 1: Tạo Ảnh NV1</strong>
+                  <div id="manual-guidance-message" style="font-size: 0.9rem; color: #cbd5e1;">Đang đợi bạn tạo ảnh NV1 trên ChatGPT... (Prompt đã được copy vào Clipboard)</div>
+                </div>
+              </div>
+              <div class="guidance-actions" style="display: flex; gap: 8px;">
+                <button id="manual-force-capture-keyframe-btn" class="primary small" type="button" title="Cưỡng chế trích xuất keyframe hiện tại trên màn hình">Bắt Keyframe hiện tại</button>
+                <button id="manual-force-capture-motion-btn" class="primary small" type="button" title="Cưỡng chế trích xuất motion prompt gần nhất" style="display: none;">Bắt Motion Prompt hiện tại</button>
+              </div>
+            </div>
+
             <!-- Stepper Progress Tracker -->
             <div class="manual-stepper-tracker">
               <div id="manual-step-nv1" class="manual-step active">

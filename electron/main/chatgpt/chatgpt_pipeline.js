@@ -6216,7 +6216,135 @@ function clearAllChatGptPipelineLocks() {
   motionPromptSendLocks.clear();
 }
 
+async function captureManualSceneAssets({
+  sceneDir,
+  sceneId,
+  page,
+  requestArtifact = {},
+  nv2RequestArtifact = {},
+  options = {},
+} = {}) {
+  const sceneToken = `scene_${String(sceneId).padStart(3, "0")}`;
+  const keyframePath = path.join(sceneDir, `${sceneToken}_keyframe.png`);
+  const motionPromptPath = path.join(sceneDir, "motion_prompt.txt");
+
+  const {
+    extractAndSaveManualKeyframe,
+    extractAndSaveManualMotionPrompt,
+  } = require("./chatgpt_manual_detector");
+
+  // NV1 check/capture
+  let keyframeValid = false;
+  const existingKeyframe = await validateSavedImageFile(keyframePath).catch(() => ({ ok: false }));
+  if (existingKeyframe?.ok) {
+    keyframeValid = true;
+  }
+
+  if (!keyframeValid) {
+    if (typeof notifyRenderer === "function") {
+      notifyRenderer("pipeline:manual-step-changed", {
+        sceneId: sceneToken,
+        stage: "NV1",
+        step: "WAITING_FOR_NV1_IMAGE",
+        prompt: requestArtifact?.controlPrompt || "",
+      });
+    }
+
+    const startWait = Date.now();
+    const timeoutMs = Number(options.manualTimeoutMs || 300000);
+    while (Date.now() - startWait < timeoutMs) {
+      assertPipelineRunActive(options.runId);
+
+      const checkFile = await validateSavedImageFile(keyframePath).catch(() => ({ ok: false }));
+      if (checkFile?.ok) {
+        keyframeValid = true;
+        break;
+      }
+
+      if (page) {
+        try {
+          const res = await extractAndSaveManualKeyframe(page, keyframePath, {
+            sceneId: sceneToken,
+            baseline: options.baseline,
+          });
+          if (res?.ok) {
+            keyframeValid = true;
+            break;
+          }
+        } catch (_) {}
+      }
+
+      await sleep(1500);
+    }
+
+    if (!keyframeValid) {
+      throw new Error(`Scene ${sceneToken}: Timeout waiting for manual NV1 keyframe.`);
+    }
+  }
+
+  // NV2 check/capture
+  let motionPrompt = "";
+  try {
+    const raw = await fs.readFile(motionPromptPath, "utf8");
+    const val = validateMotionPromptTextContent(raw);
+    if (val.ok) motionPrompt = val.text;
+  } catch (_) {}
+
+  if (!motionPrompt) {
+    if (typeof notifyRenderer === "function") {
+      notifyRenderer("pipeline:manual-step-changed", {
+        sceneId: sceneToken,
+        stage: "NV2",
+        step: "WAITING_FOR_NV2_PROMPT",
+        keyframePath,
+        prompt: nv2RequestArtifact?.controlPrompt || "",
+      });
+    }
+
+    const startWait = Date.now();
+    const timeoutMs = Number(options.manualTimeoutMs || 300000);
+    while (Date.now() - startWait < timeoutMs) {
+      assertPipelineRunActive(options.runId);
+
+      try {
+        const raw = await fs.readFile(motionPromptPath, "utf8");
+        const val = validateMotionPromptTextContent(raw);
+        if (val.ok) {
+          motionPrompt = val.text;
+          break;
+        }
+      } catch (_) {}
+
+      if (page) {
+        try {
+          const res = await extractAndSaveManualMotionPrompt(page, motionPromptPath, {
+            baseline: options.baseline,
+          });
+          if (res?.ok && res.text) {
+            motionPrompt = res.text;
+            break;
+          }
+        } catch (_) {}
+      }
+
+      await sleep(1500);
+    }
+
+    if (!motionPrompt) {
+      throw new Error(`Scene ${sceneToken}: Timeout waiting for manual NV2 motion prompt.`);
+    }
+  }
+
+  return {
+    ok: true,
+    imagePath: keyframePath,
+    motionPrompt,
+    sceneId: sceneToken,
+  };
+}
+
 module.exports = {
+  captureManualSceneAssets,
   clearAllChatGptPipelineLocks,
   initChatGptPipeline,
   generateImageAndMotionWithChatGPT,

@@ -4905,6 +4905,42 @@ function updateScanButtonVisibility() {
       }
     });
 
+    // Step Guidance & Force Capture Buttons
+    document.querySelector('#manual-force-capture-keyframe-btn')?.addEventListener('click', () => {
+      document.querySelector('#manual-capture-nv1-btn')?.click();
+    });
+
+    document.querySelector('#manual-force-capture-motion-btn')?.addEventListener('click', () => {
+      document.querySelector('#manual-capture-nv2-btn')?.click();
+    });
+
+    window.videoPlannerAPI?.onManualStepChanged?.(async (data) => {
+      if (!data) return;
+      const bannerTitle = document.querySelector('#manual-guidance-title');
+      const bannerMsg = document.querySelector('#manual-guidance-message');
+      const forceKeyframeBtn = document.querySelector('#manual-force-capture-keyframe-btn');
+      const forceMotionBtn = document.querySelector('#manual-force-capture-motion-btn');
+
+      if (data.step === 'WAITING_FOR_NV1_IMAGE') {
+        if (bannerTitle) bannerTitle.textContent = 'Bước 1: Tạo Ảnh NV1';
+        if (bannerMsg) bannerMsg.textContent = 'Đang đợi bạn tạo ảnh NV1 trên ChatGPT... (Prompt đã được copy vào Clipboard)';
+        if (forceKeyframeBtn) forceKeyframeBtn.style.display = 'inline-block';
+        if (forceMotionBtn) forceMotionBtn.style.display = 'none';
+        if (data.prompt) {
+          await window.videoPlannerAPI?.copyPromptToClipboard?.(data.prompt).catch(() => null);
+        }
+      } else if (data.step === 'WAITING_FOR_NV2_PROMPT') {
+        if (bannerTitle) bannerTitle.textContent = 'Bước 2: Tạo Motion Prompt NV2';
+        if (bannerMsg) bannerMsg.textContent = 'Đã nhận diện Keyframe! Đang đợi bạn tạo Motion Prompt NV2...';
+        if (forceKeyframeBtn) forceKeyframeBtn.style.display = 'none';
+        if (forceMotionBtn) forceMotionBtn.style.display = 'inline-block';
+        if (data.prompt) {
+          await window.videoPlannerAPI?.copyPromptToClipboard?.(data.prompt).catch(() => null);
+        }
+      }
+      await renderManualChatGptUI();
+    });
+
     // Toolbar Buttons
     document.querySelector('#manual-start-watcher-btn')?.addEventListener('click', () => {
       if (manualWatcherTimer) {

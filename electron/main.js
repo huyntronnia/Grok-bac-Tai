@@ -2299,6 +2299,18 @@ async function manualDetectProgressHandler(_event, _payload = {}) {
   });
 }
 
+async function manualCopyPromptHandler(_event, payload = {}) {
+  const text = typeof payload === "string" ? payload : payload?.text || "";
+  if (!text) return { ok: false, error: "missing-text" };
+  try {
+    const { clipboard } = require("electron");
+    clipboard.writeText(text);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+}
+
 async function openSceneFolderHandler(_event, folderPath) {
   if (!folderPath) return { ok: false, error: "missing-path" };
   try {
@@ -5441,6 +5453,7 @@ app.whenReady().then(() => {
       manualCancelStageHandler,
       manualGetSceneAuditHandler,
       manualDetectProgressHandler,
+      manualCopyPromptHandler,
       openSceneFolderHandler,
       sendPromptViaWeb,
       runScenePipeline,

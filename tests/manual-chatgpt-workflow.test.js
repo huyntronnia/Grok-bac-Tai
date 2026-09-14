@@ -203,6 +203,91 @@ async function runTests() {
     assert.strictEqual(capNV1Res.filePath, "scene_001_keyframe.png");
     console.log("✓ captureManualStage NV1 passed");
 
+    // Test 9: Guard Isolation - Auto-send & Click blocked in manual mode
+    const {
+      sendPromptViaCdpInput,
+      sendNv2PromptViaDeepCdpInput,
+      clickSendButtonViaCdp,
+    } = require("../electron/main/chatgpt/chatgpt_send");
+
+    globalThis.__vidoraManualChatGPTMode = true;
+    try {
+      await assert.rejects(
+        async () => {
+          await sendPromptViaCdpInput({}, "test", { manualChatGPT: true });
+        },
+        /manual mode does not send prompts/,
+      );
+      await assert.rejects(
+        async () => {
+          await sendNv2PromptViaDeepCdpInput({}, "test", { manualChatGPT: true });
+        },
+        /manual mode does not send prompts/,
+      );
+      await assert.rejects(
+        async () => {
+          await clickSendButtonViaCdp({});
+        },
+        /manual mode does not click send button/,
+      );
+      console.log("✓ Guard isolation assertions passed (all auto-actions rejected)");
+    } finally {
+      globalThis.__vidoraManualChatGPTMode = false;
+    }
+
+    // Test 10: chatgpt_manual_detector baseline & tailScanFallback
+    const {
+      captureBaselineSnapshot,
+      tailScanFallback,
+      waitForStreamingLifecycle,
+    } = require("../electron/main/chatgpt/chatgpt_manual_detector");
+
+    const mockDetectorPage = {
+      Runtime: {
+        evaluate: async ({ expression }) => {
+          const str = String(expression || "");
+          if (str.includes("last.innerText || last.textContent")) {
+            return { result: { value: motionContent } };
+          }
+          return {
+            result: {
+              value: {
+                conversationId: "conv_detector_123",
+                userCount: 3,
+                assistantCount: 3,
+                userTurnCount: 3,
+                assistantTurnCount: 3,
+              },
+            },
+          };
+        },
+      },
+    };
+
+    const baseline = await captureBaselineSnapshot(mockDetectorPage);
+    assert.strictEqual(baseline.ok, true);
+    assert.strictEqual(baseline.conversationId, "conv_detector_123");
+    assert.strictEqual(baseline.assistantCount, 3);
+    console.log("✓ captureBaselineSnapshot passed");
+
+    const tailTextResult = await tailScanFallback(mockDetectorPage, "NV2");
+    assert.strictEqual(tailTextResult.ok, true);
+    assert.strictEqual(tailTextResult.method, "tail-text");
+    console.log("✓ tailScanFallback NV2 passed");
+
+    // Test 11: VeoUp batch compatibility verification
+    const { stageSceneForVeoUp } = require("../electron/main/veoup/collection_store");
+    const veoUpStageRes = await stageSceneForVeoUp({
+      projectDir: tmpDir,
+      sceneId: 1,
+      keyframePath,
+      motionPrompt: motionContent,
+      motionPromptPath: motionPath,
+    });
+    assert(veoUpStageRes.keyframePath, "VeoUp batch keyframe path must exist");
+    assert(veoUpStageRes.motionPromptPath, "VeoUp batch motion prompt path must exist");
+    console.log("✓ VeoUp batch compatibility passed");
+
     console.log("\nALL MANUAL CHATGPT WORKFLOW TESTS PASSED SUCCESSFULLY!");
   } finally {
     await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => null);

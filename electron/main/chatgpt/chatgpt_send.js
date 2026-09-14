@@ -82,6 +82,9 @@ function isLikelyChatGptSendButtonText(text) {
 }
 
 async function clickSendButtonViaCdp(page) {
+  if (globalThis.__vidoraManualChatGPTMode === true) {
+    throw new Error("manual mode does not click send button");
+  }
   return evaluateOnCdpPage(
     page,
     `(() => {
@@ -898,6 +901,9 @@ async function waitForPromptSendAcknowledged(
 }
 
 async function sendPromptViaCdpInputSingle(client, prompt, context = {}) {
+  if (context?.pipelineMode === "manualChatGPT" || context?.manualChatGPT === true || globalThis.__vidoraManualChatGPTMode === true) {
+    throw new Error("manual mode does not send prompts");
+  }
   await client.Page.bringToFront().catch(() => null);
   await sleep(500);
 
@@ -1055,6 +1061,9 @@ async function waitForNv2GenerationStartGuard(
 }
 
 async function sendNv2PromptViaDeepCdpInput(client, prompt, context = {}) {
+  if (context?.pipelineMode === "manualChatGPT" || context?.manualChatGPT === true || globalThis.__vidoraManualChatGPTMode === true) {
+    throw new Error("manual mode does not send prompts");
+  }
   const beforeCount = Number(context.beforeCount || 0) || 0;
   const sceneId = context.sceneId || "unknown";
   const failNv2Send = async (error, details = {}) => {

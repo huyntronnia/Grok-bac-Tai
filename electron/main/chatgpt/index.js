@@ -8,5 +8,6 @@ module.exports = {
   chatGptRuntimeMonitor: require("./chatgpt_runtime_monitor"),
   ChatGptPipelineAdapter: require("./chatgpt_pipeline_adapter"),
   manualChatGptController: require("./manual_chatgpt_controller"),
+  chatgptManualDetector: require("./chatgpt_manual_detector"),
 };
 

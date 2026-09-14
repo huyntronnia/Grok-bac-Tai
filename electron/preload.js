@@ -35,6 +35,13 @@ contextBridge.exposeInMainWorld('videoPlannerAPI', {
   openFreshChatGpt: () => ipcRenderer.invoke('chatgpt:open-fresh-chat'),
   startManualStage: (payload) => ipcRenderer.invoke('chatgpt:manual-start-stage', payload),
   captureManualStage: (payload) => ipcRenderer.invoke('chatgpt:manual-capture-stage', payload),
+  forceCaptureManual: (payload) => ipcRenderer.invoke('pipeline:manual-force-capture', payload),
+  copyPromptToClipboard: (text) => ipcRenderer.invoke('pipeline:manual-copy-prompt', text),
+  onManualStepChanged: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on('pipeline:manual-step-changed', listener);
+    return () => ipcRenderer.removeListener('pipeline:manual-step-changed', listener);
+  },
   getManualStatus: (payload) => ipcRenderer.invoke('chatgpt:manual-get-status', payload),
   cancelManualStage: (payload) => ipcRenderer.invoke('chatgpt:manual-cancel-stage', payload),
   getManualSceneAudit: (payload) => ipcRenderer.invoke('chatgpt:manual-get-scene-audit', payload),

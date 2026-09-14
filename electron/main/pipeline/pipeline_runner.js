@@ -40,6 +40,7 @@ const {
   sendPromptViaCdpInput,
   clickSendButtonViaCdp,
   sendNv2PromptViaDeepCdpInput,
+  captureManualSceneAssets,
   generateImageAndMotionWithChatGPT,
   generateMotionPromptWithChatGPT,
   requestReloadWithReason,
@@ -1586,6 +1587,11 @@ async function runScenePipelineLockedInternal(_event, options) {
         text: `PIPELINE Scene ${sceneId}: gửi scene + NV1 cho ChatGPT để tạo ảnh.`,
       });
       const referenceImagePaths = [];
+      const isManualMode = Boolean(
+        options.manualChatGPT ||
+        options.pipelineMode === "manualChatGPT" ||
+        globalThis.__vidoraManualChatGPTMode
+      );
       const chatGptResult =
         imageProvider?.method === "api"
           ? await generateImageWithImageApi({
@@ -1594,18 +1600,27 @@ async function runScenePipelineLockedInternal(_event, options) {
               sceneId,
               config: imageProvider,
             })
-          : await generateImageAndMotionWithChatGPT({
-              imagePrompt: "",
-              requestArtifact: requestFiles.nv1,
-              sceneDir,
-              sceneId,
-              referenceImagePaths,
-              options: {
-                ...options,
-                beforeAssistantCount,
-                beforeImageAgentTurnCount,
-              },
-            });
+          : isManualMode
+            ? await captureManualSceneAssets({
+                sceneDir,
+                sceneId,
+                page: typeof getCdpPage === "function" ? await getCdpPage("chatgpt", true).catch(() => null) : null,
+                requestArtifact: requestFiles.nv1,
+                nv2RequestArtifact: requestFiles.nv2,
+                options,
+              })
+            : await generateImageAndMotionWithChatGPT({
+                imagePrompt: "",
+                requestArtifact: requestFiles.nv1,
+                sceneDir,
+                sceneId,
+                referenceImagePaths,
+                options: {
+                  ...options,
+                  beforeAssistantCount,
+                  beforeImageAgentTurnCount,
+                },
+              });
       assertPipelineRunActive(runId);
       imagePath = chatGptResult.imagePath;
       options.__nv1Succeeded = true;
@@ -1713,17 +1728,19 @@ async function runScenePipelineLockedInternal(_event, options) {
       keyframePath: imagePath,
       motionPromptPath: existingMotionPromptPath,
     }).catch(() => null);
-    motionPrompt = await generateMotionPromptWithChatGPT({
-      imagePath,
-      prompt: "",
-      requestArtifact: requestFiles.nv2,
-      sceneDir,
-      sceneId,
-      sceneText,
-      chatContextTitle: "",
-      keyframeMotionPromptOnly,
-      runId,
-    });
+    motionPrompt = (isManualMode && chatGptResult?.motionPrompt)
+      ? chatGptResult.motionPrompt
+      : await generateMotionPromptWithChatGPT({
+          imagePath,
+          prompt: "",
+          requestArtifact: requestFiles.nv2,
+          sceneDir,
+          sceneId,
+          sceneText,
+          chatContextTitle: "",
+          keyframeMotionPromptOnly,
+          runId,
+        });
     const generatedMotionValidation = validateMotionPromptTextContent(
       motionPrompt,
     );
