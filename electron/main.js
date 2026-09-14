@@ -2322,6 +2322,37 @@ async function openSceneFolderHandler(_event, folderPath) {
   }
 }
 
+let isMiniBarActive = false;
+let savedNormalBounds = { width: 1320, height: 900 };
+
+async function toggleMiniBarHandler(_event) {
+  const win = globalThis.__vidoraMainWindow;
+  if (!win || win.isDestroyed()) return { ok: false, error: "no-window" };
+
+  isMiniBarActive = !isMiniBarActive;
+  if (isMiniBarActive) {
+    const currentBounds = win.getBounds();
+    savedNormalBounds = { width: currentBounds.width, height: currentBounds.height };
+    win.setAlwaysOnTop(true, "floating");
+    win.setMinimumSize(380, 240);
+    win.setSize(440, 290);
+    win.webContents.send("window:mini-bar-state-changed", { active: true });
+  } else {
+    win.setAlwaysOnTop(false);
+    win.setMinimumSize(1100, 720);
+    win.setSize(savedNormalBounds.width || 1320, savedNormalBounds.height || 900);
+    win.webContents.send("window:mini-bar-state-changed", { active: false });
+  }
+  return { ok: true, isMiniBarActive };
+}
+
+async function setAlwaysOnTopHandler(_event, flag) {
+  const win = globalThis.__vidoraMainWindow;
+  if (!win || win.isDestroyed()) return { ok: false, error: "no-window" };
+  win.setAlwaysOnTop(Boolean(flag));
+  return { ok: true, alwaysOnTop: Boolean(flag) };
+}
+
 function normalizeWebProvider(provider) {
   return "chatgpt";
 }
@@ -5454,6 +5485,8 @@ app.whenReady().then(() => {
       manualGetSceneAuditHandler,
       manualDetectProgressHandler,
       manualCopyPromptHandler,
+      toggleMiniBarHandler,
+      setAlwaysOnTopHandler,
       openSceneFolderHandler,
       sendPromptViaWeb,
       runScenePipeline,

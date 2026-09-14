@@ -42,6 +42,13 @@ contextBridge.exposeInMainWorld('videoPlannerAPI', {
     ipcRenderer.on('pipeline:manual-step-changed', listener);
     return () => ipcRenderer.removeListener('pipeline:manual-step-changed', listener);
   },
+  toggleMiniBar: () => ipcRenderer.invoke('window:toggle-mini-bar'),
+  setAlwaysOnTop: (flag) => ipcRenderer.invoke('window:set-always-on-top', flag),
+  onMiniBarStateChanged: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on('window:mini-bar-state-changed', listener);
+    return () => ipcRenderer.removeListener('window:mini-bar-state-changed', listener);
+  },
   getManualStatus: (payload) => ipcRenderer.invoke('chatgpt:manual-get-status', payload),
   cancelManualStage: (payload) => ipcRenderer.invoke('chatgpt:manual-cancel-stage', payload),
   getManualSceneAudit: (payload) => ipcRenderer.invoke('chatgpt:manual-get-scene-audit', payload),

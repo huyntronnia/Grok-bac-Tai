@@ -60,6 +60,7 @@ function createMainWindow() {
   });
 
   mainWindow.loadFile(path.join(electronDir, "index.html"));
+  globalThis.__vidoraMainWindow = mainWindow;
   let closeAllowed = false;
   let closeHandshake = null;
   const finishClose = () => {

@@ -32,6 +32,8 @@ function initIpcHandlers(runtime) {
     manualGetSceneAuditHandler,
     manualDetectProgressHandler,
     manualCopyPromptHandler,
+    toggleMiniBarHandler,
+    setAlwaysOnTopHandler,
     openSceneFolderHandler,
     sendPromptViaWeb,
     runScenePipeline,
@@ -152,6 +154,14 @@ function initIpcHandlers(runtime) {
   ipcMain.handle(
     "pipeline:manual-copy-prompt",
     safeIpcHandler(manualCopyPromptHandler),
+  );
+  ipcMain.handle(
+    "window:toggle-mini-bar",
+    safeIpcHandler(toggleMiniBarHandler),
+  );
+  ipcMain.handle(
+    "window:set-always-on-top",
+    safeIpcHandler(setAlwaysOnTopHandler),
   );
   ipcMain.handle(
     "shell:open-folder",

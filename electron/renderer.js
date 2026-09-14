@@ -2319,6 +2319,9 @@ const scenes = project?.scenes || [];
   if (typeof updateManualProjectProgressUI === 'function') {
     updateManualProjectProgressUI();
   }
+  if (typeof renderStoryboardUI === 'function') {
+    renderStoryboardUI();
+  }
 }
 
 async function handleTableClick(event) {
@@ -4393,6 +4396,49 @@ function updateScanButtonVisibility() {
     return project.scenes.find((s) => s.id === Number(manualSelectedSceneId)) || project.scenes[0];
   }
 
+  function showToast(message, type = 'info', duration = 3000) {
+    let container = document.querySelector('#toast-container');
+    if (!container) {
+      container = document.createElement('div');
+      container.id = 'toast-container';
+      container.className = 'toast-container';
+      document.body.appendChild(container);
+    }
+
+    const toast = document.createElement('div');
+    toast.className = `toast ${type}`;
+    
+    const iconMap = {
+      success: '✓',
+      error: '✕',
+      warning: '⚠️',
+      info: 'ℹ️',
+    };
+    const icon = iconMap[type] || 'ℹ️';
+
+    toast.innerHTML = `
+      <span class="toast-icon">${icon}</span>
+      <div class="toast-content">${typeof escapeHtml === 'function' ? escapeHtml(message) : message}</div>
+    `;
+
+    container.appendChild(toast);
+
+    const removeToast = () => {
+      if (toast.classList.contains('toast-hiding')) return;
+      toast.classList.add('toast-hiding');
+      setTimeout(() => {
+        toast.remove();
+      }, 250);
+    };
+
+    toast.addEventListener('click', removeToast);
+    if (duration > 0) {
+      setTimeout(removeToast, duration);
+    }
+    return toast;
+  }
+  window.showToast = showToast;
+
   async function copyTextToClipboard(text, btnElement) {
     if (!text) return false;
     try {
@@ -4415,9 +4461,10 @@ function updateScanButtonVisibility() {
           btnElement.classList.remove('copied');
         }, 2000);
       }
+      showToast('Đã sao chép prompt vào Clipboard!', 'success', 2000);
       return true;
     } catch (err) {
-      alert(`Không thể sao chép: ${err.message}`);
+      showToast(`Không thể sao chép: ${err.message}`, 'error');
       return false;
     }
   }
@@ -4580,27 +4627,92 @@ function updateScanButtonVisibility() {
       }
     }
 
-    // Stepper
+    // In-place Preview & Re-capture for NV1
+    const nv1PreviewWrap = document.querySelector('#manual-nv1-preview-wrap');
+    const nv1ImgPreview = document.querySelector('#manual-nv1-img-preview');
+    const nv1RecaptureBtn = document.querySelector('#manual-recapture-nv1-btn');
+    const nv1ZoomBtn = document.querySelector('#manual-zoom-nv1-btn');
+    
+    let keyframeMediaSrc = '';
+    if (audit?.keyframe?.path) {
+      keyframeMediaSrc = audit.keyframe.url || (audit.keyframe.path.startsWith('data:') ? audit.keyframe.path : `file:///${audit.keyframe.path.replaceAll('\\', '/')}`);
+    } else if (scene.imagePath) {
+      keyframeMediaSrc = scene.imagePath.startsWith('data:') ? scene.imagePath : `file:///${scene.imagePath.replaceAll('\\', '/')}`;
+    }
+
+    if (nv1PreviewWrap) {
+      if (hasKeyframe && keyframeMediaSrc) {
+        nv1PreviewWrap.style.display = 'block';
+        if (nv1ImgPreview) nv1ImgPreview.src = keyframeMediaSrc;
+        if (nv1RecaptureBtn) nv1RecaptureBtn.style.display = 'inline-block';
+        if (nv1ZoomBtn) {
+          nv1ZoomBtn.onclick = () => {
+            if (typeof openLightbox === 'function') {
+              openLightbox(keyframeMediaSrc, `Keyframe Scene ${scene.id}`);
+            }
+          };
+        }
+      } else {
+        nv1PreviewWrap.style.display = 'none';
+        if (nv1RecaptureBtn) nv1RecaptureBtn.style.display = 'none';
+      }
+    }
+
+    // In-place Preview & Re-capture for NV2
+    const nv2PreviewWrap = document.querySelector('#manual-nv2-preview-wrap');
+    const nv2TextPreview = document.querySelector('#manual-nv2-text-preview');
+    const nv2RecaptureBtn = document.querySelector('#manual-recapture-nv2-btn');
+    const motionPromptText = audit?.motionPrompt?.content || scene.motionPrompt || '';
+
+    if (nv2PreviewWrap) {
+      if (hasMotion && motionPromptText) {
+        nv2PreviewWrap.style.display = 'block';
+        if (nv2TextPreview) nv2TextPreview.textContent = motionPromptText;
+        if (nv2RecaptureBtn) nv2RecaptureBtn.style.display = 'inline-block';
+      } else {
+        nv2PreviewWrap.style.display = 'none';
+        if (nv2RecaptureBtn) nv2RecaptureBtn.style.display = 'none';
+      }
+    }
+
+    // Stepper 4 nấc trực quan (Prep -> NV1 -> NV2 -> VeoUp)
+    const stepPrep = document.querySelector('#manual-step-prep');
     const stepNv1 = document.querySelector('#manual-step-nv1');
     const stepNv2 = document.querySelector('#manual-step-nv2');
-    const stepDone = document.querySelector('#manual-step-done');
+    const stepVeoup = document.querySelector('#manual-step-veoup');
     const sceneStatusBadge = document.querySelector('#manual-scene-status-badge');
 
+    const hasPrompt = Boolean(scene.imagePrompt || scene.original);
+
+    if (stepPrep) {
+      stepPrep.className = hasPrompt ? 'manual-step completed done' : 'manual-step active';
+    }
     if (stepNv1) {
-      stepNv1.className = hasKeyframe ? 'manual-step done' : 'manual-step active';
+      if (hasKeyframe) {
+        stepNv1.className = 'manual-step completed done';
+      } else if (hasPrompt) {
+        stepNv1.className = 'manual-step active';
+      } else {
+        stepNv1.className = 'manual-step';
+      }
     }
     if (stepNv2) {
       if (hasMotion) {
-        stepNv2.className = 'manual-step done';
+        stepNv2.className = 'manual-step completed done';
       } else if (hasKeyframe) {
         stepNv2.className = 'manual-step active';
       } else {
         stepNv2.className = 'manual-step';
       }
     }
-    if (stepDone) {
-      stepDone.className = (hasKeyframe && hasMotion) ? 'manual-step done' : 'manual-step';
+    if (stepVeoup) {
+      if (hasKeyframe && hasMotion) {
+        stepVeoup.className = 'manual-step completed done';
+      } else {
+        stepVeoup.className = 'manual-step';
+      }
     }
+
     if (sceneStatusBadge) {
       if (hasKeyframe && hasMotion) {
         sceneStatusBadge.className = 'status-badge approved';
@@ -4615,6 +4727,9 @@ function updateScanButtonVisibility() {
     }
 
     updateManualProjectProgressUI();
+    if (typeof renderStoryboardUI === 'function') {
+      renderStoryboardUI();
+    }
   }
 
   function startManualWatcher() {
@@ -4859,6 +4974,7 @@ function updateScanButtonVisibility() {
         if (statusLabel) statusLabel.textContent = `✓ Đã lưu ${result.filePath}`;
         safeAddPipelineLog('manual-gpt', 'ok', `[Scene ${scene.id} - NV1] ✓ Đã lưu keyframe thành công: ${result.filePath} (${formatFileSize(result.size)})`);
         setStatus(`Scene ${scene.id}: Đã lưu ảnh keyframe! Hãy dán prompt NV2 tiếp theo.`, 'ok');
+        showToast(`Scene ${scene.id}: Đã lưu ảnh keyframe thành công!`, 'success');
         markProjectDirty();
         persist();
         render();
@@ -4866,6 +4982,7 @@ function updateScanButtonVisibility() {
       } else {
         if (statusLabel) statusLabel.textContent = `❌ ${result?.reason || result?.error || 'thất bại'}`;
         safeAddPipelineLog('manual-gpt', 'warning', `[Scene ${scene.id} - NV1] Lưu keyframe thất bại: ${result?.reason || result?.error}`);
+        showToast(`Lưu keyframe thất bại: ${result?.reason || result?.error || 'lỗi'}`, 'error');
       }
     });
 
@@ -4895,6 +5012,7 @@ function updateScanButtonVisibility() {
         if (statusLabel) statusLabel.textContent = `✓ Đã lưu ${result.filePath}`;
         safeAddPipelineLog('manual-gpt', 'ok', `[Scene ${scene.id} - NV2] ✓ Đã lưu motion prompt thành công: ${result.filePath} (${result.length} ký tự).`);
         setStatus(`Scene ${scene.id}: Đã lưu motion prompt thành công!`, 'ok');
+        showToast(`Scene ${scene.id}: Đã lưu motion prompt thành công!`, 'success');
         markProjectDirty();
         persist();
         render();
@@ -4902,7 +5020,19 @@ function updateScanButtonVisibility() {
       } else {
         if (statusLabel) statusLabel.textContent = `❌ ${result?.reason || result?.error || 'thất bại'}`;
         safeAddPipelineLog('manual-gpt', 'warning', `[Scene ${scene.id} - NV2] Lưu motion prompt thất bại: ${result?.reason || result?.error}`);
+        showToast(`Lưu motion prompt thất bại: ${result?.reason || result?.error || 'lỗi'}`, 'error');
       }
+    });
+
+    // Re-capture buttons
+    document.querySelector('#manual-recapture-nv1-btn')?.addEventListener('click', () => {
+      showToast('Đang bắt lại keyframe...', 'info');
+      document.querySelector('#manual-capture-nv1-btn')?.click();
+    });
+
+    document.querySelector('#manual-recapture-nv2-btn')?.addEventListener('click', () => {
+      showToast('Đang bắt lại motion prompt...', 'info');
+      document.querySelector('#manual-capture-nv2-btn')?.click();
     });
 
     // Step Guidance & Force Capture Buttons
@@ -4955,6 +5085,7 @@ function updateScanButtonVisibility() {
       await syncProjectSceneFolders({ repairFromDisk: true }).catch(() => null);
       await renderManualChatGptUI();
       setStatus('Đã hoàn tất quét đĩa.', 'ok');
+      showToast('Đã hoàn tất quét và đồng bộ output từ ổ đĩa.', 'success');
     });
 
     document.querySelector('#manual-open-scene-folder-btn')?.addEventListener('click', async () => {
@@ -4964,6 +5095,270 @@ function updateScanButtonVisibility() {
       const separator = outputFolder.includes('\\') ? '\\' : '/';
       const sceneFolderPath = `${outputFolder}${separator}${sceneToken}`;
       await window.videoPlannerAPI?.openSceneFolder(sceneFolderPath).catch(() => null);
+    });
+
+    // --- UI/UX Modernization: Lightbox Modal ---
+    function openLightbox(mediaSrc, caption = '') {
+      const modal = document.querySelector('#asset-lightbox-modal');
+      const mediaContainer = document.querySelector('#lightbox-media');
+      const captionEl = document.querySelector('#lightbox-caption');
+      if (!modal || !mediaContainer) return;
+
+      if (mediaSrc.endsWith('.mp4') || mediaSrc.endsWith('.webm')) {
+        mediaContainer.innerHTML = `<video src="${mediaSrc}" controls autoplay style="max-width: 85vw; max-height: 70vh;"></video>`;
+      } else {
+        mediaContainer.innerHTML = `<img src="${mediaSrc}" alt="Asset Preview" style="max-width: 85vw; max-height: 70vh; object-fit: contain;" />`;
+      }
+
+      if (captionEl) {
+        captionEl.textContent = caption;
+        captionEl.style.display = caption ? 'block' : 'none';
+      }
+
+      if (typeof modal.showModal === 'function') {
+        modal.showModal();
+      } else {
+        modal.setAttribute('open', '');
+      }
+    }
+
+    function closeLightbox() {
+      const modal = document.querySelector('#asset-lightbox-modal');
+      if (!modal) return;
+      if (typeof modal.close === 'function') {
+        modal.close();
+      } else {
+        modal.removeAttribute('open');
+      }
+      const mediaContainer = document.querySelector('#lightbox-media');
+      if (mediaContainer) mediaContainer.innerHTML = '';
+    }
+
+    document.querySelector('#lightbox-close-btn')?.addEventListener('click', closeLightbox);
+    document.querySelector('#asset-lightbox-modal .lightbox-backdrop')?.addEventListener('click', closeLightbox);
+    document.querySelector('#asset-lightbox-modal')?.addEventListener('click', (e) => {
+      if (e.target.id === 'asset-lightbox-modal') closeLightbox();
+    });
+
+    // --- UI/UX Modernization: Storyboard Grid & Table View ---
+    function renderStoryboardUI() {
+      const gridContainer = document.querySelector('#storyboard-grid-container');
+      const tableBody = document.querySelector('#storyboard-table-body');
+      if (!gridContainer || !tableBody) return;
+
+      if (!project?.scenes?.length) {
+        gridContainer.innerHTML = '<div class="storyboard-empty-state">Chưa có scene nào trong project. Vui lòng tạo hoặc mở project.</div>';
+        tableBody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: #94a3b8;">Chưa có dữ liệu scene</td></tr>';
+        return;
+      }
+
+      let gridHtml = '';
+      let tableHtml = '';
+
+      project.scenes.forEach((scene) => {
+        const hasImage = Boolean(scene.imagePath || scene.keyframePath);
+        const hasMotion = Boolean(scene.motionPrompt || scene.motionPromptPath);
+        
+        let statusClass = 'pending';
+        let statusLabel = '⚪ Chưa bắt đầu';
+        if (hasImage && hasMotion) {
+          statusClass = 'ready';
+          statusLabel = '✓ Sẵn sàng';
+        } else if (hasImage) {
+          statusClass = 'pending';
+          statusLabel = '⏳ Thiếu NV2';
+        }
+
+        let imageSrc = '';
+        if (scene.imagePath || scene.keyframePath) {
+          const rawPath = scene.imagePath || scene.keyframePath;
+          imageSrc = rawPath.startsWith('data:') ? rawPath : `file:///${String(rawPath).replaceAll('\\', '/')}`;
+        }
+
+        const promptText = scene.imagePrompt || scene.original || 'Chưa có prompt';
+        const motionText = scene.motionPrompt || 'Chưa có motion prompt';
+
+        // Grid card
+        gridHtml += `
+          <div class="storyboard-card ${Number(manualSelectedSceneId) === scene.id ? 'active-card' : ''}" data-scene-id="${scene.id}">
+            <div class="storyboard-card-thumb-wrap" data-thumb-src="${imageSrc}" data-scene-title="Scene ${scene.id}">
+              ${imageSrc
+                ? `<img class="storyboard-card-thumb" src="${imageSrc}" alt="Scene ${scene.id} Thumbnail" loading="lazy" />`
+                : `<div class="storyboard-card-placeholder"><span>🎬</span><span>Chưa có ảnh NV1</span></div>`
+              }
+              <span class="storyboard-card-badge">Scene ${scene.id}</span>
+              <span class="storyboard-card-status-badge ${statusClass}">${statusLabel}</span>
+            </div>
+            <div class="storyboard-card-body">
+              <h4 class="storyboard-card-title">Scene ${scene.id}</h4>
+              <div class="storyboard-card-prompt-snippet" title="${escapeHtml(promptText)}"><strong>NV1:</strong> ${escapeHtml(promptText)}</div>
+              <div class="storyboard-card-prompt-snippet" title="${escapeHtml(motionText)}"><strong>NV2:</strong> ${escapeHtml(motionText)}</div>
+              <div class="storyboard-card-actions">
+                <button class="ghost mini storyboard-select-btn" data-scene-id="${scene.id}" type="button">🎯 Chọn Scene</button>
+                <div style="display: flex; gap: 4px;">
+                  <button class="ghost mini storyboard-quick-nv1-btn" data-scene-id="${scene.id}" type="button" title="Copy Prompt NV1">📋 NV1</button>
+                  <button class="ghost mini storyboard-quick-nv2-btn" data-scene-id="${scene.id}" type="button" title="Copy Prompt NV2">📋 NV2</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        `;
+
+        // Table row
+        tableHtml += `
+          <tr>
+            <td><strong>Scene ${scene.id}</strong></td>
+            <td>
+              ${imageSrc
+                ? `<img src="${imageSrc}" alt="Scene ${scene.id}" style="width: 56px; height: 32px; object-fit: cover; border-radius: 4px; cursor: pointer;" class="table-thumb" data-thumb-src="${imageSrc}" data-scene-title="Scene ${scene.id}" />`
+                : `<span style="color: #64748b; font-size: 11px;">Chưa có ảnh</span>`
+              }
+            </td>
+            <td style="max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeHtml(promptText)}">${escapeHtml(promptText)}</td>
+            <td style="max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeHtml(motionText)}">${escapeHtml(motionText)}</td>
+            <td><span class="storyboard-card-status-badge ${statusClass}" style="position: static;">${statusLabel}</span></td>
+            <td>
+              <button class="ghost mini storyboard-select-btn" data-scene-id="${scene.id}" type="button">🎯 Chọn</button>
+            </td>
+          </tr>
+        `;
+      });
+
+      gridContainer.innerHTML = gridHtml;
+      tableBody.innerHTML = tableHtml;
+
+      // Bind event handlers
+      gridContainer.querySelectorAll('.storyboard-card-thumb-wrap').forEach((wrap) => {
+        wrap.addEventListener('click', () => {
+          const src = wrap.dataset.thumbSrc;
+          const title = wrap.dataset.sceneTitle;
+          if (src) openLightbox(src, title);
+        });
+      });
+
+      tableBody.querySelectorAll('.table-thumb').forEach((thumb) => {
+        thumb.addEventListener('click', () => {
+          const src = thumb.dataset.thumbSrc;
+          const title = thumb.dataset.sceneTitle;
+          if (src) openLightbox(src, title);
+        });
+      });
+
+      document.querySelectorAll('.storyboard-select-btn').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          const sceneId = Number(btn.dataset.sceneId);
+          if (sceneId) {
+            manualSelectedSceneId = sceneId;
+            const select = document.querySelector('#manual-scene-select');
+            if (select) select.value = String(sceneId);
+            await renderManualChatGptUI();
+            showToast(`Đã chuyển sang Scene ${sceneId}`, 'info');
+            document.querySelector('#manual-chatgpt-section')?.scrollIntoView({ behavior: 'smooth' });
+          }
+        });
+      });
+
+      gridContainer.querySelectorAll('.storyboard-quick-nv1-btn').forEach((btn) => {
+        btn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          const sceneId = Number(btn.dataset.sceneId);
+          const scene = project?.scenes?.find((s) => s.id === sceneId);
+          if (scene) {
+            const text = scene.imagePrompt || scene.original || '';
+            await copyTextToClipboard(text, btn);
+            showToast(`Scene ${sceneId}: Đã copy prompt NV1!`, 'success');
+          }
+        });
+      });
+
+      gridContainer.querySelectorAll('.storyboard-quick-nv2-btn').forEach((btn) => {
+        btn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          const sceneId = Number(btn.dataset.sceneId);
+          const scene = project?.scenes?.find((s) => s.id === sceneId);
+          if (scene) {
+            const text = scene.motionPrompt || '';
+            await copyTextToClipboard(text, btn);
+            showToast(`Scene ${sceneId}: Đã copy prompt NV2!`, 'success');
+          }
+        });
+      });
+    }
+
+    // Storyboard View Switcher
+    const gridViewBtn = document.querySelector('#view-mode-grid-btn');
+    const tableViewBtn = document.querySelector('#view-mode-table-btn');
+    const gridContainerEl = document.querySelector('#storyboard-grid-container');
+    const tableContainerEl = document.querySelector('#storyboard-table-container');
+
+    gridViewBtn?.addEventListener('click', () => {
+      gridViewBtn.classList.add('active');
+      tableViewBtn?.classList.remove('active');
+      if (gridContainerEl) gridContainerEl.style.display = 'grid';
+      if (tableContainerEl) tableContainerEl.style.display = 'none';
+    });
+
+    tableViewBtn?.addEventListener('click', () => {
+      tableViewBtn.classList.add('active');
+      gridViewBtn?.classList.remove('active');
+      if (gridContainerEl) gridContainerEl.style.display = 'none';
+      if (tableContainerEl) tableContainerEl.style.display = 'block';
+    });
+
+    // Floating Mini-Bar Mode
+    const toggleMiniBarBtn = document.querySelector('#toggle-mini-bar-btn');
+    toggleMiniBarBtn?.addEventListener('click', async () => {
+      try {
+        const res = await window.videoPlannerAPI?.toggleMiniBar();
+        if (res && !res.ok && res.error) {
+          showToast(`Không thể bật mini-bar: ${res.error}`, 'error');
+        }
+      } catch (err) {
+        showToast(`Lỗi mini-bar: ${err.message}`, 'error');
+      }
+    });
+
+    window.videoPlannerAPI?.onMiniBarStateChanged?.((data) => {
+      if (data?.active) {
+        document.body.classList.add('mini-bar-mode');
+        if (toggleMiniBarBtn) toggleMiniBarBtn.textContent = '🔲 Mở rộng Cửa sổ';
+        showToast('Đã chuyển sang chế độ Mini-Bar nổi (Alt+Space)', 'info');
+      } else {
+        document.body.classList.remove('mini-bar-mode');
+        if (toggleMiniBarBtn) toggleMiniBarBtn.textContent = '📌 Ghim Mini-Bar';
+        showToast('Đã khôi phục giao diện tiêu chuẩn', 'info');
+      }
+    });
+
+    // Global Hotkeys
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        const lightboxModal = document.querySelector('#asset-lightbox-modal');
+        if (lightboxModal?.hasAttribute('open')) {
+          closeLightbox();
+          e.preventDefault();
+          return;
+        }
+      }
+
+      if (e.altKey && !e.ctrlKey && !e.metaKey) {
+        if (e.key === '1') {
+          e.preventDefault();
+          document.querySelector('#manual-copy-nv1-btn')?.click();
+        } else if (e.key === '2') {
+          e.preventDefault();
+          document.querySelector('#manual-copy-nv2-btn')?.click();
+        } else if (e.key === 'k' || e.key === 'K') {
+          e.preventDefault();
+          document.querySelector('#manual-capture-nv1-btn')?.click();
+        } else if (e.key === 'm' || e.key === 'M') {
+          e.preventDefault();
+          document.querySelector('#manual-capture-nv2-btn')?.click();
+        } else if (e.code === 'Space' || e.key === ' ') {
+          e.preventDefault();
+          document.querySelector('#toggle-mini-bar-btn')?.click();
+        }
+      }
     });
 
     // Initial render

@@ -297,29 +297,37 @@
               </div>
             </div>
 
-            <!-- Stepper Progress Tracker -->
+            <!-- Stepper Progress Tracker (4 nấc trực quan) -->
             <div class="manual-stepper-tracker">
-              <div id="manual-step-nv1" class="manual-step active">
+              <div id="manual-step-prep" class="manual-step active">
                 <div class="step-num">1</div>
                 <div class="step-content">
-                  <div class="step-title">NV1: Keyframe Image</div>
-                  <div class="step-desc">Gửi prompt ảnh & Lưu file</div>
+                  <div class="step-title">1. Chuẩn Bị Prompt</div>
+                  <div class="step-desc">Đọc & Copy prompt</div>
+                </div>
+              </div>
+              <div class="manual-step-divider"></div>
+              <div id="manual-step-nv1" class="manual-step">
+                <div class="step-num">2</div>
+                <div class="step-content">
+                  <div class="step-title">2. Keyframe NV1</div>
+                  <div class="step-desc">Tạo ảnh & Bắt keyframe</div>
                 </div>
               </div>
               <div class="manual-step-divider"></div>
               <div id="manual-step-nv2" class="manual-step">
-                <div class="step-num">2</div>
+                <div class="step-num">3</div>
                 <div class="step-content">
-                  <div class="step-title">NV2: Motion Prompt</div>
-                  <div class="step-desc">Gửi prompt motion & Lưu file</div>
+                  <div class="step-title">3. Motion NV2</div>
+                  <div class="step-desc">Tạo prompt chuyển động</div>
                 </div>
               </div>
               <div class="manual-step-divider"></div>
-              <div id="manual-step-done" class="manual-step">
-                <div class="step-num">✓</div>
+              <div id="manual-step-veoup" class="manual-step">
+                <div class="step-num">4</div>
                 <div class="step-content">
-                  <div class="step-title">Hoàn Tất Scene</div>
-                  <div class="step-desc">Đã lưu đủ 2 outputs trên đĩa</div>
+                  <div class="step-title">4. Sẵn Sàng VeoUp</div>
+                  <div class="step-desc">Nạp batch ghép video</div>
                 </div>
               </div>
             </div>
@@ -335,11 +343,18 @@
                 <label class="prompt-label" for="manual-nv1-prompt-preview">Prompt Tạo Ảnh (Sao chép & dán vào ChatGPT):</label>
                 <div class="prompt-preview-wrap">
                   <textarea id="manual-nv1-prompt-preview" class="manual-prompt-textarea" readonly rows="4" placeholder="Nội dung prompt tạo ảnh..."></textarea>
-                  <button id="manual-copy-nv1-btn" class="ghost small copy-overlay-btn" type="button">📋 Sao chép Prompt</button>
+                  <button id="manual-copy-nv1-btn" class="ghost small copy-overlay-btn" type="button">📋 Sao chép Prompt (Alt+1)</button>
+                </div>
+                <div id="manual-nv1-preview-wrap" class="manual-asset-preview-wrap" style="display: none; margin-top: 8px;">
+                  <div class="preview-img-container" style="position: relative; border-radius: 6px; overflow: hidden; max-height: 180px; border: 1px solid rgba(255,255,255,0.15);">
+                    <img id="manual-nv1-img-preview" src="" alt="Keyframe Preview" style="width: 100%; height: auto; display: block; object-fit: cover;" />
+                    <button id="manual-zoom-nv1-btn" class="ghost mini zoom-btn" type="button" style="position: absolute; top: 6px; right: 6px; background: rgba(0,0,0,0.7); cursor: pointer;">🔍 Xem lớn</button>
+                  </div>
                 </div>
                 <div class="stage-actions-row">
                   <button id="manual-start-nv1-btn" class="ghost small" type="button" style="display:none;">Start NV1</button>
-                  <button id="manual-capture-nv1-btn" class="primary small" type="button">📸 Chụp & Lưu Keyframe</button>
+                  <button id="manual-capture-nv1-btn" class="primary small" type="button">📸 Chụp & Lưu Keyframe (Alt+K)</button>
+                  <button id="manual-recapture-nv1-btn" class="ghost danger small" type="button" style="display: none;" title="Bắt lại và ghi đè ảnh mới">🔄 Bắt lại ảnh</button>
                   <span id="manual-nv1-status" class="status-indicator">Chờ gửi prompt</span>
                 </div>
                 <div class="stage-disk-badge" id="manual-nv1-disk-badge">
@@ -356,11 +371,17 @@
                 <label class="prompt-label" for="manual-nv2-prompt-preview">Prompt Tạo Motion (Sao chép & dán vào ChatGPT):</label>
                 <div class="prompt-preview-wrap">
                   <textarea id="manual-nv2-prompt-preview" class="manual-prompt-textarea" readonly rows="4" placeholder="Nội dung prompt tạo motion..."></textarea>
-                  <button id="manual-copy-nv2-btn" class="ghost small copy-overlay-btn" type="button">📋 Sao chép Prompt</button>
+                  <button id="manual-copy-nv2-btn" class="ghost small copy-overlay-btn" type="button">📋 Sao chép Prompt (Alt+2)</button>
+                </div>
+                <div id="manual-nv2-preview-wrap" class="manual-asset-preview-wrap" style="display: none; margin-top: 8px;">
+                  <div class="preview-text-box" style="padding: 8px 10px; background: rgba(0,0,0,0.3); border-radius: 6px; border: 1px solid rgba(255,255,255,0.08); font-family: monospace; font-size: 0.82rem; max-height: 120px; overflow-y: auto;">
+                    <pre id="manual-nv2-text-preview" style="margin: 0; white-space: pre-wrap;"></pre>
+                  </div>
                 </div>
                 <div class="stage-actions-row">
                   <button id="manual-start-nv2-btn" class="ghost small" type="button" style="display:none;">Start NV2</button>
-                  <button id="manual-capture-nv2-btn" class="primary small" type="button">📝 Lấy & Lưu Motion Prompt</button>
+                  <button id="manual-capture-nv2-btn" class="primary small" type="button">📝 Lấy & Lưu Motion Prompt (Alt+M)</button>
+                  <button id="manual-recapture-nv2-btn" class="ghost danger small" type="button" style="display: none;" title="Bắt lại phản hồi văn bản mới">🔄 Bắt lại text</button>
                   <span id="manual-nv2-status" class="status-indicator">Chờ gửi prompt</span>
                 </div>
                 <div class="stage-disk-badge" id="manual-nv2-disk-badge">
@@ -493,6 +514,46 @@
           Dừng tool
         </button>
         <p id="review-inline-status">Chưa có asset cần review.</p>
+      </section>
+
+      <!-- Storyboard & Scene Explorer Section -->
+      <section id="storyboard-section" class="panel storyboard-panel" aria-labelledby="storyboard-title">
+        <div class="panel-head split">
+          <div>
+            <span class="preview-label">Visual Project Explorer</span>
+            <h2 id="storyboard-title">Storyboard & Quản Lý Scene</h2>
+            <p>Khám phá trực quan các scene, thumbnail keyframe, prompt và trạng thái pipeline.</p>
+          </div>
+          <div class="view-mode-toolbar">
+            <button id="view-mode-grid-btn" class="ghost small view-mode-btn active" type="button" title="Hiển thị dạng thẻ lưới Storyboard">🎬 Storyboard Grid</button>
+            <button id="view-mode-table-btn" class="ghost small view-mode-btn" type="button" title="Hiển thị dạng bảng danh sách">📋 Bảng Dữ Liệu</button>
+            <button id="toggle-mini-bar-btn" class="ghost primary small mini-bar-toggle-btn" type="button" title="Thu nhỏ thành thanh nổi góc màn hình (Alt+Space)">📌 Ghim Mini-Bar</button>
+          </div>
+        </div>
+
+        <!-- Grid View Container -->
+        <div id="storyboard-grid-container" class="storyboard-grid-container">
+          <div class="storyboard-empty-state">Chưa có scene nào trong project. Vui lòng tạo hoặc mở project.</div>
+        </div>
+
+        <!-- Table View Container -->
+        <div id="storyboard-table-container" class="storyboard-table-container" style="display: none;">
+          <table class="storyboard-table">
+            <thead>
+              <tr>
+                <th>Scene</th>
+                <th>Thumbnail</th>
+                <th>Tóm tắt Image Prompt</th>
+                <th>Motion Prompt</th>
+                <th>Trạng thái</th>
+                <th>Thao tác</th>
+              </tr>
+            </thead>
+            <tbody id="storyboard-table-body">
+              <tr><td colspan="6" style="text-align: center; color: #94a3b8;">Chưa có dữ liệu scene</td></tr>
+            </tbody>
+          </table>
+        </div>
       </section>
 
       <section
@@ -1154,6 +1215,20 @@
           <button class="ghost" value="cancel" type="submit">Hủy</button>
         </div>
       </form>
+    <!-- Toast Notification Container -->
+    <div id="toast-container" class="toast-container" aria-live="polite"></div>
+
+    <!-- Asset Lightbox Modal -->
+    <dialog id="asset-lightbox-modal" class="asset-lightbox-modal">
+      <div class="lightbox-backdrop"></div>
+      <div class="lightbox-card">
+        <div class="lightbox-header">
+          <h3 id="lightbox-title">Xem trước Asset</h3>
+          <button id="lightbox-close-btn" class="icon-btn" type="button" title="Đóng modal (Esc)">✕</button>
+        </div>
+        <div id="lightbox-media" class="lightbox-media"></div>
+        <div id="lightbox-caption" class="lightbox-caption"></div>
+      </div>
     </dialog>
 
     <script src="renderer.js"></script>
