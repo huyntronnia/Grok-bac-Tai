@@ -179,6 +179,7 @@ const {
   waitForChatGptResponse,
   hydrateFreshChatGptContextAfterRotation,
   clearAllChatGptPipelineLocks,
+  manualChatGptController,
 } = require("./main/chatgpt");
 
 const {
@@ -2265,12 +2266,16 @@ async function openFreshChatGptHandler() {
 
 async function manualStartStageHandler(_event, payload = {}) {
   const { projectPath, sceneId, stage } = payload || {};
-  return manualChatGptController.startManualStage(projectPath, sceneId, stage, { getCdpPage });
+  return manualChatGptController.startManualStage(projectPath, sceneId, stage, {
+    getCdpPage: () => getCdpPage("chatgpt", true),
+  });
 }
 
 async function manualCaptureStageHandler(_event, payload = {}) {
-  const { projectPath, sceneId, stage } = payload || {};
-  return manualChatGptController.captureManualStage(projectPath, sceneId, stage, { getCdpPage });
+  const { projectPath, sceneId, stage, options } = payload || {};
+  return manualChatGptController.captureManualStage(projectPath, sceneId, stage, {
+    getCdpPage: () => getCdpPage("chatgpt", true),
+  }, options);
 }
 
 async function manualGetStatusHandler(_event, payload = {}) {
@@ -2281,6 +2286,28 @@ async function manualGetStatusHandler(_event, payload = {}) {
 async function manualCancelStageHandler(_event, payload = {}) {
   const { projectPath, sceneId } = payload || {};
   return manualChatGptController.cancelManualStage(projectPath, sceneId);
+}
+
+async function manualGetSceneAuditHandler(_event, payload = {}) {
+  const { projectPath, sceneId } = payload || {};
+  return manualChatGptController.getManualSceneAudit(projectPath, sceneId);
+}
+
+async function manualDetectProgressHandler(_event, _payload = {}) {
+  return manualChatGptController.detectChatGPTProgress({
+    getCdpPage: () => getCdpPage("chatgpt", false, { bringToFront: false, recover: false }),
+  });
+}
+
+async function openSceneFolderHandler(_event, folderPath) {
+  if (!folderPath) return { ok: false, error: "missing-path" };
+  try {
+    const { shell } = require("electron");
+    await shell.openPath(folderPath);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
 }
 
 function normalizeWebProvider(provider) {
@@ -3750,6 +3777,30 @@ async function getCdpPage(provider, createIfMissing = true, options = {}) {
   const driverType = process.env.BROWSER_AUTOMATION_PROVIDER || "playwright";
 
   if (driverType === "playwright") {
+    const existing = globalThis.activeCdpClient;
+    if (
+      existing &&
+      existing.clientType === "playwright" &&
+      existing.browser?.isConnected() &&
+      existing.page &&
+      !existing.page.isClosed() &&
+      options.forceNew !== true
+    ) {
+      const meta = PROVIDER_META[provider] || PROVIDER_META.chatgpt;
+      const hostname = new URL(meta.url).hostname;
+      try {
+        const pageUrl = existing.page.url();
+        if (pageUrl && pageUrl.includes(hostname)) {
+          if (options.bringToFront === true) {
+            await existing.Page.bringToFront().catch(() => null);
+          }
+          return existing;
+        }
+      } catch (_e) {
+        // Fall through to reconnect
+      }
+    }
+
     await ensureChromeDebug();
     const shouldBringToFront = options.bringToFront !== false;
     const shouldRecover = options.recover !== false;
@@ -5388,6 +5439,9 @@ app.whenReady().then(() => {
       manualCaptureStageHandler,
       manualGetStatusHandler,
       manualCancelStageHandler,
+      manualGetSceneAuditHandler,
+      manualDetectProgressHandler,
+      openSceneFolderHandler,
       sendPromptViaWeb,
       runScenePipeline,
       stopPipeline,

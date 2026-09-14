@@ -255,50 +255,132 @@
           <div id="manual-chatgpt-card" class="workflow-card manual-chatgpt-card" hidden>
             <div class="card-head split">
               <div>
-                <h3>Manual ChatGPT Capture Panel</h3>
-                <p>Người dùng tự nhập và gửi prompt trong ChatGPT. Xử lý toàn bộ scene trước khi VeoUp được phép chạy.</p>
+                <h3>Chế Độ Manual ChatGPT (Tự Gửi Prompt & Tự Động Lưu File)</h3>
+                <p>Bạn tự dán và gửi prompt trên tab ChatGPT. Tool tự động bắt ảnh/text và lưu chuẩn ổ đĩa tương đương mode keyframe + motion prompt.</p>
                 <div class="manual-progress-summary" style="margin-top: 8px;">
-                  <strong>Project Progress: </strong>
-                  <span id="manual-project-progress">0 / 0 scenes ready</span> | 
+                  <strong>Tiến độ Project: </strong>
+                  <span id="manual-project-progress">0 / 0 scenes hoàn tất</span> | 
                   <strong>VeoUp Gate: </strong>
                   <span id="manual-veoup-gate-status" class="gate-status locked">LOCKED</span>
                 </div>
               </div>
-              <span id="manual-stage-badge" class="state-pill idle">Idle</span>
+              <span id="manual-stage-badge" class="state-pill idle">Chờ bắt đầu</span>
             </div>
-            <div class="manual-controls-grid">
-              <div class="manual-stage-box">
-                <strong>Request 1 (Intro)</strong>
-                <div class="btn-group">
-                  <button id="manual-start-req1-btn" class="ghost small" type="button">Start Req 1</button>
-                  <button id="manual-capture-req1-btn" class="ghost primary small" type="button">Capture Req 1</button>
-                </div>
-                <span id="manual-req1-status" class="status-label">Chưa bắt đầu</span>
+
+            <!-- Scene Navigation Bar -->
+            <div class="manual-scene-nav-bar">
+              <div class="manual-nav-group">
+                <button id="manual-prev-scene-btn" class="ghost small" type="button" title="Về scene trước">◀ Scene trước</button>
+                <select id="manual-scene-select" class="manual-scene-select" title="Chọn scene trực tiếp">
+                  <option value="1">Scene 1</option>
+                </select>
+                <button id="manual-next-scene-btn" class="ghost small" type="button" title="Sang scene sau">Scene kế tiếp ▶</button>
               </div>
-              <div class="manual-stage-box">
-                <strong>Request 2 (Continuity)</strong>
-                <div class="btn-group">
-                  <button id="manual-start-req2-btn" class="ghost small" type="button">Start Req 2</button>
-                  <button id="manual-capture-req2-btn" class="ghost primary small" type="button">Capture Req 2</button>
-                </div>
-                <span id="manual-req2-status" class="status-label">Chưa bắt đầu</span>
+              <div class="manual-scene-meta">
+                <span id="manual-current-scene-title" class="manual-scene-title">Scene 1 / 1</span>
+                <span id="manual-scene-status-badge" class="status-badge idle">Chưa hoàn thành</span>
               </div>
-              <div class="manual-stage-box">
-                <strong>NV1 (Keyframe Image)</strong>
-                <div class="btn-group">
-                  <button id="manual-start-nv1-btn" class="ghost small" type="button">Start NV1</button>
-                  <button id="manual-capture-nv1-btn" class="ghost primary small" type="button">Capture NV1</button>
+            </div>
+
+            <!-- Stepper Progress Tracker -->
+            <div class="manual-stepper-tracker">
+              <div id="manual-step-nv1" class="manual-step active">
+                <div class="step-num">1</div>
+                <div class="step-content">
+                  <div class="step-title">NV1: Keyframe Image</div>
+                  <div class="step-desc">Gửi prompt ảnh & Lưu file</div>
                 </div>
-                <span id="manual-nv1-status" class="status-label">Chưa bắt đầu</span>
               </div>
-              <div class="manual-stage-box">
-                <strong>NV2 (Motion Prompt)</strong>
-                <div class="btn-group">
-                  <button id="manual-start-nv2-btn" class="ghost small" type="button">Start NV2</button>
-                  <button id="manual-capture-nv2-btn" class="ghost primary small" type="button">Capture NV2</button>
+              <div class="manual-step-divider"></div>
+              <div id="manual-step-nv2" class="manual-step">
+                <div class="step-num">2</div>
+                <div class="step-content">
+                  <div class="step-title">NV2: Motion Prompt</div>
+                  <div class="step-desc">Gửi prompt motion & Lưu file</div>
                 </div>
-                <span id="manual-nv2-status" class="status-label">Chưa bắt đầu</span>
               </div>
+              <div class="manual-step-divider"></div>
+              <div id="manual-step-done" class="manual-step">
+                <div class="step-num">✓</div>
+                <div class="step-content">
+                  <div class="step-title">Hoàn Tất Scene</div>
+                  <div class="step-desc">Đã lưu đủ 2 outputs trên đĩa</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Dual Stages Grid (NV1 & NV2) -->
+            <div class="manual-stages-container">
+              <!-- Box NV1 -->
+              <div class="manual-stage-card nv1-card">
+                <div class="stage-card-head">
+                  <span class="stage-tag">NHIỆM VỤ 1</span>
+                  <h4>Tạo Ảnh Keyframe (DALL-E)</h4>
+                </div>
+                <label class="prompt-label" for="manual-nv1-prompt-preview">Prompt Tạo Ảnh (Sao chép & dán vào ChatGPT):</label>
+                <div class="prompt-preview-wrap">
+                  <textarea id="manual-nv1-prompt-preview" class="manual-prompt-textarea" readonly rows="4" placeholder="Nội dung prompt tạo ảnh..."></textarea>
+                  <button id="manual-copy-nv1-btn" class="ghost small copy-overlay-btn" type="button">📋 Sao chép Prompt</button>
+                </div>
+                <div class="stage-actions-row">
+                  <button id="manual-start-nv1-btn" class="ghost small" type="button" style="display:none;">Start NV1</button>
+                  <button id="manual-capture-nv1-btn" class="primary small" type="button">📸 Chụp & Lưu Keyframe</button>
+                  <span id="manual-nv1-status" class="status-indicator">Chờ gửi prompt</span>
+                </div>
+                <div class="stage-disk-badge" id="manual-nv1-disk-badge">
+                  <span class="disk-icon">💾</span> File đĩa: <span class="disk-status">Đang quét...</span>
+                </div>
+              </div>
+
+              <!-- Box NV2 -->
+              <div class="manual-stage-card nv2-card">
+                <div class="stage-card-head">
+                  <span class="stage-tag">NHIỆM VỤ 2</span>
+                  <h4>Tạo Motion Prompt (Prompt Video)</h4>
+                </div>
+                <label class="prompt-label" for="manual-nv2-prompt-preview">Prompt Tạo Motion (Sao chép & dán vào ChatGPT):</label>
+                <div class="prompt-preview-wrap">
+                  <textarea id="manual-nv2-prompt-preview" class="manual-prompt-textarea" readonly rows="4" placeholder="Nội dung prompt tạo motion..."></textarea>
+                  <button id="manual-copy-nv2-btn" class="ghost small copy-overlay-btn" type="button">📋 Sao chép Prompt</button>
+                </div>
+                <div class="stage-actions-row">
+                  <button id="manual-start-nv2-btn" class="ghost small" type="button" style="display:none;">Start NV2</button>
+                  <button id="manual-capture-nv2-btn" class="primary small" type="button">📝 Lấy & Lưu Motion Prompt</button>
+                  <span id="manual-nv2-status" class="status-indicator">Chờ gửi prompt</span>
+                </div>
+                <div class="stage-disk-badge" id="manual-nv2-disk-badge">
+                  <span class="disk-icon">💾</span> File đĩa: <span class="disk-status">Đang quét...</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Workflow Toolbar / Automation Options -->
+            <div class="manual-toolbar">
+              <div class="toolbar-toggles">
+                <label class="toggle-inline">
+                  <input id="manual-auto-watch-toggle" type="checkbox" checked />
+                  <span>Tự động phát hiện & lưu khi ChatGPT tạo xong</span>
+                </label>
+                <label class="toggle-inline">
+                  <input id="manual-auto-advance-toggle" type="checkbox" checked />
+                  <span>Tự động chuyển scene kế tiếp khi hoàn thành</span>
+                </label>
+              </div>
+              <div class="toolbar-buttons">
+                <button id="manual-start-watcher-btn" class="ghost primary small" type="button">▶ Bắt đầu Giám sát</button>
+                <button id="manual-audit-disk-btn" class="ghost small" type="button">🔄 Quét lại Ổ đĩa</button>
+                <button id="manual-open-scene-folder-btn" class="ghost small" type="button">📂 Mở Thư Mục Scene</button>
+              </div>
+            </div>
+
+            <!-- Legacy container for backward compatibility -->
+            <div style="display:none;">
+              <button id="manual-start-req1-btn" type="button"></button>
+              <button id="manual-capture-req1-btn" type="button"></button>
+              <span id="manual-req1-status"></span>
+              <button id="manual-start-req2-btn" type="button"></button>
+              <button id="manual-capture-req2-btn" type="button"></button>
+              <span id="manual-req2-status"></span>
             </div>
           </div>
 

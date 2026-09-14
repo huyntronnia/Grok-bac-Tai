@@ -29,6 +29,9 @@ function initIpcHandlers(runtime) {
     manualCaptureStageHandler,
     manualGetStatusHandler,
     manualCancelStageHandler,
+    manualGetSceneAuditHandler,
+    manualDetectProgressHandler,
+    openSceneFolderHandler,
     sendPromptViaWeb,
     runScenePipeline,
     stopPipeline,
@@ -132,6 +135,18 @@ function initIpcHandlers(runtime) {
   ipcMain.handle(
     "chatgpt:manual-cancel-stage",
     safeIpcHandler(manualCancelStageHandler),
+  );
+  ipcMain.handle(
+    "chatgpt:manual-get-scene-audit",
+    safeIpcHandler(manualGetSceneAuditHandler),
+  );
+  ipcMain.handle(
+    "chatgpt:manual-detect-progress",
+    safeIpcHandler(manualDetectProgressHandler),
+  );
+  ipcMain.handle(
+    "shell:open-folder",
+    safeIpcHandler(openSceneFolderHandler),
   );
   ipcMain.handle("browser:send-prompt", sendPromptViaWeb);
   ipcMain.handle("pipeline:run-scene", safeIpcHandler(runScenePipeline));

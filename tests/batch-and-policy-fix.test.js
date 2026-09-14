@@ -122,17 +122,102 @@ sandbox.project = {
     },
   ],
 };
-sandbox.activeBatchIds = [1, 2];
+sandbox.safeAddPipelineLog = () => null;
+sandbox.clamp = (val, min, max) => Math.min(max, Math.max(min, val));
 
-const resumeAction = sandbox.getNextResumeAction({
-  project: sandbox.project,
-  runtime: { activeBatchIds: [1, 2], currentSceneId: '1' },
+vm.runInContext(`
+${extractFunction('sceneHasVideoOutput')}
+${extractFunction('findFirstSceneMissingVideo')}
+${extractFunction('forceResumeFirstIncompleteSceneIfNeeded')}
+this.forceResumeFirstIncompleteSceneIfNeeded = forceResumeFirstIncompleteSceneIfNeeded;
+this.findFirstSceneMissingVideo = findFirstSceneMissingVideo;
+`, sandbox);
+
+// 3. Test Scene 18 batch collapse regression:
+// 38 scenes, scenes 1-17 complete, scene 18 has keyframe on disk (status 'image_done', missing motion prompt), scenes 19-38 waiting.
+const makeMockScene = (id, overrides = {}) => ({
+  id,
+  status: 'queued',
+  imagePath: '',
+  motionPrompt: '',
+  motionPromptPath: '',
+  videoPath: '',
+  ...overrides,
 });
 
+const mock38Scenes = Array.from({ length: 38 }, (_, i) => {
+  const id = i + 1;
+  if (id <= 17) {
+    return makeMockScene(id, {
+      status: 'done',
+      completionStatus: 'keyframe_motion_complete',
+      imagePath: `D:/proj/scene_${String(id).padStart(3, '0')}/keyframe.png`,
+      keyframeFileExists: true,
+      keyframeFileValid: true,
+      motionPromptPath: `D:/proj/scene_${String(id).padStart(3, '0')}/motion_prompt.txt`,
+      motionPromptFileExists: true,
+      motionPromptFileValid: true,
+      assetStatCheckedAtMs: Date.now(),
+    });
+  }
+  if (id === 18) {
+    return makeMockScene(id, {
+      status: 'image_done',
+      imagePath: 'D:/proj/scene_018/keyframe.png',
+      keyframeFileExists: true,
+      keyframeFileValid: true,
+      motionPrompt: '',
+      motionPromptPath: '',
+      motionPromptFileExists: false,
+      motionPromptFileValid: false,
+      assetStatCheckedAtMs: Date.now(),
+    });
+  }
+  return makeMockScene(id, { status: 'waiting_review' });
+});
+
+sandbox.project = {
+  batchSize: 10,
+  scenes: mock38Scenes,
+};
+
+// Case A: activeBatchIds was stuck at single-scene [18] (from earlier bug)
+sandbox.activeBatchIds = [18];
 assert.strictEqual(
-  resumeAction.action,
-  'batch_complete',
-  'getNextResumeAction must return batch_complete when all batch scenes have keyframe + motion prompt'
+  sandbox.forceResumeFirstIncompleteSceneIfNeeded(),
+  true,
+  'forceResumeFirstIncompleteSceneIfNeeded must detect that [18] is truncated'
+);
+assert.deepStrictEqual(
+  Array.from(sandbox.activeBatchIds),
+  [18, 19, 20, 21, 22, 23, 24, 25, 26, 27],
+  'forceResumeFirstIncompleteSceneIfNeeded must expand truncated [18] into full 10-scene batch [18-27]'
+);
+
+// Case B: activeBatchIds was skipped ahead to [19..28]
+sandbox.activeBatchIds = [19, 20, 21, 22, 23, 24, 25, 26, 27, 28];
+assert.strictEqual(
+  sandbox.forceResumeFirstIncompleteSceneIfNeeded(),
+  true,
+  'forceResumeFirstIncompleteSceneIfNeeded must pull future batch [19..28] back to scene 18'
+);
+assert.deepStrictEqual(
+  Array.from(sandbox.activeBatchIds),
+  [18, 19, 20, 21, 22, 23, 24, 25, 26, 27],
+  'forceResumeFirstIncompleteSceneIfNeeded must create full 10-scene batch [18-27] when pulling back'
+);
+
+// Case C: activeBatchIds is already [18-27]
+assert.strictEqual(
+  sandbox.forceResumeFirstIncompleteSceneIfNeeded(),
+  false,
+  'forceResumeFirstIncompleteSceneIfNeeded must return false when batch is already correct'
+);
+assert.deepStrictEqual(
+  Array.from(sandbox.activeBatchIds),
+  [18, 19, 20, 21, 22, 23, 24, 25, 26, 27],
+  'forceResumeFirstIncompleteSceneIfNeeded must keep [18-27] unchanged'
 );
 
 console.log('All batch and policy fix regression tests passed successfully!');
+

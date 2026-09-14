@@ -2,18 +2,45 @@
 
 const fs = require("fs/promises");
 const path = require("path");
-const { evaluateOnCdpPage, getConversationState } = require("./chatgpt_dom");
-const { isChatGptActivelyGenerating } = require("../state");
+const { evaluateOnCdpPage, getConversationState } = require("./chatgpt_core");
+const {
+  readChatGptImageStateScript,
+  readLatestAssistantScript,
+} = require("./chatgpt_dom");
+const { isChatGptActivelyGenerating, isChatGptDotLoadingCanvasAsset } = require("../state");
 const { writeSceneSnapshot, readSceneSnapshot, writeActionJournal } = require("../state/state");
 const { enqueueProjectWrite } = require("../project");
 const { validateMotionPromptTextContent } = require("../pipeline/asset_validation");
 const {
   extractLatestChatGPTGeneratedImageBytes,
-  saveChatGPTGeneratedImageAsset,
+  decodeImageBufferToPng,
   validateSavedImageFile,
+  captureChatGptImageElementScreenshot,
 } = require("./chatgpt_pipeline");
 
 const VALID_MANUAL_STAGES = ["REQUEST_1", "REQUEST_2", "NV1", "NV2"];
+
+function normalizeSceneToken(sceneId) {
+  if (typeof sceneId === "string" && sceneId.startsWith("scene_")) {
+    const num = parseInt(sceneId.replace("scene_", ""), 10);
+    if (Number.isInteger(num) && num > 0) {
+      return `scene_${String(num).padStart(3, "0")}`;
+    }
+    return sceneId;
+  }
+  const num = Number(sceneId);
+  if (Number.isInteger(num) && num > 0) {
+    return `scene_${String(num).padStart(3, "0")}`;
+  }
+  return String(sceneId || "scene_001");
+}
+
+function resolveSceneDir(projectPath, sceneToken) {
+  if (!projectPath) return "";
+  const base = path.basename(projectPath);
+  if (base === sceneToken) return projectPath;
+  return path.join(projectPath, sceneToken);
+}
 
 async function readLatestAssistantTurnText(page) {
   if (!page) return "";
@@ -26,6 +53,96 @@ async function readLatestAssistantTurnText(page) {
   return String(result || "").trim();
 }
 
+async function extractManualChatGptImage(page, { sceneId = "" } = {}) {
+  if (!page) return { ok: false, error: "no-page" };
+
+  // 1. First attempt: standard pipeline extraction
+  let extracted = await extractLatestChatGPTGeneratedImageBytes(page, { existingUrls: [] }).catch(() => null);
+  if (extracted?.ok && extracted.base64) {
+    return extracted;
+  }
+
+  // 2. Second attempt: element screenshot fallback if candidate element was identified
+  if (extracted?.screenshotCandidate) {
+    const shot = await captureChatGptImageElementScreenshot(page, extracted.screenshotCandidate, { sceneId }).catch(() => null);
+    if (shot?.ok && shot.base64) {
+      return shot;
+    }
+  }
+
+  // 3. Third attempt: direct DOM query for any completed img/canvas in latest agent-turn
+  const directExtract = await evaluateOnCdpPage(page, `(async () => {
+    try {
+      const candidates = [
+        ...document.querySelectorAll('.agent-turn .group\\\\/imagegen-image img'),
+        ...document.querySelectorAll('.agent-turn img'),
+        ...document.querySelectorAll('[data-message-author-role="assistant"] img'),
+        ...document.querySelectorAll('.agent-turn .group\\\\/imagegen-image canvas'),
+      ].filter((el) => {
+        if (!el) return false;
+        if (el.tagName === 'IMG') {
+          return el.complete && (el.naturalWidth >= 256 || el.clientWidth >= 256) && (el.naturalHeight >= 256 || el.clientHeight >= 256);
+        }
+        if (el.tagName === 'CANVAS') {
+          return (el.width >= 256 || el.clientWidth >= 256) && (el.height >= 256 || el.clientHeight >= 256);
+        }
+        return false;
+      });
+
+      if (!candidates.length) return { ok: false, error: 'no-completed-image-elements' };
+      const el = candidates[candidates.length - 1];
+
+      if (el.tagName === 'CANVAS') {
+        const dataUrl = el.toDataURL('image/png');
+        const base64 = dataUrl.replace(/^data:image\\/[a-z]+;base64,/, '');
+        return { ok: true, base64, contentType: 'image/png', width: el.width, height: el.height, method: 'canvas' };
+      }
+
+      const src = el.currentSrc || el.src || el.getAttribute('src');
+      if (!src) return { ok: false, error: 'img-has-no-src' };
+
+      if (src.startsWith('data:image/')) {
+        const base64 = src.replace(/^data:image\\/[a-z]+;base64,/, '');
+        return { ok: true, base64, contentType: 'image/png', width: el.naturalWidth, height: el.naturalHeight, method: 'data-url' };
+      }
+
+      const resp = await fetch(src, { credentials: 'include', cache: 'no-store' });
+      if (!resp.ok) return { ok: false, error: 'fetch-failed-' + resp.status };
+      const blob = await resp.blob();
+      const reader = new FileReader();
+      const base64 = await new Promise((resolve, reject) => {
+        reader.onloadend = () => {
+          const res = String(reader.result || '');
+          resolve(res.replace(/^data:image\\/[a-z]+;base64,/, ''));
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+      });
+
+      return {
+        ok: true,
+        base64,
+        contentType: blob.type || 'image/png',
+        byteLength: blob.size,
+        width: el.naturalWidth,
+        height: el.naturalHeight,
+        method: 'fetch-blob',
+      };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  })()`).catch(() => null);
+
+  if (directExtract?.ok && directExtract.base64) {
+    return directExtract;
+  }
+
+  return {
+    ok: false,
+    error: directExtract?.error || extracted?.error || "Không tìm thấy ảnh đã hoàn thành trên ChatGPT",
+  };
+}
+
 async function startManualStage(projectPath, sceneId, stage, runtime = {}) {
   const { getCdpPage } = runtime;
   if (!sceneId) throw new Error("manual-chatgpt-stage: missing sceneId");
@@ -33,7 +150,8 @@ async function startManualStage(projectPath, sceneId, stage, runtime = {}) {
     throw new Error(`manual-chatgpt-stage: invalid stage '${stage}'`);
   }
 
-  const sceneDir = path.join(projectPath, sceneId);
+  const sceneToken = normalizeSceneToken(sceneId);
+  const sceneDir = resolveSceneDir(projectPath, sceneToken);
   const snapshot = await readSceneSnapshot(sceneDir);
 
   let conversationState = null;
@@ -45,7 +163,8 @@ async function startManualStage(projectPath, sceneId, stage, runtime = {}) {
   }
 
   const baseline = {
-    sceneId,
+    sceneId: sceneToken,
+    rawSceneId: sceneId,
     stage,
     conversationId: conversationState?.conversationId || "",
     userCount: Number(conversationState?.userTurnCount || conversationState?.userCount || 0),
@@ -72,16 +191,19 @@ async function startManualStage(projectPath, sceneId, stage, runtime = {}) {
   await writeActionJournal(sceneDir, {
     kind: "manual_stage_started",
     stage,
-    sceneId,
+    sceneId: sceneToken,
     baseline,
   });
 
-  return { ok: true, stage, baseline };
+  return { ok: true, stage, baseline, sceneToken };
 }
 
-async function validateManualOwnership(page, baseline, targetSceneId, targetStage) {
+async function validateManualOwnership(page, baseline, targetSceneId, targetStage, options = {}) {
+  const targetToken = normalizeSceneToken(targetSceneId);
+  const baselineToken = baseline?.sceneId ? normalizeSceneToken(baseline.sceneId) : "";
+
   // Cross-scene & stage validation
-  if (baseline && baseline.sceneId && baseline.sceneId !== targetSceneId) {
+  if (baselineToken && baselineToken !== targetToken) {
     return { ok: false, reason: `Response belongs to scene ${baseline.sceneId}, not ${targetSceneId}.` };
   }
   if (baseline && baseline.stage && baseline.stage !== targetStage) {
@@ -89,7 +211,7 @@ async function validateManualOwnership(page, baseline, targetSceneId, targetStag
   }
 
   if (!page) return { ok: false, reason: "No active browser page found." };
-  
+
   const currentState = await getConversationState(page).catch(() => null);
   if (!currentState) {
     return { ok: false, reason: "Could not read ChatGPT conversation state." };
@@ -103,7 +225,7 @@ async function validateManualOwnership(page, baseline, targetSceneId, targetStag
   }
 
   // Check if assistant is currently generating or streaming
-  const isGenerating = await isChatGptActivelyGenerating(currentState).catch(() => false);
+  const isGenerating = Boolean(isChatGptActivelyGenerating(currentState));
   if (isGenerating || currentState.composerBusy || currentState.stopButtonVisible) {
     return { ok: false, reason: "Assistant response is still streaming." };
   }
@@ -111,7 +233,7 @@ async function validateManualOwnership(page, baseline, targetSceneId, targetStag
   // Check new user turn and assistant response exist after baseline
   const currentAssistantCount = Number(currentState.assistantTurnCount || currentState.assistantCount || 0);
 
-  if (baseline) {
+  if (baseline && !options.skipBaselineCheck) {
     if (currentAssistantCount <= baseline.assistantCount) {
       return { ok: false, reason: "No new assistant response found since stage started." };
     }
@@ -122,14 +244,15 @@ async function validateManualOwnership(page, baseline, targetSceneId, targetStag
   return { ok: true, currentState };
 }
 
-async function captureManualStage(projectPath, sceneId, stage, runtime = {}) {
+async function captureManualStage(projectPath, sceneId, stage, runtime = {}, options = {}) {
   const { getCdpPage } = runtime;
   if (!sceneId) throw new Error("manual-chatgpt-capture: missing sceneId");
   if (!VALID_MANUAL_STAGES.includes(stage)) {
     throw new Error(`manual-chatgpt-capture: invalid stage '${stage}'`);
   }
 
-  const sceneDir = path.join(projectPath, sceneId);
+  const sceneToken = normalizeSceneToken(sceneId);
+  const sceneDir = resolveSceneDir(projectPath, sceneToken);
   const snapshot = await readSceneSnapshot(sceneDir);
   const manualState = snapshot.manualChatGpt || {};
   const baseline = manualState.baseline || null;
@@ -140,12 +263,12 @@ async function captureManualStage(projectPath, sceneId, stage, runtime = {}) {
   }
 
   // Ownership validation
-  const ownership = await validateManualOwnership(page, baseline, sceneId, stage);
-  if (!ownership.ok) {
+  const ownership = await validateManualOwnership(page, baseline, sceneToken, stage, options);
+  if (!ownership.ok && !options.force) {
     await writeActionJournal(sceneDir, {
       kind: "manual_response_rejected",
       stage,
-      sceneId,
+      sceneId: sceneToken,
       reason: ownership.reason,
     }).catch(() => null);
     return { ok: false, reason: ownership.reason };
@@ -183,28 +306,56 @@ async function captureManualStage(projectPath, sceneId, stage, runtime = {}) {
     await writeActionJournal(sceneDir, {
       kind: stage === "REQUEST_1" ? "manual_request_1_captured" : "manual_request_2_captured",
       stage,
-      sceneId,
+      sceneId: sceneToken,
       filePath: fileName,
     });
-    return { ok: true, stage, filePath: fileName, artifactPath: filePath };
+    return { ok: true, stage, filePath: fileName, artifactPath: filePath, sceneToken };
   }
 
   if (stage === "NV1") {
-    const imageBytes = await extractLatestChatGPTGeneratedImageBytes(page, { timeoutMs: 30000 }).catch(() => null);
-    if (!imageBytes || !imageBytes.length) {
-      return { ok: false, reason: "No valid image response found in ChatGPT." };
-    }
-    const keyframeFileName = `${sceneId}_keyframe.png`;
+    const keyframeFileName = `${sceneToken}_keyframe.png`;
     const keyframeFilePath = path.join(sceneDir, keyframeFileName);
 
-    const saved = await saveChatGPTGeneratedImageAsset(imageBytes, keyframeFilePath).catch((err) => ({ ok: false, error: err.message }));
-    if (!saved || saved.ok === false) {
-      return { ok: false, reason: `Failed to save NV1 keyframe: ${saved?.error || "unknown"}` };
+    const imageAsset = await extractManualChatGptImage(page, { sceneId: sceneToken });
+    if (!imageAsset || !imageAsset.ok || !imageAsset.base64) {
+      return {
+        ok: false,
+        reason: `Lỗi trích xuất ảnh NV1: ${imageAsset?.error || "Không tìm thấy ảnh hợp lệ trên ChatGPT"}`,
+      };
     }
-    const val = await validateSavedImageFile(keyframeFilePath).catch(() => ({ ok: false }));
-    if (!val.ok) {
-      return { ok: false, reason: `Saved NV1 image failed validation: ${val.error || "invalid"}` };
+
+    if (isChatGptDotLoadingCanvasAsset(imageAsset)) {
+      return {
+        ok: false,
+        reason: "Ảnh ChatGPT vẫn đang trong quá trình tạo (placeholder canvas), vui lòng đợi ảnh render xong.",
+      };
     }
+
+    let decoded;
+    try {
+      const sourceBuffer = Buffer.from(imageAsset.base64, "base64");
+      decoded = decodeImageBufferToPng(sourceBuffer, imageAsset.contentType || "image/png");
+    } catch (decErr) {
+      return {
+        ok: false,
+        reason: `Lỗi giải mã ảnh PNG: ${decErr.message}`,
+      };
+    }
+
+    await fs.mkdir(sceneDir, { recursive: true });
+    await fs.writeFile(keyframeFilePath, decoded.buffer);
+
+    let val;
+    try {
+      val = await validateSavedImageFile(keyframeFilePath);
+    } catch (valErr) {
+      return {
+        ok: false,
+        reason: `Keyframe lưu được không hợp lệ: ${valErr.message}`,
+      };
+    }
+
+    const stat = await fs.stat(keyframeFilePath).catch(() => ({ size: decoded.buffer.length }));
 
     const updatedManual = {
       ...manualState,
@@ -223,27 +374,53 @@ async function captureManualStage(projectPath, sceneId, stage, runtime = {}) {
     await writeActionJournal(sceneDir, {
       kind: "manual_nv1_captured",
       stage: "NV1",
-      sceneId,
+      sceneId: sceneToken,
       filePath: keyframeFileName,
+      size: stat.size,
+      width: val.width || decoded.width,
+      height: val.height || decoded.height,
     });
-    return { ok: true, stage: "NV1", filePath: keyframeFileName, artifactPath: keyframeFilePath };
+
+    return {
+      ok: true,
+      stage: "NV1",
+      filePath: keyframeFileName,
+      artifactPath: keyframeFilePath,
+      sceneToken,
+      size: stat.size,
+      width: val.width || decoded.width,
+      height: val.height || decoded.height,
+    };
   }
 
   if (stage === "NV2") {
-    const text = await readLatestAssistantTurnText(page);
-    if (!text) {
-      return { ok: false, reason: "Extracted assistant motion prompt text was empty." };
+    let text = "";
+    const assistantState = await evaluateOnCdpPage(page, `(${readLatestAssistantScript.toString()})()`).catch(() => null);
+    if (assistantState?.text) {
+      text = String(assistantState.text).trim();
+    } else {
+      text = await readLatestAssistantTurnText(page);
     }
+
+    if (!text) {
+      return { ok: false, reason: "Phản hồi văn bản từ ChatGPT đang trống." };
+    }
+
     const val = validateMotionPromptTextContent(text);
     if (!val.ok) {
-      return { ok: false, reason: `NV2 response failed content validation: ${val.error}` };
+      return { ok: false, reason: `Motion prompt chưa hợp lệ: ${val.error}` };
     }
+
     const motionFileName = "motion_prompt.txt";
     const motionFilePath = path.join(sceneDir, motionFileName);
 
     await enqueueProjectWrite(motionFilePath, async () => {
       await fs.writeFile(motionFilePath, val.text, "utf8");
     });
+
+    await fs.writeFile(path.join(sceneDir, "motion_prompt_from_chatgpt.txt"), val.text, "utf8").catch(() => null);
+
+    const stat = await fs.stat(motionFilePath).catch(() => ({ size: Buffer.byteLength(val.text, "utf8") }));
 
     const updatedManual = {
       ...manualState,
@@ -262,41 +439,188 @@ async function captureManualStage(projectPath, sceneId, stage, runtime = {}) {
     await writeActionJournal(sceneDir, {
       kind: "manual_nv2_captured",
       stage: "NV2",
-      sceneId,
+      sceneId: sceneToken,
       filePath: motionFileName,
+      length: val.text.length,
+      size: stat.size,
     });
-    return { ok: true, stage: "NV2", filePath: motionFileName, artifactPath: motionFilePath };
+
+    return {
+      ok: true,
+      stage: "NV2",
+      filePath: motionFileName,
+      artifactPath: motionFilePath,
+      sceneToken,
+      motionPrompt: val.text,
+      size: stat.size,
+      length: val.text.length,
+    };
   }
 
   return { ok: false, reason: "Unknown stage" };
 }
 
+async function getManualSceneAudit(projectPath, sceneId) {
+  if (!sceneId) return { ok: false, error: "missing-scene-id" };
+  const sceneToken = normalizeSceneToken(sceneId);
+  const sceneDir = resolveSceneDir(projectPath, sceneToken);
+
+  const keyframeFileName = `${sceneToken}_keyframe.png`;
+  const keyframeFilePath = path.join(sceneDir, keyframeFileName);
+  const motionFileName = "motion_prompt.txt";
+  const motionFilePath = path.join(sceneDir, motionFileName);
+
+  let keyframeExists = false;
+  let keyframeValid = false;
+  let keyframeSize = 0;
+  let keyframeError = "";
+  let width = 0;
+  let height = 0;
+
+  try {
+    const kfStat = await fs.stat(keyframeFilePath);
+    keyframeExists = true;
+    keyframeSize = kfStat.size;
+    try {
+      const val = await validateSavedImageFile(keyframeFilePath);
+      keyframeValid = Boolean(val.ok);
+      keyframeError = val.error || "";
+      width = val.width || 0;
+      height = val.height || 0;
+    } catch (valErr) {
+      keyframeValid = false;
+      keyframeError = valErr.message || "Invalid keyframe";
+    }
+  } catch (statErr) {
+    keyframeExists = false;
+    keyframeError = statErr.code === "ENOENT" ? "Chưa có file keyframe" : statErr.message;
+  }
+
+  let motionPromptExists = false;
+  let motionPromptValid = false;
+  let motionPromptSize = 0;
+  let motionPromptLength = 0;
+  let motionPromptText = "";
+  let motionPromptError = "";
+
+  try {
+    const mpStat = await fs.stat(motionFilePath);
+    motionPromptExists = true;
+    motionPromptSize = mpStat.size;
+    const content = await fs.readFile(motionFilePath, "utf8");
+    motionPromptText = content;
+    motionPromptLength = content.length;
+    const val = validateMotionPromptTextContent(content);
+    motionPromptValid = Boolean(val.ok);
+    motionPromptError = val.error || "";
+  } catch (err) {
+    motionPromptExists = false;
+    motionPromptError = err.code === "ENOENT" ? "Chưa có file motion prompt" : err.message;
+  }
+
+  return {
+    ok: true,
+    sceneId: sceneToken,
+    sceneDir,
+    keyframe: {
+      exists: keyframeExists,
+      valid: keyframeValid,
+      path: keyframeFilePath,
+      fileName: keyframeFileName,
+      size: keyframeSize,
+      width,
+      height,
+      error: keyframeError,
+    },
+    motionPrompt: {
+      exists: motionPromptExists,
+      valid: motionPromptValid,
+      path: motionFilePath,
+      fileName: motionFileName,
+      size: motionPromptSize,
+      length: motionPromptLength,
+      text: motionPromptText,
+      error: motionPromptError,
+    },
+    isSceneComplete: keyframeValid && motionPromptValid,
+  };
+}
+
+async function detectChatGPTProgress(runtime = {}) {
+  const { getCdpPage } = runtime;
+  if (!getCdpPage) return { ok: false, reason: "no-runtime" };
+  const page = await getCdpPage().catch(() => null);
+  if (!page) return { ok: false, reason: "no-page" };
+  const currentState = await getConversationState(page).catch(() => null);
+
+  const isGenerating = currentState ? Boolean(isChatGptActivelyGenerating(currentState)) : false;
+
+  const imageState = await evaluateOnCdpPage(page, `(${readChatGptImageStateScript.toString()})()`).catch(() => null);
+  const assistantState = await evaluateOnCdpPage(page, `(${readLatestAssistantScript.toString()})()`).catch(() => null);
+
+  const hasImage = Boolean(
+    imageState?.completedVisibleImage ||
+    (imageState?.urls && imageState.urls.length > 0)
+  );
+
+  const text = String(assistantState?.text || currentState?.latestAssistantText || "").trim();
+  const textLength = Number(assistantState?.textLength || text.length || 0);
+  const sampleText = text.slice(0, 120);
+
+  const activeGenerating = Boolean(
+    isGenerating ||
+    currentState?.composerBusy ||
+    currentState?.stopButtonVisible ||
+    imageState?.generating ||
+    assistantState?.generating
+  );
+
+  return {
+    ok: true,
+    isGenerating: activeGenerating,
+    userTurnCount: Number(currentState?.userTurnCount || currentState?.userCount || 0),
+    assistantTurnCount: Number(assistantState?.count || currentState?.assistantTurnCount || 0),
+    hasImage,
+    imageUrls: imageState?.urls || [],
+    textLength,
+    sampleText,
+    conversationId: currentState?.conversationId || "",
+  };
+}
+
 async function getManualStatus(projectPath, sceneId) {
   if (!sceneId) return { ok: false, error: "missing-scene-id" };
-  const sceneDir = path.join(projectPath, sceneId);
+  const sceneToken = normalizeSceneToken(sceneId);
+  const sceneDir = resolveSceneDir(projectPath, sceneToken);
   const snapshot = await readSceneSnapshot(sceneDir);
   const manualState = snapshot.manualChatGpt || { enabled: false, stages: {} };
-  return { ok: true, sceneId, manualState };
+  return { ok: true, sceneId: sceneToken, manualState };
 }
 
 async function cancelManualStage(projectPath, sceneId) {
   if (!sceneId) return { ok: false, error: "missing-scene-id" };
-  const sceneDir = path.join(projectPath, sceneId);
+  const sceneToken = normalizeSceneToken(sceneId);
+  const sceneDir = resolveSceneDir(projectPath, sceneToken);
   const snapshot = await readSceneSnapshot(sceneDir);
   if (snapshot.manualChatGpt) {
     snapshot.manualChatGpt.baseline = null;
     await writeSceneSnapshot(sceneDir, { manualChatGpt: snapshot.manualChatGpt });
-    await writeActionJournal(sceneDir, { kind: "manual_capture_cancelled", sceneId });
+    await writeActionJournal(sceneDir, { kind: "manual_capture_cancelled", sceneId: sceneToken });
   }
-  return { ok: true, sceneId };
+  return { ok: true, sceneId: sceneToken };
 }
 
 module.exports = {
   VALID_MANUAL_STAGES,
+  normalizeSceneToken,
+  resolveSceneDir,
   startManualStage,
   validateManualOwnership,
   captureManualStage,
+  getManualSceneAudit,
+  detectChatGPTProgress,
   getManualStatus,
   cancelManualStage,
   readLatestAssistantTurnText,
+  extractManualChatGptImage,
 };

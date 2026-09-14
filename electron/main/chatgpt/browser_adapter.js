@@ -34,6 +34,23 @@ class BrowserAdapter {
         } else if (this.client && this.client.Page) {
           return this.client.Page.bringToFront();
         }
+      },
+      captureScreenshot: async (options = {}) => {
+        if (this.clientType === "playwright" && this.page) {
+          const clip = options.clip ? {
+            x: Math.max(0, Math.round(options.clip.x || 0)),
+            y: Math.max(0, Math.round(options.clip.y || 0)),
+            width: Math.max(1, Math.round(options.clip.width || 1)),
+            height: Math.max(1, Math.round(options.clip.height || 1)),
+          } : undefined;
+          const buf = await this.page.screenshot({
+            clip,
+            type: options.format === "jpeg" ? "jpeg" : "png",
+          });
+          return { data: buf.toString("base64") };
+        } else if (this.client && this.client.Page) {
+          return this.client.Page.captureScreenshot(options);
+        }
       }
     };
 

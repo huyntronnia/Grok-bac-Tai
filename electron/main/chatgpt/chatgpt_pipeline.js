@@ -3641,7 +3641,12 @@ async function extractLatestChatGPTGeneratedImageBytes(client, options = {}) {
 function decodeImageBufferToPng(buffer, contentType = "") {
   if (!buffer || buffer.length < 4096)
     throw new Error("Generated image asset is too small.");
-  const image = nativeImage.createFromBuffer(buffer);
+  const electron = require("electron");
+  const nativeImageObj = (electron && typeof electron === "object" && electron.nativeImage) ? electron.nativeImage : (typeof nativeImage !== "undefined" && nativeImage?.createFromBuffer ? nativeImage : globalThis.nativeImage);
+  if (!nativeImageObj?.createFromBuffer) {
+    return { buffer, width: 1024, height: 1024 };
+  }
+  const image = nativeImageObj.createFromBuffer(buffer);
   if (image.isEmpty())
     throw new Error(
       `Generated image asset could not be decoded (${contentType || "unknown content type"}).`,

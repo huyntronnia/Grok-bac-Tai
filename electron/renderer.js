@@ -290,9 +290,7 @@ function applyReviewSettings(settings = {}) {
 
 function isKeyframeMotionPromptOnlyModeEnabled() {
   return Boolean(
-    keyframeMotionOnlyToggle?.checked ||
-    (manualChatGptBtn && manualChatGptBtn.getAttribute('aria-pressed') === 'true') ||
-    project?.manualChatGPT
+    keyframeMotionOnlyToggle?.checked
   );
 }
 
@@ -700,7 +698,7 @@ async function runNextBatch({ regenerate = false } = {}) {
   setRunning(true);
   const candidates = regenerate && activeBatchIds.length
     ? project.scenes.filter((scene) => activeBatchIds.includes(scene.id))
-    : project.scenes.filter((scene) => !sceneHasVideoOutput(scene) && ['queued', 'error', 'approved', 'pending', 'waiting_review'].includes(scene.status));
+    : project.scenes.filter((scene) => !sceneHasVideoOutput(scene) && scene.status !== 'skipped');
   const safeBatchSize = clamp(Number(project.batchSize || 10), 1, 10);
   const batch = candidates.slice(0, safeBatchSize);
   activeBatchIds = batch.map((scene) => scene.id);
@@ -719,9 +717,9 @@ async function runNextBatch({ regenerate = false } = {}) {
     scene.status = 'running';
     render();
     try {
-      scene.imagePrompt = scene.original || buildImagePrompt(scene);
-      scene.motionPrompt = '';
-      scene.status = 'approved';
+      scene.imagePrompt = scene.imagePrompt || scene.original || buildImagePrompt(scene);
+      scene.motionPrompt = scene.motionPrompt || '';
+      scene.status = scene.imagePath ? 'image_done' : 'approved';
       scene.reviewType = '';
       scene.provider = providerSelect.value;
       scene.account = accountSelect.value;
@@ -923,7 +921,14 @@ async function recoverWorkflowRun() {
   }
   if (!activeBatchIds.length) {
     const nextScene = findFirstIncompleteSceneForWorkflow();
-    if (nextScene) activeBatchIds = [nextScene.id];
+    if (nextScene) {
+      const safeBatchSize = clamp(Number(project?.batchSize || 10), 1, 10);
+      const nextBatch = (project?.scenes || [])
+        .filter((scene) => Number(scene.id || 0) >= Number(nextScene.id || 0) && !sceneHasVideoOutput(scene) && scene.status !== 'skipped')
+        .map((scene) => Number(scene.id || 0))
+        .slice(0, safeBatchSize);
+      activeBatchIds = nextBatch.length ? nextBatch : [nextScene.id];
+    }
   }
   if (!activeBatchIds.length) {
     setStatus('Không có scene chưa hoàn thành. Đang quét project và khởi chạy VeoUp...', 'running');
@@ -1229,10 +1234,23 @@ function forceResumeFirstIncompleteSceneIfNeeded() {
   const id = Number(firstIncomplete.id || 0);
   if (!id) return false;
 
-  const currentIds = Array.isArray(activeBatchIds) ? activeBatchIds.map(Number) : [];
-  if (currentIds.length && currentIds[0] === id) return false;
+  const safeBatchSize = clamp(Number(project?.batchSize || 10), 1, 10);
+  const nextBatch = (project?.scenes || [])
+    .filter((scene) => Number(scene.id || 0) >= id && !sceneHasVideoOutput(scene) && scene.status !== 'skipped')
+    .map((scene) => Number(scene.id || 0))
+    .slice(0, safeBatchSize);
 
-  activeBatchIds = [id];
+  const targetBatch = nextBatch.length ? nextBatch : [id];
+  const currentIds = Array.isArray(activeBatchIds) ? activeBatchIds.map(Number) : [];
+
+  if (
+    currentIds.length === targetBatch.length &&
+    currentIds.every((val, idx) => val === targetBatch[idx])
+  ) {
+    return false;
+  }
+
+  activeBatchIds = targetBatch;
 
   if (isKeyframeMotionPromptOnlyModeEnabled()) {
     firstIncomplete.status = firstIncomplete.imagePath ? 'motion_prompt_pending' : 'image_pending';
@@ -2128,6 +2146,15 @@ async function autoRunRoute() {
     const chatgptState = await waitForProviderReady('chatgpt', 'ChatGPT');
     assertPipelineRunActive(runId);
 
+    if (project?.manualChatGPT) {
+      setStatus('Đang hoạt động ở chế độ Manual ChatGPT (Tự gửi prompt & Tự lưu output).', 'ok');
+      safeAddPipelineLog('renderer', 'ok', 'Chế độ Manual ChatGPT được kích hoạt. Pipeline tự động gõ phím đã bị vô hiệu hóa.');
+      if (loginWaitDialog?.open) loginWaitDialog.close();
+      setRunning(false);
+      await startManualGptWorkflow();
+      return;
+    }
+
 // VIDORA_AUTO_CONFIRM_EXISTING_CHAT_FROM_LOGIN_SAMPLE
     {
       const norm = (v) => String(v || '')
@@ -2188,9 +2215,12 @@ async function autoRunRoute() {
     await syncProjectSceneFolders({ repairFromDisk: true });
     const activeScenes = project.scenes.filter((item) => activeBatchIds.includes(item.id));
     const runnableStatuses = new Set(['waiting_review', 'approved', 'image_done', 'error']);
+    const safeBatchSize = clamp(Number(project.batchSize || 10), 1, 10);
+    const incompleteScenes = project.scenes.filter((scene) => scene.status !== 'skipped' && !sceneHasVideoOutput(scene));
     const shouldCreateBatch = !activeBatchIds.length
       || activeScenes.length === 0
-      || activeScenes.every((scene) => scene.status === 'skipped' || sceneHasVideoOutput(scene));
+      || activeScenes.every((scene) => scene.status === 'skipped' || sceneHasVideoOutput(scene))
+      || (activeBatchIds.length < Math.min(safeBatchSize, incompleteScenes.length) && !activeScenes.some((scene) => scene.status === 'running'));
 
     if (shouldCreateBatch) {
       setStatus('Bước 4/5: tạo batch prompt kế tiếp...', 'running');
@@ -2285,6 +2315,9 @@ const scenes = project?.scenes || [];
   renderProjectSessionStatus();
   if (typeof updateScanButtonVisibility === 'function') {
     updateScanButtonVisibility();
+  }
+  if (typeof updateManualProjectProgressUI === 'function') {
+    updateManualProjectProgressUI();
   }
 }
 
@@ -4345,7 +4378,51 @@ function updateScanButtonVisibility() {
     }
   });
 
-  manualChatGptBtn?.addEventListener('click', () => {
+  let manualSelectedSceneId = 1;
+  let manualWatcherTimer = null;
+  let manualIsCapturing = false;
+
+  function formatFileSize(bytes) {
+    if (!bytes || bytes <= 0) return '0 B';
+    if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    return `${Math.round(bytes / 1024)} KB`;
+  }
+
+  function getManualSelectedScene() {
+    if (!project?.scenes?.length) return null;
+    return project.scenes.find((s) => s.id === Number(manualSelectedSceneId)) || project.scenes[0];
+  }
+
+  async function copyTextToClipboard(text, btnElement) {
+    if (!text) return false;
+    try {
+      if (navigator?.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+      }
+      if (btnElement) {
+        const origText = btnElement.textContent;
+        btnElement.textContent = '✓ ĐÃ SAO CHÉP!';
+        btnElement.classList.add('copied');
+        setTimeout(() => {
+          btnElement.textContent = origText;
+          btnElement.classList.remove('copied');
+        }, 2000);
+      }
+      return true;
+    } catch (err) {
+      alert(`Không thể sao chép: ${err.message}`);
+      return false;
+    }
+  }
+
+  manualChatGptBtn?.addEventListener('click', async () => {
     const isCurrentlyActive = manualChatGptBtn.getAttribute('aria-pressed') === 'true';
     const nextState = !isCurrentlyActive;
     manualChatGptBtn.setAttribute('aria-pressed', nextState ? 'true' : 'false');
@@ -4360,6 +4437,14 @@ function updateScanButtonVisibility() {
     markProjectDirty();
     persist();
     render();
+    if (nextState) {
+      await renderManualChatGptUI();
+      startManualWatcher();
+      safeAddPipelineLog('manual-gpt', 'ok', 'Đã bật chế độ Manual ChatGPT. Giao diện điều khiển thủ công đã mở.');
+    } else {
+      stopManualWatcher();
+      safeAddPipelineLog('manual-gpt', 'info', 'Đã tắt chế độ Manual ChatGPT.');
+    }
     updateManualProjectProgressUI();
   });
 
@@ -4381,8 +4466,10 @@ function updateScanButtonVisibility() {
   }
 
   function updateManualProjectProgressUI() {
+    const manualProjectProgress = document.querySelector('#manual-project-progress');
+    const manualVeoUpGateStatus = document.querySelector('#manual-veoup-gate-status');
     if (!project?.scenes?.length) {
-      if (manualProjectProgress) manualProjectProgress.textContent = "0 / 0 scenes ready";
+      if (manualProjectProgress) manualProjectProgress.textContent = "0 / 0 scenes hoàn tất";
       if (manualVeoUpGateStatus) {
         manualVeoUpGateStatus.textContent = "LOCKED";
         manualVeoUpGateStatus.className = "gate-status locked";
@@ -4397,7 +4484,7 @@ function updateScanButtonVisibility() {
       const hasMotion = Boolean(scene.motionPrompt || scene.motionPromptPath);
       if (hasImage && hasMotion) readyCount += 1;
     }
-    if (manualProjectProgress) manualProjectProgress.textContent = `${readyCount} / ${totalCount} scenes ready`;
+    if (manualProjectProgress) manualProjectProgress.textContent = `${readyCount} / ${totalCount} scenes hoàn tất`;
     const isAllReady = readyCount === totalCount && totalCount > 0;
     if (manualVeoUpGateStatus) {
       if (isAllReady) {
@@ -4410,64 +4497,441 @@ function updateScanButtonVisibility() {
     }
   }
 
-  function bindManualChatGptUi() {
-    const getCurrentSceneIdStr = () => {
-      if (typeof activeSceneId !== 'undefined' && activeSceneId) return `scene_${String(activeSceneId).padStart(3, '0')}`;
-      if (typeof currentSceneIndex !== 'undefined' && project?.scenes?.[currentSceneIndex]) {
-        return `scene_${String(project.scenes[currentSceneIndex].id || currentSceneIndex + 1).padStart(3, '0')}`;
+  async function renderManualChatGptUI() {
+    if (!project?.scenes?.length) return;
+    const scene = getManualSelectedScene();
+    if (!scene) return;
+
+    const totalCount = project.scenes.length;
+    const sceneToken = `scene_${String(scene.id).padStart(3, '0')}`;
+
+    // Update Dropdown
+    const sceneSelect = document.querySelector('#manual-scene-select');
+    if (sceneSelect) {
+      sceneSelect.innerHTML = '';
+      project.scenes.forEach((s) => {
+        const isDone = Boolean((s.imagePath || s.keyframePath) && (s.motionPrompt || s.motionPromptPath));
+        const hasKfOnly = Boolean(s.imagePath || s.keyframePath) && !Boolean(s.motionPrompt || s.motionPromptPath);
+        const mark = isDone ? '✓' : (hasKfOnly ? '⏳' : '⚪');
+        const opt = document.createElement('option');
+        opt.value = String(s.id);
+        opt.textContent = `Scene ${s.id} [${mark}]`;
+        if (s.id === scene.id) opt.selected = true;
+        sceneSelect.appendChild(opt);
+      });
+    }
+
+    // Title & Meta
+    const titleEl = document.querySelector('#manual-current-scene-title');
+    if (titleEl) {
+      const desc = String(scene.original || '').trim();
+      titleEl.textContent = `Scene ${scene.id} / ${totalCount}${desc ? `: ${desc.slice(0, 35)}...` : ''}`;
+    }
+
+    // Prompts preview
+    const nv1Preview = document.querySelector('#manual-nv1-prompt-preview');
+    if (nv1Preview) {
+      nv1Preview.value = scene.imagePrompt || scene.original || (typeof buildImagePrompt === 'function' ? buildImagePrompt(scene) : '');
+    }
+    const nv2Preview = document.querySelector('#manual-nv2-prompt-preview');
+    if (nv2Preview) {
+      nv2Preview.value = scene.motionPrompt || (typeof buildMotionPrompt === 'function' ? buildMotionPrompt(scene) : '');
+    }
+
+    // Audit on disk
+    let audit = null;
+    if (outputFolder) {
+      audit = await window.videoPlannerAPI?.getManualSceneAudit({
+        projectPath: outputFolder,
+        sceneId: sceneToken,
+      }).catch(() => null);
+    }
+
+    const hasKeyframe = Boolean(audit?.keyframe?.valid || scene.imagePath || scene.keyframePath);
+    const hasMotion = Boolean(audit?.motionPrompt?.valid || scene.motionPrompt || scene.motionPromptPath);
+
+    // NV1 status & badge
+    const nv1Status = document.querySelector('#manual-nv1-status');
+    const nv1Badge = document.querySelector('#manual-nv1-disk-badge');
+    if (nv1Badge) {
+      if (audit?.keyframe?.valid) {
+        nv1Badge.className = 'stage-disk-badge saved';
+        nv1Badge.innerHTML = `<span class="disk-icon">💾</span> File đĩa: <strong class="disk-status">✓ ${audit.keyframe.fileName} (${formatFileSize(audit.keyframe.size)})</strong>`;
+        if (nv1Status) nv1Status.textContent = '✓ Đã lưu keyframe';
+      } else {
+        nv1Badge.className = 'stage-disk-badge missing';
+        nv1Badge.innerHTML = `<span class="disk-icon">💾</span> File đĩa: <span class="disk-status">❌ Chưa có keyframe</span>`;
+        if (nv1Status) nv1Status.textContent = 'Chờ gửi prompt NV1';
       }
-      return 'scene_001';
-    };
+    }
 
-    const stages = [
-      { name: 'req1', stage: 'REQUEST_1' },
-      { name: 'req2', stage: 'REQUEST_2' },
-      { name: 'nv1', stage: 'NV1' },
-      { name: 'nv2', stage: 'NV2' },
-    ];
+    // NV2 status & badge
+    const nv2Status = document.querySelector('#manual-nv2-status');
+    const nv2Badge = document.querySelector('#manual-nv2-disk-badge');
+    if (nv2Badge) {
+      if (audit?.motionPrompt?.valid) {
+        nv2Badge.className = 'stage-disk-badge saved';
+        nv2Badge.innerHTML = `<span class="disk-icon">💾</span> File đĩa: <strong class="disk-status">✓ ${audit.motionPrompt.fileName} (${audit.motionPrompt.length} ký tự)</strong>`;
+        if (nv2Status) nv2Status.textContent = '✓ Đã lưu motion prompt';
+      } else {
+        nv2Badge.className = 'stage-disk-badge missing';
+        nv2Badge.innerHTML = `<span class="disk-icon">💾</span> File đĩa: <span class="disk-status">❌ Chưa có motion prompt</span>`;
+        if (nv2Status) nv2Status.textContent = hasKeyframe ? 'Chờ gửi prompt NV2' : 'Chưa đến lượt';
+      }
+    }
 
-    stages.forEach(({ name, stage }) => {
-      const startBtn = document.querySelector(`#manual-start-${name}-btn`);
-      const captureBtn = document.querySelector(`#manual-capture-${name}-btn`);
-      const statusLabel = document.querySelector(`#manual-${name}-status`);
+    // Stepper
+    const stepNv1 = document.querySelector('#manual-step-nv1');
+    const stepNv2 = document.querySelector('#manual-step-nv2');
+    const stepDone = document.querySelector('#manual-step-done');
+    const sceneStatusBadge = document.querySelector('#manual-scene-status-badge');
 
-      startBtn?.addEventListener('click', async () => {
-        if (statusLabel) statusLabel.textContent = 'Đang ghi baseline...';
-        const sceneId = getCurrentSceneIdStr();
-        const result = await window.videoPlannerAPI?.startManualStage({
-          projectPath: outputFolder,
-          sceneId,
-          stage,
-        }).catch((err) => ({ ok: false, error: err.message }));
+    if (stepNv1) {
+      stepNv1.className = hasKeyframe ? 'manual-step done' : 'manual-step active';
+    }
+    if (stepNv2) {
+      if (hasMotion) {
+        stepNv2.className = 'manual-step done';
+      } else if (hasKeyframe) {
+        stepNv2.className = 'manual-step active';
+      } else {
+        stepNv2.className = 'manual-step';
+      }
+    }
+    if (stepDone) {
+      stepDone.className = (hasKeyframe && hasMotion) ? 'manual-step done' : 'manual-step';
+    }
+    if (sceneStatusBadge) {
+      if (hasKeyframe && hasMotion) {
+        sceneStatusBadge.className = 'status-badge approved';
+        sceneStatusBadge.textContent = '✓ HOÀN TẤT';
+      } else if (hasKeyframe) {
+        sceneStatusBadge.className = 'status-badge waiting_review';
+        sceneStatusBadge.textContent = '⏳ THIẾU NV2';
+      } else {
+        sceneStatusBadge.className = 'status-badge idle';
+        sceneStatusBadge.textContent = '⚪ CHƯA BẮT ĐẦU';
+      }
+    }
 
-        if (result?.ok) {
-          if (statusLabel) statusLabel.textContent = 'Đã ghi baseline. Hãy gửi prompt trên ChatGPT.';
-          safeAddPipelineLog('renderer', 'ok', `Manual Stage ${stage} baseline recorded for ${sceneId}.`);
-        } else {
-          if (statusLabel) statusLabel.textContent = `Lỗi: ${result?.error || result?.reason || 'thất bại'}`;
-          safeAddPipelineLog('renderer', 'error', `Manual Stage ${stage} baseline failed: ${result?.error || result?.reason}`);
+    updateManualProjectProgressUI();
+  }
+
+  function startManualWatcher() {
+    if (manualWatcherTimer) clearInterval(manualWatcherTimer);
+    const startWatcherBtn = document.querySelector('#manual-start-watcher-btn');
+    const stageBadge = document.querySelector('#manual-stage-badge');
+    if (startWatcherBtn) {
+      startWatcherBtn.textContent = '⏸ Tạm dừng Giám sát';
+      startWatcherBtn.classList.remove('primary');
+    }
+    if (stageBadge) {
+      stageBadge.textContent = 'Đang giám sát...';
+      stageBadge.className = 'state-pill running';
+    }
+
+    manualWatcherTimer = setInterval(async () => {
+      if (manualIsCapturing || !project?.manualChatGPT) return;
+      const autoWatchToggle = document.querySelector('#manual-auto-watch-toggle');
+      if (autoWatchToggle && !autoWatchToggle.checked) return;
+
+      try {
+        const progress = await window.videoPlannerAPI?.detectChatGPTProgress().catch(() => null);
+        if (!progress || !progress.ok) return;
+
+        const stageBadgeEl = document.querySelector('#manual-stage-badge');
+        if (progress.isGenerating) {
+          if (stageBadgeEl) {
+            stageBadgeEl.textContent = '🎨 ChatGPT đang tạo...';
+            stageBadgeEl.className = 'state-pill running';
+          }
+          return;
         }
-      });
 
-      captureBtn?.addEventListener('click', async () => {
-        if (statusLabel) statusLabel.textContent = 'Đang trích xuất...';
-        const sceneId = getCurrentSceneIdStr();
-        const result = await window.videoPlannerAPI?.captureManualStage({
+        const scene = getManualSelectedScene();
+        if (!scene || !outputFolder) return;
+        const sceneToken = `scene_${String(scene.id).padStart(3, '0')}`;
+        const audit = await window.videoPlannerAPI?.getManualSceneAudit({
           projectPath: outputFolder,
-          sceneId,
-          stage,
-        }).catch((err) => ({ ok: false, error: err.message }));
+          sceneId: sceneToken,
+        }).catch(() => null);
 
-        if (result?.ok) {
-          if (statusLabel) statusLabel.textContent = `✓ Đã lưu ${result.filePath || stage}`;
-          safeAddPipelineLog('renderer', 'ok', `Manual Stage ${stage} captured & saved to ${result.filePath}`);
-          updateManualProjectProgressUI();
-        } else {
-          if (statusLabel) statusLabel.textContent = `❌ ${result?.reason || result?.error || 'thất bại'}`;
-          safeAddPipelineLog('renderer', 'warning', `Manual Stage ${stage} capture rejected: ${result?.reason || result?.error}`);
+        // Check if NV1 is missing and ChatGPT has an image
+        if (!audit?.keyframe?.valid && progress.hasImage) {
+          manualIsCapturing = true;
+          safeAddPipelineLog('manual-gpt', 'running', `[Scene ${scene.id} - NV1] Phát hiện ảnh trên ChatGPT, đang tự động lưu keyframe...`);
+          const nv1StatusEl = document.querySelector('#manual-nv1-status');
+          if (nv1StatusEl) nv1StatusEl.textContent = 'Đang tự động lưu ảnh...';
+
+          const capRes = await window.videoPlannerAPI?.captureManualStage({
+            projectPath: outputFolder,
+            sceneId: sceneToken,
+            stage: 'NV1',
+            options: { force: true },
+          }).catch((err) => ({ ok: false, error: err.message }));
+
+          if (capRes?.ok) {
+            scene.imagePath = capRes.artifactPath || capRes.filePath;
+            scene.keyframePath = capRes.artifactPath || capRes.filePath;
+            safeAddPipelineLog('manual-gpt', 'ok', `[Scene ${scene.id} - NV1] ✓ Đã lưu keyframe thành công: ${capRes.filePath} (${formatFileSize(capRes.size)})`);
+            setStatus(`Scene ${scene.id}: Đã lưu ảnh keyframe! Hãy dán prompt NV2 vào ChatGPT.`, 'ok');
+            markProjectDirty();
+            persist();
+            render();
+            await renderManualChatGptUI();
+          } else {
+            safeAddPipelineLog('manual-gpt', 'warning', `[Scene ${scene.id} - NV1] Tự động lưu ảnh thất bại: ${capRes?.reason || capRes?.error}`);
+          }
+          manualIsCapturing = false;
+          return;
         }
-      });
+
+        // Check if NV2 is missing (and NV1 is done) and ChatGPT has text
+        if (audit?.keyframe?.valid && !audit?.motionPrompt?.valid && progress.textLength > 35) {
+          manualIsCapturing = true;
+          safeAddPipelineLog('manual-gpt', 'running', `[Scene ${scene.id} - NV2] Phát hiện motion prompt trên ChatGPT, đang tự động lưu...`);
+          const nv2StatusEl = document.querySelector('#manual-nv2-status');
+          if (nv2StatusEl) nv2StatusEl.textContent = 'Đang tự động lưu motion prompt...';
+
+          const capRes = await window.videoPlannerAPI?.captureManualStage({
+            projectPath: outputFolder,
+            sceneId: sceneToken,
+            stage: 'NV2',
+            options: { force: true },
+          }).catch((err) => ({ ok: false, error: err.message }));
+
+          if (capRes?.ok) {
+            scene.motionPrompt = capRes.motionPrompt;
+            scene.motionPromptPath = capRes.artifactPath || capRes.filePath;
+            scene.status = 'done';
+            scene.completionStatus = 'keyframe_motion_complete';
+            scene.progressStep = 'done';
+            safeAddPipelineLog('manual-gpt', 'ok', `[Scene ${scene.id} - NV2] ✓ Đã lưu motion prompt thành công: ${capRes.filePath} (${capRes.length} ký tự). Scene ${scene.id} HOÀN TẤT!`);
+            setStatus(`Scene ${scene.id}: Hoàn tất cả Keyframe và Motion Prompt!`, 'ok');
+            markProjectDirty();
+            persist();
+            render();
+            await renderManualChatGptUI();
+
+            const autoAdvanceToggle = document.querySelector('#manual-auto-advance-toggle');
+            if (autoAdvanceToggle?.checked !== false) {
+              const nextIncomplete = (project?.scenes || []).find((s) => s.id > scene.id && (!s.imagePath || !s.motionPrompt));
+              if (nextIncomplete) {
+                manualSelectedSceneId = nextIncomplete.id;
+                safeAddPipelineLog('manual-gpt', 'running', `Tự động chuyển sang Scene ${manualSelectedSceneId}...`);
+                await renderManualChatGptUI();
+              }
+            }
+          } else {
+            safeAddPipelineLog('manual-gpt', 'warning', `[Scene ${scene.id} - NV2] Tự động lưu motion prompt thất bại: ${capRes?.reason || capRes?.error}`);
+          }
+          manualIsCapturing = false;
+          return;
+        }
+
+        if (audit?.isSceneComplete) {
+          if (stageBadgeEl) {
+            stageBadgeEl.textContent = 'Scene hoàn tất ✓';
+            stageBadgeEl.className = 'state-pill done';
+          }
+        } else {
+          if (stageBadgeEl) {
+            stageBadgeEl.textContent = 'Chờ gửi prompt';
+            stageBadgeEl.className = 'state-pill idle';
+          }
+        }
+      } catch (err) {
+        manualIsCapturing = false;
+      }
+    }, 2500);
+  }
+
+  function stopManualWatcher() {
+    if (manualWatcherTimer) {
+      clearInterval(manualWatcherTimer);
+      manualWatcherTimer = null;
+    }
+    const startWatcherBtn = document.querySelector('#manual-start-watcher-btn');
+    const stageBadge = document.querySelector('#manual-stage-badge');
+    if (startWatcherBtn) {
+      startWatcherBtn.textContent = '▶ Bắt đầu Giám sát';
+      startWatcherBtn.classList.add('primary');
+    }
+    if (stageBadge) {
+      stageBadge.textContent = 'Đã dừng giám sát';
+      stageBadge.className = 'state-pill idle';
+    }
+  }
+
+  async function startManualGptWorkflow() {
+    if (!outputFolder) {
+      await chooseOutputFolder();
+      if (!outputFolder) return;
+    }
+    if (manualChatGptCard) manualChatGptCard.hidden = false;
+    if (manualChatGptBtn) {
+      manualChatGptBtn.setAttribute('aria-pressed', 'true');
+      manualChatGptBtn.classList.add('active');
+    }
+    if (project) project.manualChatGPT = true;
+    manualChatGptCard?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+    await syncProjectSceneFolders({ repairFromDisk: true }).catch(() => null);
+
+    const firstIncomplete = (project?.scenes || []).find((s) => !s.imagePath || !s.motionPrompt);
+    if (firstIncomplete) {
+      manualSelectedSceneId = firstIncomplete.id;
+    }
+
+    await renderManualChatGptUI();
+
+    const autoWatchToggle = document.querySelector('#manual-auto-watch-toggle');
+    if (autoWatchToggle?.checked !== false) {
+      startManualWatcher();
+    }
+
+    safeAddPipelineLog('manual-gpt', 'running', `Đã khởi động Chế độ Manual ChatGPT tại Scene ${manualSelectedSceneId}. Hãy sao chép prompt và dán vào tab ChatGPT.`);
+    setStatus(`Manual ChatGPT: Đang tại Scene ${manualSelectedSceneId}. Hãy copy prompt và gửi trên ChatGPT.`, 'running');
+  }
+  window.startManualGptWorkflow = startManualGptWorkflow;
+
+  function bindManualChatGptUi() {
+    // Navigation
+    document.querySelector('#manual-prev-scene-btn')?.addEventListener('click', async () => {
+      const totalCount = project?.scenes?.length || 1;
+      manualSelectedSceneId = manualSelectedSceneId > 1 ? manualSelectedSceneId - 1 : totalCount;
+      await renderManualChatGptUI();
     });
+
+    document.querySelector('#manual-next-scene-btn')?.addEventListener('click', async () => {
+      const totalCount = project?.scenes?.length || 1;
+      manualSelectedSceneId = manualSelectedSceneId < totalCount ? manualSelectedSceneId + 1 : 1;
+      await renderManualChatGptUI();
+    });
+
+    document.querySelector('#manual-scene-select')?.addEventListener('change', async (e) => {
+      manualSelectedSceneId = Number(e.target.value) || 1;
+      await renderManualChatGptUI();
+    });
+
+    // Copy Prompt Buttons
+    const copyNv1Btn = document.querySelector('#manual-copy-nv1-btn');
+    copyNv1Btn?.addEventListener('click', async () => {
+      const textarea = document.querySelector('#manual-nv1-prompt-preview');
+      const text = textarea?.value || '';
+      const ok = await copyTextToClipboard(text, copyNv1Btn);
+      if (ok) {
+        safeAddPipelineLog('manual-gpt', 'ok', `Đã sao chép Prompt Tạo Ảnh (NV1) Scene ${manualSelectedSceneId} vào clipboard.`);
+        setStatus(`Đã copy prompt NV1 Scene ${manualSelectedSceneId}! Dán vào ChatGPT và nhấn Enter.`, 'ok');
+      }
+    });
+
+    const copyNv2Btn = document.querySelector('#manual-copy-nv2-btn');
+    copyNv2Btn?.addEventListener('click', async () => {
+      const textarea = document.querySelector('#manual-nv2-prompt-preview');
+      const text = textarea?.value || '';
+      const ok = await copyTextToClipboard(text, copyNv2Btn);
+      if (ok) {
+        safeAddPipelineLog('manual-gpt', 'ok', `Đã sao chép Prompt Motion (NV2) Scene ${manualSelectedSceneId} vào clipboard.`);
+        setStatus(`Đã copy prompt NV2 Scene ${manualSelectedSceneId}! Dán vào ChatGPT và nhấn Enter.`, 'ok');
+      }
+    });
+
+    // Capture Buttons
+    document.querySelector('#manual-capture-nv1-btn')?.addEventListener('click', async () => {
+      const scene = getManualSelectedScene();
+      if (!scene || !outputFolder) return;
+      const sceneToken = `scene_${String(scene.id).padStart(3, '0')}`;
+      const statusLabel = document.querySelector('#manual-nv1-status');
+      if (statusLabel) statusLabel.textContent = 'Đang trích xuất ảnh từ ChatGPT...';
+      safeAddPipelineLog('manual-gpt', 'running', `[Scene ${scene.id} - NV1] Đang trích xuất keyframe từ tab ChatGPT...`);
+
+      const result = await window.videoPlannerAPI?.captureManualStage({
+        projectPath: outputFolder,
+        sceneId: sceneToken,
+        stage: 'NV1',
+        options: { force: true },
+      }).catch((err) => ({ ok: false, error: err.message }));
+
+      if (result?.ok) {
+        scene.imagePath = result.artifactPath || result.filePath;
+        scene.keyframePath = result.artifactPath || result.filePath;
+        if (statusLabel) statusLabel.textContent = `✓ Đã lưu ${result.filePath}`;
+        safeAddPipelineLog('manual-gpt', 'ok', `[Scene ${scene.id} - NV1] ✓ Đã lưu keyframe thành công: ${result.filePath} (${formatFileSize(result.size)})`);
+        setStatus(`Scene ${scene.id}: Đã lưu ảnh keyframe! Hãy dán prompt NV2 tiếp theo.`, 'ok');
+        markProjectDirty();
+        persist();
+        render();
+        await renderManualChatGptUI();
+      } else {
+        if (statusLabel) statusLabel.textContent = `❌ ${result?.reason || result?.error || 'thất bại'}`;
+        safeAddPipelineLog('manual-gpt', 'warning', `[Scene ${scene.id} - NV1] Lưu keyframe thất bại: ${result?.reason || result?.error}`);
+      }
+    });
+
+    document.querySelector('#manual-capture-nv2-btn')?.addEventListener('click', async () => {
+      const scene = getManualSelectedScene();
+      if (!scene || !outputFolder) return;
+      const sceneToken = `scene_${String(scene.id).padStart(3, '0')}`;
+      const statusLabel = document.querySelector('#manual-nv2-status');
+      if (statusLabel) statusLabel.textContent = 'Đang trích xuất motion prompt...';
+      safeAddPipelineLog('manual-gpt', 'running', `[Scene ${scene.id} - NV2] Đang trích xuất motion prompt từ tab ChatGPT...`);
+
+      const result = await window.videoPlannerAPI?.captureManualStage({
+        projectPath: outputFolder,
+        sceneId: sceneToken,
+        stage: 'NV2',
+        options: { force: true },
+      }).catch((err) => ({ ok: false, error: err.message }));
+
+      if (result?.ok) {
+        scene.motionPrompt = result.motionPrompt;
+        scene.motionPromptPath = result.artifactPath || result.filePath;
+        if (scene.imagePath && scene.motionPrompt) {
+          scene.status = 'done';
+          scene.completionStatus = 'keyframe_motion_complete';
+          scene.progressStep = 'done';
+        }
+        if (statusLabel) statusLabel.textContent = `✓ Đã lưu ${result.filePath}`;
+        safeAddPipelineLog('manual-gpt', 'ok', `[Scene ${scene.id} - NV2] ✓ Đã lưu motion prompt thành công: ${result.filePath} (${result.length} ký tự).`);
+        setStatus(`Scene ${scene.id}: Đã lưu motion prompt thành công!`, 'ok');
+        markProjectDirty();
+        persist();
+        render();
+        await renderManualChatGptUI();
+      } else {
+        if (statusLabel) statusLabel.textContent = `❌ ${result?.reason || result?.error || 'thất bại'}`;
+        safeAddPipelineLog('manual-gpt', 'warning', `[Scene ${scene.id} - NV2] Lưu motion prompt thất bại: ${result?.reason || result?.error}`);
+      }
+    });
+
+    // Toolbar Buttons
+    document.querySelector('#manual-start-watcher-btn')?.addEventListener('click', () => {
+      if (manualWatcherTimer) {
+        stopManualWatcher();
+      } else {
+        startManualWatcher();
+      }
+    });
+
+    document.querySelector('#manual-audit-disk-btn')?.addEventListener('click', async () => {
+      setStatus('Đang quét và kiểm tra output các scene trên ổ đĩa...', 'running');
+      await syncProjectSceneFolders({ repairFromDisk: true }).catch(() => null);
+      await renderManualChatGptUI();
+      setStatus('Đã hoàn tất quét đĩa.', 'ok');
+    });
+
+    document.querySelector('#manual-open-scene-folder-btn')?.addEventListener('click', async () => {
+      const scene = getManualSelectedScene();
+      if (!scene || !outputFolder) return;
+      const sceneToken = `scene_${String(scene.id).padStart(3, '0')}`;
+      const separator = outputFolder.includes('\\') ? '\\' : '/';
+      const sceneFolderPath = `${outputFolder}${separator}${sceneToken}`;
+      await window.videoPlannerAPI?.openSceneFolder(sceneFolderPath).catch(() => null);
+    });
+
+    // Initial render
+    renderManualChatGptUI();
   }
 
   bindManualChatGptUi();
