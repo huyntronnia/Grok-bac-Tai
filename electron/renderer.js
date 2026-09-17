@@ -75,6 +75,7 @@ const skipVideoReviewToggle = document.querySelector('#skip-video-review-toggle'
 const keyframeMotionOnlyToggle = document.querySelector('#keyframe-motion-only-toggle');
 const manualChatGptBtn = document.querySelector('#manual-chatgpt-btn');
 const manualChatGptCard = document.querySelector('#manual-chatgpt-card');
+const manualChatGptSection = document.querySelector('#manual-chatgpt-section');
 const manualStageBadge = document.querySelector('#manual-stage-badge');
 const manualProjectProgress = document.querySelector('#manual-project-progress');
 const manualVeoUpGateStatus = document.querySelector('#manual-veoup-gate-status');
@@ -4479,12 +4480,14 @@ function updateScanButtonVisibility() {
       manualChatGptBtn.classList.remove('active');
     }
     if (manualChatGptCard) manualChatGptCard.hidden = !nextState;
+    if (manualChatGptSection) manualChatGptSection.hidden = !nextState;
     if (nextState && keyframeMotionOnlyToggle) keyframeMotionOnlyToggle.checked = false;
     if (project) project.manualChatGPT = nextState;
     markProjectDirty();
     persist();
     render();
     if (nextState) {
+      manualChatGptCard?.scrollIntoView({ behavior: 'smooth', block: 'start' });
       await renderManualChatGptUI();
       startManualWatcher();
       safeAddPipelineLog('manual-gpt', 'ok', 'Đã bật chế độ Manual ChatGPT. Giao diện điều khiển thủ công đã mở.');
@@ -4545,7 +4548,13 @@ function updateScanButtonVisibility() {
   }
 
   async function renderManualChatGptUI() {
-    if (!project?.scenes?.length) return;
+    const bannerMessage = document.querySelector('#manual-guidance-message');
+    const bannerTitle = document.querySelector('#manual-guidance-title');
+    if (!project?.scenes?.length) {
+      if (bannerTitle) bannerTitle.textContent = 'Chưa Có Scene Nào';
+      if (bannerMessage) bannerMessage.textContent = "Vui lòng nhập kịch bản ở khung bên trái rồi bấm 'Tách Scene & Tạo Project'.";
+      return;
+    }
     const scene = getManualSelectedScene();
     if (!scene) return;
 
@@ -4897,12 +4906,13 @@ function updateScanButtonVisibility() {
       if (!outputFolder) return;
     }
     if (manualChatGptCard) manualChatGptCard.hidden = false;
+    if (manualChatGptSection) manualChatGptSection.hidden = false;
     if (manualChatGptBtn) {
       manualChatGptBtn.setAttribute('aria-pressed', 'true');
       manualChatGptBtn.classList.add('active');
     }
     if (project) project.manualChatGPT = true;
-    manualChatGptCard?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    manualChatGptCard?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
     await syncProjectSceneFolders({ repairFromDisk: true }).catch(() => null);
 
