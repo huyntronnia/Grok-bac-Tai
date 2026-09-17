@@ -4684,7 +4684,17 @@ function updateScanButtonVisibility() {
       }
     }
 
-    // Stepper 4 nấc trực quan (Prep -> NV1 -> NV2 -> VeoUp)
+    // Project completion status across all scenes
+    let readyCount = 0;
+    const totalCount = project?.scenes?.length || 0;
+    for (const s of (project?.scenes || [])) {
+      const hasImg = Boolean(s.imagePath || s.keyframePath);
+      const hasMot = Boolean(s.motionPrompt || s.motionPromptPath);
+      if (hasImg && hasMot) readyCount += 1;
+    }
+    const isAllReady = totalCount > 0 && readyCount === totalCount;
+
+    // Stepper 4 nấc trực quan (Prep -> NV1 -> NV2 -> VeoUp khi ĐỦ mọi scene)
     const stepPrep = document.querySelector('#manual-step-prep');
     const stepNv1 = document.querySelector('#manual-step-nv1');
     const stepNv2 = document.querySelector('#manual-step-nv2');
@@ -4714,18 +4724,30 @@ function updateScanButtonVisibility() {
         stepNv2.className = 'manual-step';
       }
     }
+
+    // Step 4 VeoUp Gate: CHỈ ĐƯỢC MỞ KHI CHẠY HẾT TẤT CẢ CÁC SCENE
     if (stepVeoup) {
-      if (hasKeyframe && hasMotion) {
-        stepVeoup.className = 'manual-step completed done';
+      const stepVeoupTitle = stepVeoup.querySelector('.step-title');
+      const stepVeoupDesc = stepVeoup.querySelector('.step-desc');
+      const stepVeoupNum = stepVeoup.querySelector('.step-num');
+
+      if (isAllReady) {
+        stepVeoup.className = 'manual-step completed done ready';
+        if (stepVeoupNum) stepVeoupNum.textContent = '✓';
+        if (stepVeoupTitle) stepVeoupTitle.textContent = '4. Sẵn Sàng VeoUp 🚀';
+        if (stepVeoupDesc) stepVeoupDesc.textContent = `Đủ ${totalCount}/${totalCount} scene - Nạp batch ghép video`;
       } else {
-        stepVeoup.className = 'manual-step';
+        stepVeoup.className = 'manual-step locked';
+        if (stepVeoupNum) stepVeoupNum.textContent = '🔒';
+        if (stepVeoupTitle) stepVeoupTitle.textContent = '4. Cổng VeoUp (Khóa 🔒)';
+        if (stepVeoupDesc) stepVeoupDesc.textContent = `Cần xong hết tất cả scene (${readyCount}/${totalCount})`;
       }
     }
 
     if (sceneStatusBadge) {
       if (hasKeyframe && hasMotion) {
         sceneStatusBadge.className = 'status-badge approved';
-        sceneStatusBadge.textContent = '✓ HOÀN TẤT';
+        sceneStatusBadge.textContent = '✓ SCENE HOÀN TẤT';
       } else if (hasKeyframe) {
         sceneStatusBadge.className = 'status-badge waiting_review';
         sceneStatusBadge.textContent = '⏳ THIẾU NV2';
@@ -4733,6 +4755,54 @@ function updateScanButtonVisibility() {
         sceneStatusBadge.className = 'status-badge idle';
         sceneStatusBadge.textContent = '⚪ CHƯA BẮT ĐẦU';
       }
+    }
+
+    // Cập nhật Step Guidance Banner đồng bộ trạng thái
+    const bannerTitle = document.querySelector('#manual-guidance-title');
+    const bannerMsg = document.querySelector('#manual-guidance-message');
+    const bannerIcon = document.querySelector('#manual-step-guidance-banner .guidance-icon');
+    const forceKeyframeBtn = document.querySelector('#manual-force-capture-keyframe-btn');
+    const forceMotionBtn = document.querySelector('#manual-force-capture-motion-btn');
+    const guidanceNextSceneBtn = document.querySelector('#manual-guidance-next-scene-btn');
+    const guidanceVeoupBtn = document.querySelector('#manual-guidance-veoup-btn');
+
+    if (isAllReady) {
+      if (bannerIcon) bannerIcon.textContent = '🎉';
+      if (bannerTitle) bannerTitle.textContent = `TẤT CẢ ${totalCount}/${totalCount} SCENE ĐÃ HOÀN TẤT!`;
+      if (bannerMsg) bannerMsg.textContent = `Bạn đã chạy xong toàn bộ ${totalCount} scene. Cổng VeoUp đã MỞ KHÓA! Bấm nút bên phải để nạp batch sang VeoUp.`;
+      if (forceKeyframeBtn) forceKeyframeBtn.style.display = 'none';
+      if (forceMotionBtn) forceMotionBtn.style.display = 'none';
+      if (guidanceNextSceneBtn) guidanceNextSceneBtn.style.display = 'none';
+      if (guidanceVeoupBtn) guidanceVeoupBtn.style.display = 'inline-block';
+    } else if (hasKeyframe && hasMotion) {
+      const nextIncomplete = (project?.scenes || []).find((s) => s.id > scene.id && (!s.imagePath || !s.motionPrompt))
+        || (project?.scenes || []).find((s) => !s.imagePath || !s.motionPrompt);
+      if (bannerIcon) bannerIcon.textContent = '✓';
+      if (bannerTitle) bannerTitle.textContent = `Scene ${scene.id} Đã Hoàn Tất (${readyCount}/${totalCount} Scene Xong)`;
+      if (bannerMsg) bannerMsg.textContent = `Phải chạy hết tất cả các scene rồi mới sang VeoUp! Hãy bấm 'Sang Scene kế tiếp' để làm scene tiếp theo.`;
+      if (forceKeyframeBtn) forceKeyframeBtn.style.display = 'none';
+      if (forceMotionBtn) forceMotionBtn.style.display = 'none';
+      if (guidanceNextSceneBtn) {
+        guidanceNextSceneBtn.style.display = 'inline-block';
+        guidanceNextSceneBtn.textContent = nextIncomplete ? `Sang Scene ${nextIncomplete.id} kế tiếp ▶` : 'Sang Scene kế tiếp ▶';
+      }
+      if (guidanceVeoupBtn) guidanceVeoupBtn.style.display = 'none';
+    } else if (hasKeyframe && !hasMotion) {
+      if (bannerIcon) bannerIcon.textContent = '🎬';
+      if (bannerTitle) bannerTitle.textContent = `Bước 2: Tạo Motion Prompt NV2 (Scene ${scene.id}/${totalCount})`;
+      if (bannerMsg) bannerMsg.textContent = `Đã lưu Keyframe! Đang đợi bạn tạo Motion Prompt NV2 trên ChatGPT... (Prompt đã sẵn sàng để copy)`;
+      if (forceKeyframeBtn) forceKeyframeBtn.style.display = 'none';
+      if (forceMotionBtn) forceMotionBtn.style.display = 'inline-block';
+      if (guidanceNextSceneBtn) guidanceNextSceneBtn.style.display = 'none';
+      if (guidanceVeoupBtn) guidanceVeoupBtn.style.display = 'none';
+    } else {
+      if (bannerIcon) bannerIcon.textContent = '🎨';
+      if (bannerTitle) bannerTitle.textContent = `Bước 1: Tạo Ảnh NV1 (Scene ${scene.id}/${totalCount})`;
+      if (bannerMsg) bannerMsg.textContent = `Đang đợi bạn tạo ảnh NV1 trên ChatGPT... (Prompt đã được copy vào Clipboard)`;
+      if (forceKeyframeBtn) forceKeyframeBtn.style.display = 'inline-block';
+      if (forceMotionBtn) forceMotionBtn.style.display = 'none';
+      if (guidanceNextSceneBtn) guidanceNextSceneBtn.style.display = 'none';
+      if (guidanceVeoupBtn) guidanceVeoupBtn.style.display = 'none';
     }
 
     updateManualProjectProgressUI();
@@ -5061,6 +5131,24 @@ function updateScanButtonVisibility() {
         persist();
         render();
         await renderManualChatGptUI();
+
+        const autoAdvanceToggle = document.querySelector('#manual-auto-advance-toggle');
+        if (autoAdvanceToggle?.checked !== false) {
+          const nextIncomplete = (project?.scenes || []).find((s) => s.id > scene.id && (!s.imagePath || !s.motionPrompt));
+          if (nextIncomplete) {
+            manualSelectedSceneId = nextIncomplete.id;
+            safeAddPipelineLog('manual-gpt', 'running', `Tự động chuyển sang Scene ${manualSelectedSceneId}...`);
+            await renderManualChatGptUI();
+            await syncManualStageBaseline(nextIncomplete);
+          } else {
+            const allDone = (project?.scenes || []).every((s) => (s.imagePath || s.keyframePath) && (s.motionPrompt || s.motionPromptPath));
+            if (allDone) {
+              safeAddPipelineLog('manual-gpt', 'ok', '🎉 TẤT CẢ CÁC SCENE ĐÃ HOÀN TẤT! Cổng VeoUp đã MỞ KHÓA.');
+              setStatus('Tất cả scene đã hoàn tất. Cổng VeoUp đã sẵn sàng!', 'ok');
+              showToast('Tất cả các scene đã hoàn tất! Cổng VeoUp đã sẵn sàng.', 'success');
+            }
+          }
+        }
       } else {
         if (statusLabel) statusLabel.textContent = `❌ ${result?.reason || result?.error || 'thất bại'}`;
         safeAddPipelineLog('manual-gpt', 'warning', `[Scene ${scene.id} - NV2] Lưu motion prompt thất bại: ${result?.reason || result?.error}`);
@@ -5086,6 +5174,32 @@ function updateScanButtonVisibility() {
 
     document.querySelector('#manual-force-capture-motion-btn')?.addEventListener('click', () => {
       document.querySelector('#manual-capture-nv2-btn')?.click();
+    });
+
+    document.querySelector('#manual-guidance-next-scene-btn')?.addEventListener('click', async () => {
+      const scene = getManualSelectedScene();
+      const nextIncomplete = (project?.scenes || []).find((s) => s.id > (scene?.id || 0) && (!s.imagePath || !s.motionPrompt))
+        || (project?.scenes || []).find((s) => (!s.imagePath || !s.motionPrompt));
+      if (nextIncomplete) {
+        manualSelectedSceneId = nextIncomplete.id;
+        safeAddPipelineLog('manual-gpt', 'running', `Chuyển sang Scene ${manualSelectedSceneId}...`);
+        await renderManualChatGptUI();
+        await syncManualStageBaseline(nextIncomplete);
+      } else {
+        const nextScene = (project?.scenes || []).find((s) => s.id === (scene?.id || 0) + 1);
+        if (nextScene) {
+          manualSelectedSceneId = nextScene.id;
+          await renderManualChatGptUI();
+          await syncManualStageBaseline(nextScene);
+        }
+      }
+    });
+
+    document.querySelector('#manual-guidance-veoup-btn')?.addEventListener('click', () => {
+      const scanRunBtn = document.querySelector('#veoup-scan-run-btn');
+      if (scanRunBtn) {
+        scanRunBtn.click();
+      }
     });
 
     window.videoPlannerAPI?.onManualStepChanged?.(async (data) => {

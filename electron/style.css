@@ -1450,6 +1450,48 @@ tr:hover td { background: rgba(255, 255, 255, 0.025); }
   color: #6ee7b7;
 }
 
+.manual-step.locked {
+  opacity: 0.5;
+  background: rgba(15, 23, 42, 0.4);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+.manual-step.locked .step-num {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.manual-step.locked .step-title {
+  color: #64748b;
+}
+
+.manual-step.ready {
+  background: rgba(16, 185, 129, 0.18);
+  border-color: rgba(16, 185, 129, 0.5);
+  box-shadow: 0 0 16px rgba(16, 185, 129, 0.3);
+  animation: pulseReadyStep 2.5s infinite;
+}
+
+.manual-step.ready .step-num {
+  background: #10b981;
+  color: #ffffff;
+}
+
+.manual-step.ready .step-title {
+  color: #34d399;
+  font-weight: 700;
+}
+
+@keyframes pulseReadyStep {
+  0%, 100% {
+    box-shadow: 0 0 10px rgba(16, 185, 129, 0.2);
+  }
+  50% {
+    box-shadow: 0 0 20px rgba(16, 185, 129, 0.5);
+  }
+}
+
 @keyframes pulseActiveStep {
   0%, 100% {
     box-shadow: 0 0 12px rgba(168, 85, 247, 0.25);

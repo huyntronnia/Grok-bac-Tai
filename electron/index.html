@@ -392,6 +392,8 @@
             <div class="guidance-actions" style="display: flex; gap: 8px;">
               <button id="manual-force-capture-keyframe-btn" class="primary small" type="button" title="Cưỡng chế trích xuất keyframe hiện tại trên màn hình">Bắt Keyframe hiện tại</button>
               <button id="manual-force-capture-motion-btn" class="primary small" type="button" title="Cưỡng chế trích xuất motion prompt gần nhất" style="display: none;">Bắt Motion Prompt hiện tại</button>
+              <button id="manual-guidance-next-scene-btn" class="primary small" type="button" style="display: none;" title="Chuyển sang scene tiếp theo để tiếp tục quy trình">Sang Scene kế tiếp ▶</button>
+              <button id="manual-guidance-veoup-btn" class="primary small" type="button" style="display: none; background: linear-gradient(135deg, #10b981, #059669); font-weight: 600;" title="Đã xong tất cả các scene, chuyển sang VeoUp">🚀 Quét & Nạp VeoUp Ngay</button>
             </div>
           </div>
 
@@ -421,11 +423,11 @@
               </div>
             </div>
             <div class="manual-step-divider"></div>
-            <div id="manual-step-veoup" class="manual-step">
-              <div class="step-num">4</div>
+            <div id="manual-step-veoup" class="manual-step locked">
+              <div class="step-num">🔒</div>
               <div class="step-content">
-                <div class="step-title">4. Sẵn Sàng VeoUp</div>
-                <div class="step-desc">Nạp batch ghép video</div>
+                <div class="step-title">4. Cổng VeoUp (Khóa 🔒)</div>
+                <div class="step-desc">Chờ chạy hết tất cả scene</div>
               </div>
             </div>
           </div>

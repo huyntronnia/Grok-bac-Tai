@@ -43,6 +43,16 @@ async function runTests() {
   const gateB = checkAllScenesChatGptReady(projectB);
   assert.strictEqual(gateB.ready, true);
 
+  // Scenario C: Verify renderer stepper logic contract
+  const fs = require("fs");
+  const path = require("path");
+  const rendererPath = path.resolve(__dirname, "../electron/renderer.js");
+  const rendererContent = fs.readFileSync(rendererPath, "utf8");
+
+  assert(rendererContent.includes("const isAllReady = totalCount > 0 && readyCount === totalCount"), "renderer must compute isAllReady across all scenes");
+  assert(rendererContent.includes("stepVeoup.className = 'manual-step locked'"), "stepVeoup must remain locked when not all scenes are ready");
+  assert(rendererContent.includes("Phải chạy hết tất cả các scene rồi mới sang VeoUp!"), "Guidance banner must clearly instruct that all scenes must finish before VeoUp");
+
   console.log("VeoUp Gate Gating Tests passed!");
 }
 
