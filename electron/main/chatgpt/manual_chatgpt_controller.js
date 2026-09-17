@@ -155,10 +155,16 @@ async function startManualStage(projectPath, sceneId, stage, runtime = {}) {
   const snapshot = await readSceneSnapshot(sceneDir);
 
   let conversationState = null;
+  let manualTurns = [];
   if (getCdpPage) {
     const page = await getCdpPage().catch(() => null);
     if (page) {
       conversationState = await getConversationState(page).catch(() => null);
+      manualTurns = await evaluateOnCdpPage(page, `(() => [...document.querySelectorAll('[data-message-author-role="user"], [data-message-author-role="assistant"]')].map((node, index) => ({
+        id: node.getAttribute('data-message-id') || node.closest('[data-message-id]')?.getAttribute('data-message-id') || (node.getAttribute('data-message-author-role') + ':' + index),
+        role: node.getAttribute('data-message-author-role'),
+        text: String(node.innerText || node.textContent || '').trim(),
+      })))()`).catch(() => []);
     }
   }
 
@@ -169,6 +175,7 @@ async function startManualStage(projectPath, sceneId, stage, runtime = {}) {
     conversationId: conversationState?.conversationId || "",
     userCount: Number(conversationState?.userTurnCount || conversationState?.userCount || 0),
     assistantCount: Number(conversationState?.assistantTurnCount || conversationState?.assistantCount || 0),
+    turns: Array.isArray(manualTurns) ? manualTurns : [],
     latestUserHash: conversationState?.latestUserHash || "",
     timestamp: new Date().toISOString(),
   };
@@ -230,15 +237,49 @@ async function validateManualOwnership(page, baseline, targetSceneId, targetStag
     return { ok: false, reason: "Assistant response is still streaming." };
   }
 
+  // If force capture or skip baseline check requested, allow bypass
+  if (options.force || options.skipBaselineCheck) {
+    return { ok: true, currentState };
+  }
+
   // Check new user turn and assistant response exist after baseline
   const currentAssistantCount = Number(currentState.assistantTurnCount || currentState.assistantCount || 0);
 
-  if (baseline && !options.skipBaselineCheck) {
+  if (baseline) {
     if (currentAssistantCount <= baseline.assistantCount) {
       return { ok: false, reason: "No new assistant response found since stage started." };
     }
   } else if (currentAssistantCount <= 0) {
     return { ok: false, reason: "No assistant response found in conversation." };
+  }
+
+  // Baseline turn list prevents stale images/text from being attributed to a new scene or stage
+  if (Array.isArray(baseline?.turns) && baseline.turns.length) {
+    const currentTurns = await evaluateOnCdpPage(page, `(() => [...document.querySelectorAll('[data-message-author-role="user"], [data-message-author-role="assistant"]')].map((node, index) => ({
+      id: node.getAttribute('data-message-id') || node.closest('[data-message-id]')?.getAttribute('data-message-id') || (node.getAttribute('data-message-author-role') + ':' + index),
+      role: node.getAttribute('data-message-author-role'),
+      text: String(node.innerText || node.textContent || '').trim(),
+    })))()`).catch(() => []);
+
+    if (Array.isArray(currentTurns) && currentTurns.length > 0) {
+      const lastBaselineTurn = baseline.turns[baseline.turns.length - 1];
+      const matchIdx = currentTurns.findIndex((t) => (lastBaselineTurn.id && t.id === lastBaselineTurn.id) || (lastBaselineTurn.text && t.text === lastBaselineTurn.text));
+
+      let fresh = [];
+      if (matchIdx !== -1) {
+        fresh = currentTurns.slice(matchIdx + 1);
+      } else if (currentTurns.length > baseline.turns.length) {
+        fresh = currentTurns.slice(baseline.turns.length);
+      }
+
+      if (fresh.length > 0) {
+        const userCountInFresh = fresh.filter((t) => t.role === 'user').length;
+        const lastTurn = fresh[fresh.length - 1];
+        if (userCountInFresh < 1 || lastTurn?.role !== 'assistant') {
+          return { ok: false, reason: "Chưa nhận được lượt mới của người dùng và phản hồi ChatGPT tương ứng." };
+        }
+      }
+    }
   }
 
   return { ok: true, currentState };
@@ -357,9 +398,43 @@ async function captureManualStage(projectPath, sceneId, stage, runtime = {}, opt
 
     const stat = await fs.stat(keyframeFilePath).catch(() => ({ size: decoded.buffer.length }));
 
+    let nv2Baseline = null;
+    try {
+      if (page) {
+        const nv2ConvState = await getConversationState(page).catch(() => null);
+        const nv2Turns = await evaluateOnCdpPage(page, `(() => [...document.querySelectorAll('[data-message-author-role="user"], [data-message-author-role="assistant"]')].map((node, index) => ({
+          id: node.getAttribute('data-message-id') || node.closest('[data-message-id]')?.getAttribute('data-message-id') || (node.getAttribute('data-message-author-role') + ':' + index),
+          role: node.getAttribute('data-message-author-role'),
+          text: String(node.innerText || node.textContent || '').trim(),
+        })))()`).catch(() => []);
+        nv2Baseline = {
+          sceneId: sceneToken,
+          rawSceneId: sceneId,
+          stage: "NV2",
+          conversationId: nv2ConvState?.conversationId || "",
+          userCount: Number(nv2ConvState?.userTurnCount || nv2ConvState?.userCount || 0),
+          assistantCount: Number(nv2ConvState?.assistantTurnCount || nv2ConvState?.assistantCount || 0),
+          turns: Array.isArray(nv2Turns) ? nv2Turns : [],
+          latestUserHash: nv2ConvState?.latestUserHash || "",
+          timestamp: new Date().toISOString(),
+        };
+      }
+    } catch (_err) {}
+
     const updatedManual = {
       ...manualState,
-      currentStage: "NV1",
+      currentStage: "NV2",
+      baseline: nv2Baseline || {
+        sceneId: sceneToken,
+        rawSceneId: sceneId,
+        stage: "NV2",
+        conversationId: baseline?.conversationId || "",
+        userCount: (baseline?.userCount || 0) + 1,
+        assistantCount: (baseline?.assistantCount || 0) + 1,
+        turns: [],
+        latestUserHash: "",
+        timestamp: new Date().toISOString(),
+      },
       stages: {
         ...(manualState.stages || {}),
         NV1: {
@@ -367,6 +442,10 @@ async function captureManualStage(projectPath, sceneId, stage, runtime = {}, opt
           completed: true,
           capturedAt: timestamp,
           keyframePath: keyframeFileName,
+        },
+        NV2: {
+          started: true,
+          completed: false,
         },
       },
     };

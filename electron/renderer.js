@@ -4782,7 +4782,7 @@ function updateScanButtonVisibility() {
             projectPath: outputFolder,
             sceneId: sceneToken,
             stage: 'NV1',
-            options: { force: true },
+            options: {},
           }).catch((err) => ({ ok: false, error: err.message }));
 
           if (capRes?.ok) {
@@ -4812,7 +4812,7 @@ function updateScanButtonVisibility() {
             projectPath: outputFolder,
             sceneId: sceneToken,
             stage: 'NV2',
-            options: { force: true },
+            options: {},
           }).catch((err) => ({ ok: false, error: err.message }));
 
           if (capRes?.ok) {
@@ -4835,6 +4835,7 @@ function updateScanButtonVisibility() {
                 manualSelectedSceneId = nextIncomplete.id;
                 safeAddPipelineLog('manual-gpt', 'running', `Tự động chuyển sang Scene ${manualSelectedSceneId}...`);
                 await renderManualChatGptUI();
+                await syncManualStageBaseline(nextIncomplete);
               }
             }
           } else {
@@ -4878,6 +4879,18 @@ function updateScanButtonVisibility() {
     }
   }
 
+  async function syncManualStageBaseline(scene) {
+    if (!scene || !outputFolder) return;
+    const sceneToken = `scene_${String(scene.id).padStart(3, '0')}`;
+    const targetStage = !scene.imagePath ? 'NV1' : (!scene.motionPrompt ? 'NV2' : null);
+    if (!targetStage) return;
+    await window.videoPlannerAPI?.startManualStage?.({
+      projectPath: outputFolder,
+      sceneId: sceneToken,
+      stage: targetStage,
+    }).catch((error) => safeAddPipelineLog('manual-gpt', 'warning', `[${targetStage}] Baseline sync: ${error?.message || error}`));
+  }
+
   async function startManualGptWorkflow() {
     if (!outputFolder) {
       await chooseOutputFolder();
@@ -4900,6 +4913,11 @@ function updateScanButtonVisibility() {
 
     await renderManualChatGptUI();
 
+    // Establish ownership baseline before the user sends prompt
+    if (firstIncomplete) {
+      await syncManualStageBaseline(firstIncomplete);
+    }
+
     const autoWatchToggle = document.querySelector('#manual-auto-watch-toggle');
     if (autoWatchToggle?.checked !== false) {
       startManualWatcher();
@@ -4916,22 +4934,29 @@ function updateScanButtonVisibility() {
       const totalCount = project?.scenes?.length || 1;
       manualSelectedSceneId = manualSelectedSceneId > 1 ? manualSelectedSceneId - 1 : totalCount;
       await renderManualChatGptUI();
+      await syncManualStageBaseline(getManualSelectedScene());
     });
 
     document.querySelector('#manual-next-scene-btn')?.addEventListener('click', async () => {
       const totalCount = project?.scenes?.length || 1;
       manualSelectedSceneId = manualSelectedSceneId < totalCount ? manualSelectedSceneId + 1 : 1;
       await renderManualChatGptUI();
+      await syncManualStageBaseline(getManualSelectedScene());
     });
 
     document.querySelector('#manual-scene-select')?.addEventListener('change', async (e) => {
       manualSelectedSceneId = Number(e.target.value) || 1;
       await renderManualChatGptUI();
+      await syncManualStageBaseline(getManualSelectedScene());
     });
 
     // Copy Prompt Buttons
     const copyNv1Btn = document.querySelector('#manual-copy-nv1-btn');
     copyNv1Btn?.addEventListener('click', async () => {
+      const scene = getManualSelectedScene();
+      if (scene && !scene.imagePath) {
+        await syncManualStageBaseline(scene);
+      }
       const textarea = document.querySelector('#manual-nv1-prompt-preview');
       const text = textarea?.value || '';
       const ok = await copyTextToClipboard(text, copyNv1Btn);
@@ -4943,6 +4968,15 @@ function updateScanButtonVisibility() {
 
     const copyNv2Btn = document.querySelector('#manual-copy-nv2-btn');
     copyNv2Btn?.addEventListener('click', async () => {
+      const scene = getManualSelectedScene();
+      if (scene && !scene.motionPrompt) {
+        const sceneToken = `scene_${String(scene.id).padStart(3, '0')}`;
+        await window.videoPlannerAPI?.startManualStage?.({
+          projectPath: outputFolder,
+          sceneId: sceneToken,
+          stage: 'NV2',
+        }).catch(() => null);
+      }
       const textarea = document.querySelector('#manual-nv2-prompt-preview');
       const text = textarea?.value || '';
       const ok = await copyTextToClipboard(text, copyNv2Btn);
@@ -5252,6 +5286,8 @@ function updateScanButtonVisibility() {
             const select = document.querySelector('#manual-scene-select');
             if (select) select.value = String(sceneId);
             await renderManualChatGptUI();
+            const sc = project?.scenes?.find((s) => s.id === sceneId);
+            if (sc) await syncManualStageBaseline(sc);
             showToast(`Đã chuyển sang Scene ${sceneId}`, 'info');
             document.querySelector('#manual-chatgpt-section')?.scrollIntoView({ behavior: 'smooth' });
           }
