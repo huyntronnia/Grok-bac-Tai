@@ -4686,7 +4686,6 @@ function updateScanButtonVisibility() {
 
     // Project completion status across all scenes
     let readyCount = 0;
-    const totalCount = project?.scenes?.length || 0;
     for (const s of (project?.scenes || [])) {
       const hasImg = Boolean(s.imagePath || s.keyframePath);
       const hasMot = Boolean(s.motionPrompt || s.motionPromptPath);
@@ -4758,8 +4757,6 @@ function updateScanButtonVisibility() {
     }
 
     // Cập nhật Step Guidance Banner đồng bộ trạng thái
-    const bannerTitle = document.querySelector('#manual-guidance-title');
-    const bannerMsg = document.querySelector('#manual-guidance-message');
     const bannerIcon = document.querySelector('#manual-step-guidance-banner .guidance-icon');
     const forceKeyframeBtn = document.querySelector('#manual-force-capture-keyframe-btn');
     const forceMotionBtn = document.querySelector('#manual-force-capture-motion-btn');
@@ -4769,7 +4766,7 @@ function updateScanButtonVisibility() {
     if (isAllReady) {
       if (bannerIcon) bannerIcon.textContent = '🎉';
       if (bannerTitle) bannerTitle.textContent = `TẤT CẢ ${totalCount}/${totalCount} SCENE ĐÃ HOÀN TẤT!`;
-      if (bannerMsg) bannerMsg.textContent = `Bạn đã chạy xong toàn bộ ${totalCount} scene. Cổng VeoUp đã MỞ KHÓA! Bấm nút bên phải để nạp batch sang VeoUp.`;
+      if (bannerMessage) bannerMessage.textContent = `Bạn đã chạy xong toàn bộ ${totalCount} scene. Cổng VeoUp đã MỞ KHÓA! Bấm nút bên phải để nạp batch sang VeoUp.`;
       if (forceKeyframeBtn) forceKeyframeBtn.style.display = 'none';
       if (forceMotionBtn) forceMotionBtn.style.display = 'none';
       if (guidanceNextSceneBtn) guidanceNextSceneBtn.style.display = 'none';
@@ -4779,7 +4776,7 @@ function updateScanButtonVisibility() {
         || (project?.scenes || []).find((s) => !s.imagePath || !s.motionPrompt);
       if (bannerIcon) bannerIcon.textContent = '✓';
       if (bannerTitle) bannerTitle.textContent = `Scene ${scene.id} Đã Hoàn Tất (${readyCount}/${totalCount} Scene Xong)`;
-      if (bannerMsg) bannerMsg.textContent = `Phải chạy hết tất cả các scene rồi mới sang VeoUp! Hãy bấm 'Sang Scene kế tiếp' để làm scene tiếp theo.`;
+      if (bannerMessage) bannerMessage.textContent = `Phải chạy hết tất cả các scene rồi mới sang VeoUp! Hãy bấm 'Sang Scene kế tiếp' để làm scene tiếp theo.`;
       if (forceKeyframeBtn) forceKeyframeBtn.style.display = 'none';
       if (forceMotionBtn) forceMotionBtn.style.display = 'none';
       if (guidanceNextSceneBtn) {
@@ -4790,7 +4787,7 @@ function updateScanButtonVisibility() {
     } else if (hasKeyframe && !hasMotion) {
       if (bannerIcon) bannerIcon.textContent = '🎬';
       if (bannerTitle) bannerTitle.textContent = `Bước 2: Tạo Motion Prompt NV2 (Scene ${scene.id}/${totalCount})`;
-      if (bannerMsg) bannerMsg.textContent = `Đã lưu Keyframe! Đang đợi bạn tạo Motion Prompt NV2 trên ChatGPT... (Prompt đã sẵn sàng để copy)`;
+      if (bannerMessage) bannerMessage.textContent = `Đã lưu Keyframe! Đang đợi bạn tạo Motion Prompt NV2 trên ChatGPT... (Prompt đã sẵn sàng để copy)`;
       if (forceKeyframeBtn) forceKeyframeBtn.style.display = 'none';
       if (forceMotionBtn) forceMotionBtn.style.display = 'inline-block';
       if (guidanceNextSceneBtn) guidanceNextSceneBtn.style.display = 'none';
@@ -4798,7 +4795,7 @@ function updateScanButtonVisibility() {
     } else {
       if (bannerIcon) bannerIcon.textContent = '🎨';
       if (bannerTitle) bannerTitle.textContent = `Bước 1: Tạo Ảnh NV1 (Scene ${scene.id}/${totalCount})`;
-      if (bannerMsg) bannerMsg.textContent = `Đang đợi bạn tạo ảnh NV1 trên ChatGPT... (Prompt đã được copy vào Clipboard)`;
+      if (bannerMessage) bannerMessage.textContent = `Đang đợi bạn tạo ảnh NV1 trên ChatGPT... (Prompt đã được copy vào Clipboard)`;
       if (forceKeyframeBtn) forceKeyframeBtn.style.display = 'inline-block';
       if (forceMotionBtn) forceMotionBtn.style.display = 'none';
       if (guidanceNextSceneBtn) guidanceNextSceneBtn.style.display = 'none';
