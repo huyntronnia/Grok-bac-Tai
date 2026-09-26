@@ -152,15 +152,24 @@ async function createComposerPayload({ stage, sceneId, controlPrompt, expectedFi
   };
 }
 
-async function materializeSceneRequestFiles({ sceneDir, sceneId, nv1, nv2, sceneText } = {}) {
+async function materializeSceneRequestFiles({ sceneDir, sceneId, nv1, nv2, sceneText, preserveExisting = false } = {}) {
   const paths = getSceneRequestPaths(sceneDir, sceneId);
   const nv1Content = buildNv1RequestContent({ nv1, sceneText, sceneId });
   const nv2Content = buildNv2RequestContent({ nv2, sceneText, sceneId });
-  const nv1Sha256 = sha256Text(nv1Content);
-  const nv2Sha256 = sha256Text(nv2Content);
-
-  await writeTextFileAtomic(paths.nv1FilePath, nv1Content);
-  await writeTextFileAtomic(paths.nv2FilePath, nv2Content);
+  if (preserveExisting) {
+    for (const [filePath, content] of [
+      [paths.nv1FilePath, nv1Content],
+      [paths.nv2FilePath, nv2Content],
+    ]) {
+      await fs.writeFile(filePath, content, { encoding: "utf8", flag: "wx" })
+        .catch((error) => { if (error?.code !== "EEXIST") throw error; });
+    }
+  } else {
+    await writeTextFileAtomic(paths.nv1FilePath, nv1Content);
+    await writeTextFileAtomic(paths.nv2FilePath, nv2Content);
+  }
+  const nv1Sha256 = preserveExisting ? await sha256File(paths.nv1FilePath) : sha256Text(nv1Content);
+  const nv2Sha256 = preserveExisting ? await sha256File(paths.nv2FilePath) : sha256Text(nv2Content);
 
   const nv1ControlPrompt = buildRequestControlPrompt({
     stage: "NV1",

@@ -9,7 +9,7 @@ const main = read('electron/main.js');
 const chatgptPipeline = read('electron/main/chatgpt/chatgpt_pipeline.js');
 const pipelineRunner = read('electron/main/pipeline/pipeline_runner.js');
 const requestFiles = read('electron/main/pipeline/scene_request_files.js');
-const chatgptRuntime = `${main}\n${chatgptPipeline}\n${pipelineRunner}`;
+const chatgptRuntime = `${main}\n${chatgptPipeline}\n${pipelineRunner}\n${read('electron/main/chatgpt/manual_stage_bundle.js')}`;
 const renderer = read('electron/renderer.js');
 
 assert(requestFiles.includes('function buildNv1RequestContent('), 'NV1 request-file builder missing');
@@ -41,7 +41,7 @@ assert(chatgptRuntime.includes('HYDRATION_REQUEST1_UPLOAD_BEGIN: uploading ${pre
 assert(chatgptRuntime.includes('Request 1: read and remember all attached preprompt files. Reply only when ready.'), 'request 1 prompt missing');
 assert(/await waitForChatGptHydrationResponse\(\s*page,\s*snapshot\.hydration\.request1BeforeCount,\s*{[\s\S]*?request: 1,/.test(chatgptRuntime), 'request 1 must wait for ChatGPT response');
 assert(chatgptRuntime.includes('HYDRATION_REQUEST2_UPLOAD_BEGIN: uploading ${recentKeyframes.length} recent keyframe(s).'), 'request 2 must upload recent keyframes');
-assert(chatgptRuntime.includes('const CHATGPT_HYDRATION_KEYFRAME_LIMIT = 10;'), 'request 2 must use a centralized 10-keyframe limit');
+assert(require('../electron/main/chatgpt/manual_stage_bundle').CHATGPT_HYDRATION_KEYFRAME_LIMIT === 10, 'request 2 must use a centralized 10-keyframe limit');
 assert(chatgptRuntime.includes('Request 2: read and remember the attached keyframes from up to ${CHATGPT_HYDRATION_KEYFRAME_LIMIT} previous project scenes.'), 'request 2 prompt must use the configured keyframe limit');
 assert(/await waitForChatGptHydrationResponse\(\s*page,\s*snapshot\.hydration\.request2BeforeCount,\s*{[\s\S]*?request: 2,/.test(chatgptRuntime), 'request 2 must wait for ChatGPT response');
 assert(renderer.includes('recentScenes: buildRecentScenesForHydration(scene.id, 20)'), 'renderer must send max 20 recent scenes');

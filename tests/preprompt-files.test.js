@@ -16,7 +16,7 @@ assert(main.includes("return path.join(projectRoot, 'preprompt');"));
 assert(main.includes("async function collectPrepromptRequestFiles("));
 assert(main.includes(".sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))"));
 assert(pipeline.includes("collectPrepromptRequestFiles({ outputFolder: projectDir })"));
-assert(pipeline.includes("Request 1: read and remember all attached preprompt files."));
+assert.strictEqual(require("../electron/main/chatgpt/manual_stage_bundle").REQUEST_1_PROMPT, "Request 1: read and remember all attached preprompt files. Reply only when ready.");
 
 for (const file of [
   "electron/main.js",

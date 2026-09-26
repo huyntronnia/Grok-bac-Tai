@@ -267,6 +267,18 @@ function resolveSceneCandidate(value, projectDir, sceneId) {
 }
 
 async function findSceneSourceAssets(projectDir, sceneId, scene = {}) {
+  if (scene.manualAuditSource === true) {
+    const keyframePath = path.resolve(scene.imagePath);
+    const motionPromptPath = path.resolve(scene.motionPromptPath);
+    const keyframeInspection = await inspectKeyframeFile(keyframePath, { includeHash: true });
+    const motionPrompt = normalizePrompt(await fsp.readFile(motionPromptPath, "utf8").catch(() => ""));
+    return {
+      keyframePath: keyframeInspection.ok ? keyframePath : "",
+      keyframeInspection,
+      motionPromptPath,
+      motionPrompt: validateMotionPromptTextContent(motionPrompt).ok ? motionPrompt : "",
+    };
+  }
   const paths = collectionPaths(projectDir, sceneId);
   const sceneDir = path.join(projectDir, sceneToken(sceneId));
   const keyframeCandidates = [
@@ -377,7 +389,9 @@ async function reconcileVeoUpCollection(options = {}) {
       const sourceKeyframeIsCanonical = path.resolve(assets.keyframePath) === path.resolve(canonical.keyframePath);
       const sourceKeyframeIsNewer = !sourceKeyframeIsCanonical &&
         Number(assets.keyframeInspection?.mtimeMs || 0) > Number(canonicalInspection.mtimeMs || 0) + 1;
-      const canonicalMatchesState = canonicalInspection.ok &&
+      const manualSourceMatches = sceneMap.get(sceneId)?.manualAuditSource !== true ||
+        (canonicalInspection.ok && await hashFile(canonical.keyframePath) === await hashFile(assets.keyframePath));
+      const canonicalMatchesState = manualSourceMatches && canonicalInspection.ok &&
         canonicalPrompt &&
         canonicalPrompt === assets.motionPrompt &&
         !sourceKeyframeIsNewer &&

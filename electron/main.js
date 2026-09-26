@@ -163,10 +163,22 @@ const {
   initializeApplication,
   createMainWindow,
 } = require("./main/bootstrap");
+const { installManualShutdown } = require("./main/bootstrap/manual_shutdown");
 
 const {
   initIpcHandlers,
 } = require("./main/ipc");
+const {
+  WORKFLOW_MODE,
+  setWorkflowMode,
+  assertAutomaticChatGptMutationAllowed,
+} = require("./main/state/workflow_mode");
+const {
+  readManualConversationSnapshot,
+  extractOwnedAssistantImage,
+} = require("./main/chatgpt/manual_cdp_snapshot");
+
+setWorkflowMode(WORKFLOW_MODE);
 
 const {
   initChatGptPipeline,
@@ -347,6 +359,14 @@ const CHROME_USER_DATA_DIR = path.join(
   app.getPath("userData"),
   "chrome-cdp-profile",
 );
+// Manual Workflow observes only this isolated Chrome instance. It never shares
+// the automatic-pipeline browser or attaches to a user-supplied debug port.
+const MANUAL_CHROME_DEBUG_PORT = 9224;
+const MANUAL_CHROME_CDP_HOST = `http://127.0.0.1:${MANUAL_CHROME_DEBUG_PORT}`;
+const MANUAL_CHROME_USER_DATA_DIR = path.join(
+  app.getPath("userData"),
+  "manual-chrome-cdp-profile",
+);
 
 initChatGptRecovery({
   getCdpPage,
@@ -380,6 +400,7 @@ const challengeRecoveryAttempts = new Map();
 const chatGptScenePrefetchLocks = new Map();
 const scenePipelineLocks = new Map();
 let chromeProcess = null;
+let manualChromeProcess = null;
 let showPipelineLog = true;
 const chatTitleStableChecks = new Map();
 const chatGptConversationIdentityCache = {
@@ -626,6 +647,7 @@ async function saveProjectSessionFile(_event, payload = {}) {
   );
   await ensureProjectPrepromptFolder(projectFolder);
   await rememberLastProjectFile(filePath);
+  rememberManualProject(projectFolder, finalPayload);
   return {
     ok: true,
     filePath,
@@ -676,6 +698,7 @@ async function overwriteProjectSessionFile(
   );
   await ensureProjectPrepromptFolder(projectFolder);
   await rememberLastProjectFile(targetPath);
+  rememberManualProject(projectFolder, finalPayload);
   return {
     ok: true,
     filePath: targetPath,
@@ -721,12 +744,23 @@ async function createProjectSessionFile(
       projectFolder,
     };
   }
+  const manualTasks = await loadHardPromptTasks();
+  if (!manualTasks.task1 || !manualTasks.task2) {
+    return { ok: false, error: "Cần nội dung cho cả NV1_TAO_ANH.txt và NV2_MOTION_PROMPT.txt trước khi tạo project." };
+  }
   await fs.mkdir(projectFolder, { recursive: false });
+  await ensureManualProjectRequestFiles({
+    projectPath: projectFolder,
+    scenes: validPayload.project.scenes,
+    nv1: manualTasks.task1,
+    nv2: manualTasks.task2,
+  });
   const writeResult = await enqueueProjectWrite(filePath, () =>
     writeJsonFileAtomic(filePath, validPayload),
   );
   await ensureProjectPrepromptFolder(projectFolder, { logCreated: true });
   await rememberLastProjectFile(filePath);
+  rememberManualProject(projectFolder, validPayload);
   return {
     ok: true,
     filePath,
@@ -798,6 +832,7 @@ async function loadProjectSessionFile(filePath = "") {
     active: false,
   };
   await rememberLastProjectFile(normalizedPath);
+  rememberManualProject(projectFolder, payload);
   return { ok: true, filePath: normalizedPath, projectFolder, payload };
 }
 
@@ -930,10 +965,8 @@ async function ensureProjectSceneFolders(
     const currentSceneText =
       scene?.original || scene?.rawSceneText || scene?.sceneText || "";
     if (!inspectOnly && currentSceneText)
-      await writeTextFileAtomic(
-        path.join(sceneDir, "scene.txt"),
-        currentSceneText,
-      );
+      await fs.writeFile(path.join(sceneDir, "scene.txt"), currentSceneText, { encoding: "utf8", flag: "wx" })
+        .catch((error) => { if (error?.code !== "EEXIST") throw error; });
     let requestFiles = null;
     if (!inspectOnly && currentSceneText) {
       requestFiles = await materializeSceneRequestFiles({
@@ -942,14 +975,9 @@ async function ensureProjectSceneFolders(
         nv1: hardTasks.task1 || scene?.imagePrompt || "",
         nv2: hardTasks.task2 || "",
         sceneText: currentSceneText,
+        preserveExisting: true,
       });
     }
-    if (!inspectOnly && scene?.motionPrompt)
-      await fs.writeFile(
-        path.join(sceneDir, "motion_prompt.txt"),
-        scene.motionPrompt,
-        "utf8",
-      );
     const keyframePath = path.join(
       sceneDir,
       `scene_${String(sceneId).padStart(3, "0")}_keyframe.png`,
@@ -1669,6 +1697,7 @@ async function maybeSelectChatGptConversationByTitle(
   title = "",
   { sceneId = "", force = false, reason = "stage" } = {},
 ) {
+  assertAutomaticChatGptMutationAllowed("select-conversation-sidebar");
   const wanted = String(title || "").trim();
   if (!wanted) return { ok: true, skipped: true, reason: "missing-title" };
   const locationState = await getChatGptLocationState(page);
@@ -2212,6 +2241,7 @@ async function clearChatGptCacheHandler() {
 }
 
 async function openFreshChatGptHandler() {
+  assertAutomaticChatGptMutationAllowed("open-fresh-chat");
   // Compatibility guard: assertManualChatGptActionAllowed("chatgpt-open-fresh-chat")
   const blockedReason = getManualChatGptActionBlockReason();
   if (blockedReason) return { ok: false, error: blockedReason };
@@ -2264,41 +2294,6 @@ async function openFreshChatGptHandler() {
   return { ok: true, mode: "manual-only", url: location };
 }
 
-async function manualStartStageHandler(_event, payload = {}) {
-  const { projectPath, sceneId, stage } = payload || {};
-  return manualChatGptController.startManualStage(projectPath, sceneId, stage, {
-    getCdpPage: () => getCdpPage("chatgpt", true),
-  });
-}
-
-async function manualCaptureStageHandler(_event, payload = {}) {
-  const { projectPath, sceneId, stage, options } = payload || {};
-  return manualChatGptController.captureManualStage(projectPath, sceneId, stage, {
-    getCdpPage: () => getCdpPage("chatgpt", true),
-  }, options);
-}
-
-async function manualGetStatusHandler(_event, payload = {}) {
-  const { projectPath, sceneId } = payload || {};
-  return manualChatGptController.getManualStatus(projectPath, sceneId);
-}
-
-async function manualCancelStageHandler(_event, payload = {}) {
-  const { projectPath, sceneId } = payload || {};
-  return manualChatGptController.cancelManualStage(projectPath, sceneId);
-}
-
-async function manualGetSceneAuditHandler(_event, payload = {}) {
-  const { projectPath, sceneId } = payload || {};
-  return manualChatGptController.getManualSceneAudit(projectPath, sceneId);
-}
-
-async function manualDetectProgressHandler(_event, _payload = {}) {
-  return manualChatGptController.detectChatGPTProgress({
-    getCdpPage: () => getCdpPage("chatgpt", false, { bringToFront: false, recover: false }),
-  });
-}
-
 async function manualCopyPromptHandler(_event, payload = {}) {
   const text = typeof payload === "string" ? payload : payload?.text || "";
   if (!text) return { ok: false, error: "missing-text" };
@@ -2315,7 +2310,12 @@ async function openSceneFolderHandler(_event, folderPath) {
   if (!folderPath) return { ok: false, error: "missing-path" };
   try {
     const { shell } = require("electron");
-    await shell.openPath(folderPath);
+    const resolvedPath = path.resolve(String(folderPath));
+    const stats = await fs.stat(resolvedPath).catch(() => null);
+    const targetPath = stats?.isDirectory()
+      ? resolvedPath
+      : path.dirname(resolvedPath);
+    await shell.openPath(targetPath);
     return { ok: true };
   } catch (err) {
     return { ok: false, error: err.message };
@@ -2423,6 +2423,55 @@ async function isChromeDebugReady() {
   } catch (_error) {
     return false;
   }
+}
+
+async function isManualChromeDebugReady() {
+  try {
+    const response = await fetch(`${MANUAL_CHROME_CDP_HOST}/json/version`);
+    return response.ok;
+  } catch (_error) {
+    return false;
+  }
+}
+
+async function ensureManualChromeDebug() {
+  if (await isManualChromeDebugReady()) return true;
+
+  await fs.mkdir(MANUAL_CHROME_USER_DATA_DIR, { recursive: true });
+  const chromePath = findChromeExecutable();
+  const args = [
+    `--remote-debugging-port=${MANUAL_CHROME_DEBUG_PORT}`,
+    `--user-data-dir=${MANUAL_CHROME_USER_DATA_DIR}`,
+    "--no-first-run",
+    "--no-default-browser-check",
+    "--disable-popup-blocking",
+    "about:blank",
+  ];
+  manualChromeProcess = spawn(chromePath, args, {
+    detached: true,
+    stdio: "ignore",
+    windowsHide: false,
+  });
+  manualChromeProcess.unref();
+
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < 15000) {
+    if (await isManualChromeDebugReady()) return true;
+    await sleep(500);
+  }
+  throw new Error(
+    `Không mở được Chrome Manual ở port ${MANUAL_CHROME_DEBUG_PORT}. Hãy đóng Chrome Manual cũ rồi thử lại.`,
+  );
+}
+
+async function openManualChromeHandler() {
+  await ensureManualChromeDebug();
+  return {
+    ok: true,
+    port: MANUAL_CHROME_DEBUG_PORT,
+    profilePath: MANUAL_CHROME_USER_DATA_DIR,
+    message: "Chrome Manual đã mở. Hãy tự truy cập ChatGPT và chọn conversation trong cửa sổ này.",
+  };
 }
 
 async function openCdpTab(url) {
@@ -3544,6 +3593,7 @@ async function rollProviderAccount(
 }
 
 async function sendPromptViaWeb(_event, options) {
+  assertAutomaticChatGptMutationAllowed("browser-send-prompt-ipc");
   const {
     provider,
     prompt,
@@ -4208,6 +4258,7 @@ async function waitForNewImageUrl(client, existingUrls = []) {
   );
 }
 async function selectChatGptConversationByTitle(client, title = "") {
+  assertAutomaticChatGptMutationAllowed("select-conversation-sidebar");
   const wanted = String(title || "").trim();
   if (!wanted) return { ok: true, skipped: true };
   await client.Page.bringToFront().catch(() => null);
@@ -4495,6 +4546,7 @@ async function getAssetStat(_event, filePath) {
 
 
 async function uploadFileViaCdp(client, filePath) {
+  assertAutomaticChatGptMutationAllowed("upload-file-via-cdp");
   const handle = await client.DOM.getDocument();
   let query = await client.DOM.querySelector({
     nodeId: handle.root.nodeId,
@@ -5129,6 +5181,17 @@ function findChatGptConversationScript(title = "") {
 
 
 let veoupBatchCoordinatorInstance = null;
+const manualVeoUpChildren = new Set();
+
+function trackManualVeoUpChild(child, runId) {
+  if (child) {
+    manualVeoUpChildren.add(child);
+    const forget = () => manualVeoUpChildren.delete(child);
+    child.once?.("exit", forget);
+    child.once?.("close", forget);
+  }
+  return trackPipelineChildProcess(child, runId);
+}
 
 function getVeoUpBatchCoordinator() {
   if (veoupBatchCoordinatorInstance) return veoupBatchCoordinatorInstance;
@@ -5145,7 +5208,7 @@ function getVeoUpBatchCoordinator() {
         maximizeBeforeAutomation: true,
         registerChildProcess:
           options.registerChildProcess ||
-          ((child) => trackPipelineChildProcess(child, runId)),
+          ((child) => trackManualVeoUpChild(child, runId)),
       });
     },
   });
@@ -5353,34 +5416,59 @@ async function cancelVeoUpCoordinateSetupHandler() {
 }
 
 async function scanProjectAndRunVeoUpHandler(_event, payload = {}) {
-  const projectDir = payload.projectDir;
-  if (!projectDir) {
-    return { ok: false, error: "Chưa chọn folder project." };
-  }
-  try {
-    const expectedSceneCount = Number(payload.expectedSceneCount || 0);
-    const expectedSceneIds = Array.isArray(payload.expectedSceneIds)
-      ? payload.expectedSceneIds
-      : expectedSceneCount > 0
-        ? Array.from({ length: expectedSceneCount }, (_, index) => index + 1)
-        : [];
-    return await getVeoUpBatchCoordinator().requestBatch({
-      ...payload,
-      projectDir,
-      outputFolder: projectDir,
-      expectedSceneCount,
-      expectedSceneIds,
-      trigger: payload.trigger || "manual-scan",
-      autoStartVideoGeneration: payload.autoStartVideoGeneration !== false,
-      previewStartButtonOnly: Boolean(payload.previewStartButtonOnly),
-      allowPartial: payload.allowPartial === true,
-      runId: String(payload.runId || "").trim(),
-    });
-  } catch (err) {
-    console.error("[scanProjectAndRunVeoUpHandler] Failed:", err);
-    return { ok: false, error: err.message || String(err) };
-  }
+  return canonicalManualWorkflowController.submitVeoUp({ projectPath: payload.projectDir || payload.projectPath });
 }
+
+// Inventory comes from successfully saved/loaded project metadata, never from a submission payload.
+const manualLoadedProjects = new Map();
+function rememberManualProject(projectFolder, payload) {
+  const copy = JSON.parse(JSON.stringify(payload));
+  hydrateProjectPayloadPaths(copy, projectFolder);
+  manualLoadedProjects.set(path.resolve(projectFolder), copy.project);
+}
+
+const { buildManualStageBundle, ensureManualProjectRequestFiles } = require("./main/chatgpt/manual_stage_bundle");
+const { createManualPageObserver } = require("./main/chatgpt/manual_page_observer");
+const manualPageObserver = createManualPageObserver({ endpoint: MANUAL_CHROME_CDP_HOST });
+function notifyManualWorkflow(type, payload) {
+  const safePayload = sanitizeIpcValue(payload);
+  BrowserWindow.getAllWindows().forEach((win) => {
+    if (!win.isDestroyed()) win.webContents.send(type, safePayload);
+  });
+}
+const canonicalManualWorkflowController = manualChatGptController.createManualChatGptController({
+  watchIntervalMs: 1000,
+  onChanged: (payload) => notifyManualWorkflow("manual-workflow:changed", payload),
+  onObservation: (payload) => notifyManualWorkflow("manual-workflow:observation", payload),
+  loadProject: async (projectPath) => {
+    const loaded = manualLoadedProjects.get(path.resolve(projectPath));
+    if (!loaded?.scenes?.length) throw new Error("Save or open the project before starting the manual workflow.");
+    return loaded;
+  },
+  ensureProjectFiles: async (projectPath, scenes) => {
+    const tasks = await loadHardPromptTasks();
+    return ensureManualProjectRequestFiles({
+      projectPath, scenes, nv1: tasks.task1, nv2: tasks.task2,
+    });
+  },
+  buildStageBundle: async (input) => {
+    const tasks = await loadHardPromptTasks();
+    return buildManualStageBundle({
+      ...input, scene: { ...input.scene, nv1: tasks.task1, nv2: tasks.task2 },
+      collectPrepromptFiles: (projectPath) => collectPrepromptRequestFiles({ outputFolder: projectPath }),
+      collectRecentKeyframes: (projectPath, sceneId, limit) => collectRecentProjectKeyframes(projectPath, limit, sceneId),
+    });
+  },
+  readConversationSnapshot: async () => readManualConversationSnapshot(await manualPageObserver.getPage()),
+  extractOwnedImage: async ({ assistantTurnId, attempt }) => {
+    const page = await manualPageObserver.getPage();
+    const snapshot = await readManualConversationSnapshot(page);
+    if (attempt.conversationId !== snapshot.conversationId) throw new Error("manual-conversation-changed-during-extraction");
+    return extractOwnedAssistantImage(page, assistantTurnId);
+  },
+  submitVeoUp: (payload) => getVeoUpBatchCoordinator().requestBatch(payload),
+  getVeoUpBatchStatus: (projectPath) => getVeoUpBatchCoordinator().getBatchStatus(projectPath),
+});
 
 app.whenReady().then(() => {
   initBootstrap({
@@ -5478,13 +5566,8 @@ app.whenReady().then(() => {
       checkWebLogin,
       clearChatGptCacheHandler,
       openFreshChatGptHandler,
-      manualStartStageHandler,
-      manualCaptureStageHandler,
-      manualGetStatusHandler,
-      manualCancelStageHandler,
-      manualGetSceneAuditHandler,
-      manualDetectProgressHandler,
       manualCopyPromptHandler,
+      openManualChromeHandler,
       toggleMiniBarHandler,
       setAlwaysOnTopHandler,
       openSceneFolderHandler,
@@ -5518,6 +5601,7 @@ app.whenReady().then(() => {
       runVeoUpAutomation,
       getChatGptSendState,
       isReloadBlocked,
+      manualWorkflowController: canonicalManualWorkflowController,
     },
   });
 
@@ -5685,14 +5769,16 @@ app.whenReady().then(() => {
   });
 });
 
-app.on("window-all-closed", () => {
-  writeCrashLog("electron:window-all-closed", new Error("All windows closed"), {
-    note: "App kept alive for crash debugging.",
-  });
-  if (process.platform !== "darwin") {
-    // Trong lúc debug pipeline, không quit im lặng. Người dùng có thể Ctrl+C ở terminal.
-    return;
-  }
+installManualShutdown({
+  app,
+  controller: canonicalManualWorkflowController,
+  getCoordinator: () => veoupBatchCoordinatorInstance,
+  killChildren: () => {
+    for (const child of manualVeoUpChildren) {
+      try { if (!child.killed) child.kill(); } catch (_error) { }
+    }
+  },
+  onError: (error) => console.error("[Manual shutdown]", error),
 });
 
 app.on("before-quit", () => {
@@ -5703,6 +5789,11 @@ process.on("exit", () => {
   if (chromeProcess?.pid) {
     try {
       process.kill(chromeProcess.pid);
+    } catch (_error) { }
+  }
+  if (manualChromeProcess?.pid) {
+    try {
+      process.kill(manualChromeProcess.pid);
     } catch (_error) { }
   }
 });

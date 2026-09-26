@@ -55,10 +55,12 @@ assert.match(
   /if \(!inspectOnly\) await fs\.mkdir\(outputFolder, \{ recursive: true \}\);/,
   "inspect-only audit must not create the project output folder",
 );
-assert.match(
-  main,
-  /if \(!inspectOnly && scene\?\.motionPrompt\)/,
-  "inspect-only audit must not rewrite motion_prompt.txt",
+const sceneFolderHandler = main.split("async function ensureProjectSceneFolders(")[1]
+  .split("function normalizeCredentialProvider(")[0];
+assert.doesNotMatch(
+  sceneFolderHandler,
+  /fs\.writeFile\(\s*path\.join\(sceneDir, "motion_prompt\.txt"\)/,
+  "scene-folder inspection and setup must not create a manual motion output from renderer data",
 );
 
 const makeComplete = (id) => ({

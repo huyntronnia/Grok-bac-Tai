@@ -6,22 +6,25 @@ const root = path.resolve(__dirname, '..');
 const preload = fs.readFileSync(path.join(root, 'electron/preload.js'), 'utf8');
 const main = fs.readFileSync(path.join(root, 'electron/main.js'), 'utf8');
 const ipcHandlers = fs.readFileSync(path.join(root, 'electron/main/ipc/ipc_handlers.js'), 'utf8');
+const manualWorkflowIpc = fs.readFileSync(path.join(root, 'electron/main/ipc/manual_workflow_ipc.js'), 'utf8');
 const handlerSource = `${main}\n${ipcHandlers}`;
 
 const invokes = [...preload.matchAll(/ipcRenderer\.invoke\(\s*['"]([^'"]+)/g)]
   .map((match) => match[1])
   .sort();
-const handles = [...handlerSource.matchAll(/ipcMain\.handle\(\s*['"]([^'"]+)/g)]
-  .map((match) => match[1])
-  .sort();
+const directHandles = [...handlerSource.matchAll(/ipcMain\.handle\(\s*['"]([^'"]+)/g)]
+  .map((match) => match[1]);
+const registeredManualHandles = [...manualWorkflowIpc.matchAll(/^\s*\w+:\s*"([^"]+)"/gm)]
+  .map((match) => match[1]);
+const handles = [...new Set([...directHandles, ...registeredManualHandles])].sort();
 
 const missing = invokes.filter((channel) => !handles.includes(channel));
 assert.deepStrictEqual(missing, [], `Missing ipcMain.handle channels: ${missing.join(', ')}`);
+assert(ipcHandlers.includes('registerManualWorkflowIpc({'), 'manual workflow IPC must be registered in production');
 
 assert(invokes.includes('chatgpt:clear-cache'), 'manual clear-cache invoke missing');
-assert(invokes.includes('chatgpt:open-fresh-chat'), 'manual open-fresh-chat invoke missing');
+assert(!invokes.includes('chatgpt:open-fresh-chat'), 'manual workflow must not expose a Vidora new-chat action');
 assert(handles.includes('chatgpt:clear-cache'), 'manual clear-cache handler missing');
-assert(handles.includes('chatgpt:open-fresh-chat'), 'manual open-fresh-chat handler missing');
 
 assert(main.includes('async function clearChatGptCacheHandler('), 'clearChatGptCacheHandler missing');
 assert(main.includes('async function openFreshChatGptHandler('), 'openFreshChatGptHandler missing');
@@ -35,8 +38,8 @@ assert(
 );
 assert(
   ipcHandlers.includes('"chatgpt:open-fresh-chat"') &&
-    ipcHandlers.includes('safeIpcHandler(openFreshChatGptHandler)'),
-  'open-fresh-chat handler must use safeIpcHandler(openFreshChatGptHandler)',
+    ipcHandlers.includes('assertAutomaticChatGptMutationAllowed("fresh-chat-ipc")'),
+  'legacy open-fresh-chat IPC must be blocked by the canonical manual guard',
 );
 
 const clearStart = main.indexOf('async function clearChatGptCacheHandler(');
@@ -50,7 +53,7 @@ assert(!clearBlock.includes('localStorage.clear'), 'clear-cache must not clear C
 const openStart = main.indexOf('async function openFreshChatGptHandler(');
 const openEnd = main.indexOf('\nasync function assertChatGptNotExistingConversation', openStart);
 const openBlock = main.slice(openStart, openEnd);
-assert(openBlock.includes('assertManualChatGptActionAllowed("chatgpt-open-fresh-chat")'), 'open fresh chat must block active pipeline/send');
+assert(openBlock.includes('assertAutomaticChatGptMutationAllowed("open-fresh-chat")'), 'legacy open fresh chat must be blocked by the canonical manual guard');
 assert(!openBlock.includes('forceCleanChatGptNewChatRotation'), 'manual open fresh chat must not use auto-rotation helper');
 
 console.log('ipc parity and manual ChatGPT IPC tests passed');

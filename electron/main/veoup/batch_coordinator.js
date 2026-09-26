@@ -177,6 +177,14 @@ function createVeoUpBatchCoordinator({
       const externalCancelled = typeof payload.isCancelled === "function"
         ? payload.isCancelled
         : () => false;
+      if (typeof payload.preSubmitAudit === "function") {
+        const gate = await payload.preSubmitAudit();
+        if (!gate?.ok) {
+          const error = new Error(gate?.error || "veoup-pre-submit-audit-failed");
+          error.result = gate;
+          throw error;
+        }
+      }
       const result = await executeAutomation({
         ...payload,
         outputFolder: projectDir,

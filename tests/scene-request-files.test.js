@@ -1,6 +1,7 @@
 "use strict";
 
 const assert = require("assert");
+const crypto = require("crypto");
 const fs = require("fs/promises");
 const os = require("os");
 const path = require("path");
@@ -97,6 +98,20 @@ const {
     assert.deepStrictEqual(nv1Payload.expectedAttachmentNames, [changed.nv1.fileName]);
     assert.strictEqual(nv1Payload.localFileSha256s[0], changed.nv1.contentSha256);
     assert.strictEqual(nv1Payload.payloadFingerprint.length, 64);
+
+    await fs.writeFile(changed.nv1.filePath, "Manual NV1 request kept on disk", "utf8");
+    const existingNv2 = await fs.readFile(changed.nv2.filePath, "utf8");
+    const preserved = await materializeSceneRequestFiles({
+      ...common,
+      sceneDir: scene1Dir,
+      sceneId: 1,
+      sceneText: "Renderer scene data changed while manual waited",
+      preserveExisting: true,
+    });
+    assert.strictEqual(await fs.readFile(changed.nv1.filePath, "utf8"), "Manual NV1 request kept on disk");
+    assert.strictEqual(await fs.readFile(changed.nv2.filePath, "utf8"), existingNv2);
+    assert.strictEqual(preserved.nv1.contentSha256,
+      crypto.createHash("sha256").update("Manual NV1 request kept on disk").digest("hex"));
 
     const bulkArtifacts = [];
     for (let sceneId = 1; sceneId <= 20; sceneId += 1) {

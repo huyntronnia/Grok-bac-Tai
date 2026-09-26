@@ -196,24 +196,30 @@ function sanitizeIpcValue(value, key = "", depth = 0, seen = new WeakSet()) {
   if (!value || typeof value !== "object") return value;
   if (seen.has(value)) return "[circular]";
   seen.add(value);
-  if (Buffer.isBuffer(value)) return `[buffer:${value.length}]`;
-  if (value instanceof Error) {
-    return {
-      name: value.name || "Error",
-      message: sanitizeLogString(value.message || ""),
-      stack: sanitizeLogString(value.stack || "").slice(0, 4000),
-    };
+  try {
+    if (Buffer.isBuffer(value)) return `[buffer:${value.length}]`;
+    if (value instanceof Error) {
+      return {
+        name: value.name || "Error",
+        message: sanitizeLogString(value.message || ""),
+        stack: sanitizeLogString(value.stack || "").slice(0, 4000),
+      };
+    }
+    if (Array.isArray(value))
+      return value
+        .slice(0, 120)
+        .map((item) => sanitizeIpcValue(item, key, depth + 1, seen));
+    const clean = {};
+    for (const [childKey, child] of Object.entries(value).slice(0, 120)) {
+      if (SECRET_KEY_PATTERN.test(childKey)) continue;
+      clean[childKey] = sanitizeIpcValue(child, childKey, depth + 1, seen);
+    }
+    return clean;
+  } finally {
+    // `seen` tracks the current recursion path. A shared object in two
+    // response fields is not a cycle and both fields must reach the renderer.
+    seen.delete(value);
   }
-  if (Array.isArray(value))
-    return value
-      .slice(0, 120)
-      .map((item) => sanitizeIpcValue(item, key, depth + 1, seen));
-  const clean = {};
-  for (const [childKey, child] of Object.entries(value).slice(0, 120)) {
-    if (SECRET_KEY_PATTERN.test(childKey)) continue;
-    clean[childKey] = sanitizeIpcValue(child, childKey, depth + 1, seen);
-  }
-  return clean;
 }
 
 function safeIpcHandler(handler) {

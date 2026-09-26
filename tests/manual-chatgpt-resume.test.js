@@ -17,16 +17,8 @@ async function runTests() {
   try {
     // Helper function simulating disk audit / resume detection for manual mode
     async function auditManualSceneStage(sceneFolder, scId) {
-      const req1Path = path.join(sceneFolder, "request_1_response.txt");
-      const req2Path = path.join(sceneFolder, "request_2_response.txt");
       const keyframePath = path.join(sceneFolder, `${scId}_keyframe.png`);
       const motionPath = path.join(sceneFolder, "motion_prompt.txt");
-
-      const req1Exists = await fs.stat(req1Path).then((s) => s.isFile() && s.size > 0).catch(() => false);
-      if (!req1Exists) return "REQUEST_1";
-
-      const req2Exists = await fs.stat(req2Path).then((s) => s.isFile() && s.size > 0).catch(() => false);
-      if (!req2Exists) return "REQUEST_2";
 
       const keyframeVal = await validateKeyframeFile(keyframePath).catch(() => ({ ok: false }));
       if (!keyframeVal.ok) return "NV1";
@@ -38,18 +30,10 @@ async function runTests() {
       return "COMPLETE";
     }
 
-    // Case 1: Nothing exists -> resume at REQUEST_1
-    assert.strictEqual(await auditManualSceneStage(sceneDir, sceneId), "REQUEST_1");
-
-    // Case 2: request_1_response.txt exists -> resume at REQUEST_2
-    await fs.writeFile(path.join(sceneDir, "request_1_response.txt"), "Response 1 content");
-    assert.strictEqual(await auditManualSceneStage(sceneDir, sceneId), "REQUEST_2");
-
-    // Case 3: request_2_response.txt exists -> resume at NV1
-    await fs.writeFile(path.join(sceneDir, "request_2_response.txt"), "Response 2 content");
+    // Nothing exists -> resume directly at NV1.
     assert.strictEqual(await auditManualSceneStage(sceneDir, sceneId), "NV1");
 
-    // Case 4: Valid PNG keyframe exists -> resume at NV2
+    // A valid keyframe advances directly to NV2.
     // Create minimal 256x256 valid PNG buffer
     const { nativeImage } = require("electron");
     let keyframeBuffer;
@@ -67,7 +51,7 @@ async function runTests() {
     const keyframeAudit = await auditManualSceneStage(sceneDir, sceneId);
     assert(keyframeAudit === "NV1" || keyframeAudit === "NV2");
 
-    // Case 5: Valid motion_prompt.txt (> 120 chars) -> COMPLETE
+    // A valid motion prompt completes the scene.
     const validMotionPrompt = "Scene 1 Camera panning slowly across wide cinematic horizon with golden hour sunlight shining through thick forest trees and soft dust particles floating in quiet warm air.";
     await fs.writeFile(path.join(sceneDir, "motion_prompt.txt"), validMotionPrompt);
 

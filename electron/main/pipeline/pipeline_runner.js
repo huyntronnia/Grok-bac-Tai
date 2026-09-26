@@ -1,3 +1,4 @@
+const { assertAutomaticChatGptMutationAllowed } = require("../state/workflow_mode");
 "use strict";
 
 const { BrowserWindow } = require("electron");
@@ -40,7 +41,6 @@ const {
   sendPromptViaCdpInput,
   clickSendButtonViaCdp,
   sendNv2PromptViaDeepCdpInput,
-  captureManualSceneAssets,
   generateImageAndMotionWithChatGPT,
   generateMotionPromptWithChatGPT,
   requestReloadWithReason,
@@ -404,6 +404,7 @@ function sanitizeScenePipelineResult(result = {}) {
 }
 
 async function runScenePipeline(_event, options = {}) {
+  assertAutomaticChatGptMutationAllowed("pipeline-run-scene");
   const runId = String(options?.runId || "").trim();
   if (runId) {
     assertPipelineRunActive(runId);
@@ -1600,16 +1601,7 @@ async function runScenePipelineLockedInternal(_event, options) {
               sceneId,
               config: imageProvider,
             })
-          : isManualMode
-            ? await captureManualSceneAssets({
-                sceneDir,
-                sceneId,
-                page: typeof getCdpPage === "function" ? await getCdpPage("chatgpt", true).catch(() => null) : null,
-                requestArtifact: requestFiles.nv1,
-                nv2RequestArtifact: requestFiles.nv2,
-                options,
-              })
-            : await generateImageAndMotionWithChatGPT({
+          : await generateImageAndMotionWithChatGPT({
                 imagePrompt: "",
                 requestArtifact: requestFiles.nv1,
                 sceneDir,

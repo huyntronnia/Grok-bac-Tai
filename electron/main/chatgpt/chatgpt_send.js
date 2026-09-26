@@ -1,12 +1,13 @@
 const { appendAppLog } = require("../logging");
 const { sleep } = require("../utils");
+const { assertAutomaticChatGptMutationAllowed } = require("../state/workflow_mode");
 const {
   verifyDraftOwnership,
   hashChatGptSnapshotText,
   normalizeChatGptSnapshotText,
 } = require("../state");
 const {
-  evaluateOnCdpPage,
+  evaluateOnCdpPage: evaluateAutomaticPage,
   getConversationState,
 } = require("./chatgpt_core");
 const {
@@ -82,9 +83,7 @@ function isLikelyChatGptSendButtonText(text) {
 }
 
 async function clickSendButtonViaCdp(page) {
-  if (globalThis.__vidoraManualChatGPTMode === true) {
-    throw new Error("manual mode does not click send button");
-  }
+  assertAutomaticChatGptMutationAllowed("click-send-button");
   return evaluateOnCdpPage(
     page,
     `(() => {
@@ -99,6 +98,7 @@ async function clickSendButtonViaCdp(page) {
 }
 
 async function forceClickChatGptComposerSubmit(client) {
+  assertAutomaticChatGptMutationAllowed("force-composer-submit");
   return evaluateOnCdpPage(
     client,
     `
@@ -217,6 +217,7 @@ async function runChatGptRobustSendLadder(
   prompt,
   { focused, beforeCount, strictAssistantStart, context },
 ) {
+  assertAutomaticChatGptMutationAllowed("robust-send-ladder");
   const sceneId = context?.sceneId || "unknown";
   const readyForPrompt = await waitForChatGptReadyForNewPrompt(
     client,
@@ -264,6 +265,7 @@ async function runChatGptRobustSendLadder(
   ).catch(() => null);
 
   // 3. Enforce native text dispatches via the CDP Input domain.
+  assertAutomaticChatGptMutationAllowed("automatic-input-boundary");
   await client.Input.insertText({ text: prompt }).catch(() => null);
   await sleep(400);
 
@@ -419,6 +421,7 @@ async function runChatGptRobustSendLadder(
         kind: "running",
         text: `runChatGptRobustSendLadder: Dispatching native click at (${x}, ${y})`,
       });
+      assertAutomaticChatGptMutationAllowed("automatic-input-boundary");
       await client.Input.dispatchMouseEvent({
         type: "mousePressed",
         x,
@@ -426,6 +429,7 @@ async function runChatGptRobustSendLadder(
         button: "left",
         clickCount: 1,
       }).catch(() => null);
+      assertAutomaticChatGptMutationAllowed("automatic-input-boundary");
       await client.Input.dispatchMouseEvent({
         type: "mouseReleased",
         x,
@@ -526,6 +530,7 @@ async function runChatGptRobustSendLadder(
           kind: "running",
           text: `runChatGptRobustSendLadder: Dispatching retry native click at (${x}, ${y})`,
         });
+        assertAutomaticChatGptMutationAllowed("automatic-input-boundary");
         await client.Input.dispatchMouseEvent({
           type: "mousePressed",
           x,
@@ -533,6 +538,7 @@ async function runChatGptRobustSendLadder(
           button: "left",
           clickCount: 1,
         }).catch(() => null);
+        assertAutomaticChatGptMutationAllowed("automatic-input-boundary");
         await client.Input.dispatchMouseEvent({
           type: "mouseReleased",
           x,
@@ -600,6 +606,7 @@ async function forceSubmitChatGptComposerWithCdp(
   beforeCount = 0,
   context = {},
 ) {
+  assertAutomaticChatGptMutationAllowed("force-submit-composer");
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     const state = await evaluateOnCdpPage(
       client,
@@ -641,6 +648,7 @@ async function forceSubmitChatGptComposerWithCdp(
     ).catch((error) => ({ ok: false, error: error.message }));
     await sleep(700);
     if (!forced?.ok) {
+      assertAutomaticChatGptMutationAllowed("automatic-input-boundary");
       await client.Input.dispatchKeyEvent({
         type: "keyDown",
         key: "Enter",
@@ -648,6 +656,7 @@ async function forceSubmitChatGptComposerWithCdp(
         windowsVirtualKeyCode: 13,
         nativeVirtualKeyCode: 13,
       }).catch(() => null);
+      assertAutomaticChatGptMutationAllowed("automatic-input-boundary");
       await client.Input.dispatchKeyEvent({
         type: "keyUp",
         key: "Enter",
@@ -695,9 +704,7 @@ async function forceSubmitChatGptComposerWithCdp(
 }
 
 async function sendPromptViaCdpInput(client, prompt, options = {}) {
-  if (options?.pipelineMode === "manualChatGPT" || options?.manualChatGPT === true || globalThis.__vidoraManualChatGPTMode === true) {
-    throw new Error("manual mode does not send prompts");
-  }
+  assertAutomaticChatGptMutationAllowed("send-prompt-via-cdp");
   await client.Page?.bringToFront?.().catch(() => null);
   await sleep(500);
 
@@ -901,9 +908,7 @@ async function waitForPromptSendAcknowledged(
 }
 
 async function sendPromptViaCdpInputSingle(client, prompt, context = {}) {
-  if (context?.pipelineMode === "manualChatGPT" || context?.manualChatGPT === true || globalThis.__vidoraManualChatGPTMode === true) {
-    throw new Error("manual mode does not send prompts");
-  }
+  assertAutomaticChatGptMutationAllowed("send-prompt-via-cdp-single");
   await client.Page.bringToFront().catch(() => null);
   await sleep(500);
 
@@ -972,6 +977,7 @@ async function sendPromptViaCdpInputSingle(client, prompt, context = {}) {
 }
 
 async function focusNv2ComposerWithCdp(client, prompt, context = {}) {
+  assertAutomaticChatGptMutationAllowed("nv2-composer-input");
   await client.Page.bringToFront().catch(() => null);
   await sleep(300);
   const focused = await evaluateOnCdpPage(
@@ -982,12 +988,14 @@ async function focusNv2ComposerWithCdp(client, prompt, context = {}) {
   const centerX = focused.box ? focused.box.x + focused.box.width / 2 : 0;
   const centerY = focused.box ? focused.box.y + focused.box.height / 2 : 0;
   if (centerX && centerY) {
+    assertAutomaticChatGptMutationAllowed("automatic-input-boundary");
     await client.Input.dispatchMouseEvent({
       type: "mouseMoved",
       x: centerX,
       y: centerY,
       button: "none",
     }).catch(() => null);
+    assertAutomaticChatGptMutationAllowed("automatic-input-boundary");
     await client.Input.dispatchMouseEvent({
       type: "mousePressed",
       x: centerX,
@@ -995,6 +1003,7 @@ async function focusNv2ComposerWithCdp(client, prompt, context = {}) {
       button: "left",
       clickCount: 1,
     }).catch(() => null);
+    assertAutomaticChatGptMutationAllowed("automatic-input-boundary");
     await client.Input.dispatchMouseEvent({
       type: "mouseReleased",
       x: centerX,
@@ -1061,9 +1070,7 @@ async function waitForNv2GenerationStartGuard(
 }
 
 async function sendNv2PromptViaDeepCdpInput(client, prompt, context = {}) {
-  if (context?.pipelineMode === "manualChatGPT" || context?.manualChatGPT === true || globalThis.__vidoraManualChatGPTMode === true) {
-    throw new Error("manual mode does not send prompts");
-  }
+  assertAutomaticChatGptMutationAllowed("send-nv2-prompt");
   const beforeCount = Number(context.beforeCount || 0) || 0;
   const sceneId = context.sceneId || "unknown";
   const failNv2Send = async (error, details = {}) => {
@@ -1128,6 +1135,7 @@ async function sendNv2PromptViaDeepCdpInput(client, prompt, context = {}) {
     ).catch(() => null);
     await sleep(150);
     await focusNv2ComposerWithCdp(client, prompt, context);
+    assertAutomaticChatGptMutationAllowed("automatic-input-boundary");
     const insertResult = await client.Input.insertText({ text: prompt })
       .then(() => ({ ok: true }))
       .catch((error) => ({ ok: false, error: error.message }));
@@ -1201,6 +1209,7 @@ async function sendNv2PromptViaDeepCdpInput(client, prompt, context = {}) {
     kind: "running",
     text: `[MILESTONE] SEND_CLICK_BEGIN for scene ${sceneId}`,
   }).catch(() => null);
+  assertAutomaticChatGptMutationAllowed("automatic-input-boundary");
   await client.Input.dispatchKeyEvent({
     type: "keyDown",
     key: "Enter",
@@ -1208,6 +1217,7 @@ async function sendNv2PromptViaDeepCdpInput(client, prompt, context = {}) {
     windowsVirtualKeyCode: 13,
     nativeVirtualKeyCode: 13,
   });
+  assertAutomaticChatGptMutationAllowed("automatic-input-boundary");
   await client.Input.dispatchKeyEvent({
     type: "char",
     key: "Enter",
@@ -1216,6 +1226,7 @@ async function sendNv2PromptViaDeepCdpInput(client, prompt, context = {}) {
     windowsVirtualKeyCode: 13,
     nativeVirtualKeyCode: 13,
   }).catch(() => null);
+  assertAutomaticChatGptMutationAllowed("automatic-input-boundary");
   await client.Input.dispatchKeyEvent({
     type: "keyUp",
     key: "Enter",
@@ -1258,12 +1269,14 @@ async function sendNv2PromptViaDeepCdpInput(client, prompt, context = {}) {
       text: "Guarded physical Send click",
       details: { sceneId: context.sceneId || "", x, y },
     }).catch(() => null);
+    assertAutomaticChatGptMutationAllowed("automatic-input-boundary");
     await client.Input.dispatchMouseEvent({
       type: "mouseMoved",
       x,
       y,
       button: "none",
     }).catch(() => null);
+    assertAutomaticChatGptMutationAllowed("automatic-input-boundary");
     await client.Input.dispatchMouseEvent({
       type: "mousePressed",
       x,
@@ -1272,6 +1285,7 @@ async function sendNv2PromptViaDeepCdpInput(client, prompt, context = {}) {
       clickCount: 1,
     }).catch(() => null);
     await sleep(90);
+    assertAutomaticChatGptMutationAllowed("automatic-input-boundary");
     await client.Input.dispatchMouseEvent({
       type: "mouseReleased",
       x,
@@ -1596,6 +1610,7 @@ async function vidoraReadChatGptComposerStateReal(client, context = {}) {
 }
 
 async function vidoraClickChatGptRealSendButton(client, state) {
+  assertAutomaticChatGptMutationAllowed("real-send-button");
   if (!client)
     return { ok: false, error: "chatgpt-input-gate-no-cdp-target", state };
   const rect = state?.sendButton?.rect;
@@ -1604,6 +1619,7 @@ async function vidoraClickChatGptRealSendButton(client, state) {
   const x = Math.round(rect.x + rect.w / 2);
   const y = Math.round(rect.y + rect.h / 2);
 
+  assertAutomaticChatGptMutationAllowed("automatic-input-boundary");
   await client.Input.dispatchMouseEvent({
     type: "mouseMoved",
     x,
@@ -1611,6 +1627,7 @@ async function vidoraClickChatGptRealSendButton(client, state) {
     button: "none",
   }).catch(() => null);
   await sleep(120);
+  assertAutomaticChatGptMutationAllowed("automatic-input-boundary");
   await client.Input.dispatchMouseEvent({
     type: "mousePressed",
     x,
@@ -1619,6 +1636,7 @@ async function vidoraClickChatGptRealSendButton(client, state) {
     clickCount: 1,
   }).catch(() => null);
   await sleep(90);
+  assertAutomaticChatGptMutationAllowed("automatic-input-boundary");
   await client.Input.dispatchMouseEvent({
     type: "mouseReleased",
     x,
@@ -1631,6 +1649,7 @@ async function vidoraClickChatGptRealSendButton(client, state) {
 }
 
 async function vidoraChatGptInputGate(client, context = {}) {
+  assertAutomaticChatGptMutationAllowed("chatgpt-input-gate");
   return { ok: true, mode: "bypassed" };
   let state = await vidoraReadChatGptComposerStateReal(
     typeof client !== "undefined"
@@ -1798,6 +1817,7 @@ async function vidoraChatGptInputGate(client, context = {}) {
 }
 
 async function vidoraClearChatGptInputBeforePaste(client, context = {}) {
+  assertAutomaticChatGptMutationAllowed("clear-composer-before-paste");
   const state = await vidoraReadChatGptComposerStateReal(
     typeof client !== "undefined"
       ? client
@@ -1883,3 +1903,8 @@ module.exports = {
   vidoraChatGptInputGate,
   vidoraClearChatGptInputBeforePaste
 };
+
+function evaluateOnCdpPage(...args) {
+  assertAutomaticChatGptMutationAllowed("automatic-dom-boundary");
+  return evaluateAutomaticPage(...args);
+}

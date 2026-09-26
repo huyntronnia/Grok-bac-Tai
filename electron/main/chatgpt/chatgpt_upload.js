@@ -5,8 +5,9 @@ const path = require("path");
 
 const { appendAppLog } = require("../logging");
 const { sleep } = require("../utils");
+const { assertAutomaticChatGptMutationAllowed } = require("../state/workflow_mode");
 const { clickUploadButtonScript } = require("./chatgpt_dom");
-const { evaluateOnCdpPage, getConversationState } = require("./chatgpt_core");
+const { evaluateOnCdpPage: evaluateAutomaticPage, getConversationState } = require("./chatgpt_core");
 
 let setChatGptSendState = () => null;
 
@@ -755,12 +756,14 @@ async function firstVisibleLocator(locator) {
 }
 
 async function openChatGptAttachmentChooserWithPlaywright(page, filePath) {
+  assertAutomaticChatGptMutationAllowed("open-attachment-chooser");
   const nativePage = page?.clientType === "playwright" ? page.page : null;
   if (!nativePage) {
     return { ok: false, error: "chatgpt-playwright-page-unavailable" };
   }
 
   // Close a stale Tools/Create image menu before opening the attachment menu.
+  assertAutomaticChatGptMutationAllowed("automatic-input-boundary");
   await nativePage.keyboard.press("Escape").catch(() => null);
   await sleep(500);
 
@@ -800,6 +803,7 @@ async function openChatGptAttachmentChooserWithPlaywright(page, filePath) {
     return { ok: false, error: "chatgpt-add-files-button-not-found" };
   }
 
+  assertAutomaticChatGptMutationAllowed("automatic-input-boundary");
   await plusButton.click({ timeout: 5000 });
   await sleep(800);
 
@@ -820,6 +824,7 @@ async function openChatGptAttachmentChooserWithPlaywright(page, filePath) {
     const chooserPromise = nativePage
       .waitForEvent("filechooser", { timeout: 6000 })
       .catch(() => null);
+    assertAutomaticChatGptMutationAllowed("automatic-input-boundary");
     await menuItem.click({ timeout: 5000 });
     const chooser = await chooserPromise;
     if (chooser) {
@@ -840,6 +845,7 @@ async function openChatGptAttachmentChooserWithPlaywright(page, filePath) {
       selected,
     };
   }
+  assertAutomaticChatGptMutationAllowed("automatic-input-boundary");
   await page.setInputFiles(selected.selector, filePath);
   await evaluateOnCdpPage(
     page,
@@ -853,6 +859,7 @@ async function openChatGptAttachmentChooserWithPlaywright(page, filePath) {
 }
 
 async function uploadOneFileToCompatibleInput(page, filePath) {
+  assertAutomaticChatGptMutationAllowed("upload-compatible-file-input");
   if (!fs.existsSync(filePath)) {
     return { ok: false, error: "chatgpt-attachment-local-file-missing" };
   }
@@ -868,6 +875,7 @@ async function uploadOneFileToCompatibleInput(page, filePath) {
   const selector = selected.selector;
   try {
     if (page?.clientType === "playwright") {
+      assertAutomaticChatGptMutationAllowed("automatic-input-boundary");
       await page.setInputFiles(selector, filePath);
     } else {
       const documentHandle = await page.DOM.getDocument();
@@ -890,6 +898,7 @@ async function uploadOneFileToCompatibleInput(page, filePath) {
 }
 
 async function clearUnexpectedAttachments(page, filePaths) {
+  assertAutomaticChatGptMutationAllowed("clear-attachments");
   const allowedNames = filePaths.map((filePath) => path.basename(filePath).toLowerCase());
   return evaluateOnCdpPage(
     page,
@@ -951,6 +960,7 @@ async function clearUnexpectedAttachments(page, filePaths) {
 }
 
 async function uploadFilesToChatGptSequentially(page, filePaths, sceneId = "", options = {}) {
+  assertAutomaticChatGptMutationAllowed("upload-files-sequentially");
   const expectedFilePaths = (Array.isArray(filePaths) ? filePaths : []).filter(Boolean);
   if (!expectedFilePaths.length) {
     return { ok: false, error: "chatgpt-payload-has-no-attachments" };
@@ -1120,6 +1130,7 @@ async function uploadFilesToChatGptSequentially(page, filePaths, sceneId = "", o
 }
 
 async function uploadFileToChatGptDirectly(page, filePath, sceneId = "") {
+  assertAutomaticChatGptMutationAllowed("upload-file-directly");
   return uploadFilesToChatGptSequentially(page, [filePath], sceneId, {
     request: "direct-file-upload",
   });
@@ -1145,3 +1156,8 @@ module.exports = {
   uploadFilesToChatGptSequentially,
   uploadFileToChatGptDirectly,
 };
+
+function evaluateOnCdpPage(...args) {
+  assertAutomaticChatGptMutationAllowed("automatic-dom-boundary");
+  return evaluateAutomaticPage(...args);
+}

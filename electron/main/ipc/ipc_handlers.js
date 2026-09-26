@@ -1,3 +1,6 @@
+const { registerManualWorkflowIpc } = require("./manual_workflow_ipc");
+const { assertAutomaticChatGptMutationAllowed } = require("../state/workflow_mode");
+
 function initIpcHandlers(runtime) {
   const {
     app,
@@ -25,13 +28,8 @@ function initIpcHandlers(runtime) {
     checkWebLogin,
     clearChatGptCacheHandler,
     openFreshChatGptHandler,
-    manualStartStageHandler,
-    manualCaptureStageHandler,
-    manualGetStatusHandler,
-    manualCancelStageHandler,
-    manualGetSceneAuditHandler,
-    manualDetectProgressHandler,
     manualCopyPromptHandler,
+    openManualChromeHandler,
     toggleMiniBarHandler,
     setAlwaysOnTopHandler,
     openSceneFolderHandler,
@@ -65,6 +63,7 @@ function initIpcHandlers(runtime) {
     runVeoUpAutomation,
     getChatGptSendState,
     isReloadBlocked,
+    manualWorkflowController,
   } = runtime;
 
   ipcMain.handle(
@@ -93,7 +92,9 @@ function initIpcHandlers(runtime) {
   );
   ipcMain.handle(
     "veoup:scan-project-and-run",
-    safeIpcHandler(scanProjectAndRunVeoUpHandler),
+    safeIpcHandler((_event, payload = {}) => manualWorkflowController.submitVeoUp({
+      projectPath: payload.projectPath || payload.projectDir || payload.outputFolder,
+    })),
   );
   ipcMain.handle(
     "veoup:get-batch-status",
@@ -121,40 +122,16 @@ function initIpcHandlers(runtime) {
   );
   ipcMain.handle(
     "chatgpt:open-fresh-chat",
-    safeIpcHandler(openFreshChatGptHandler),
+    safeIpcHandler((...args) => { assertAutomaticChatGptMutationAllowed("fresh-chat-ipc"); return openFreshChatGptHandler(...args); }),
   );
-  ipcMain.handle(
-    "chatgpt:manual-start-stage",
-    safeIpcHandler(manualStartStageHandler),
-  );
-  ipcMain.handle(
-    "chatgpt:manual-capture-stage",
-    safeIpcHandler(manualCaptureStageHandler),
-  );
-  ipcMain.handle(
-    "chatgpt:manual-get-status",
-    safeIpcHandler(manualGetStatusHandler),
-  );
-  ipcMain.handle(
-    "chatgpt:manual-cancel-stage",
-    safeIpcHandler(manualCancelStageHandler),
-  );
-  ipcMain.handle(
-    "chatgpt:manual-get-scene-audit",
-    safeIpcHandler(manualGetSceneAuditHandler),
-  );
-  ipcMain.handle(
-    "chatgpt:manual-detect-progress",
-    safeIpcHandler(manualDetectProgressHandler),
-  );
-  ipcMain.handle(
-    "pipeline:manual-force-capture",
-    safeIpcHandler(manualCaptureStageHandler),
-  );
-  ipcMain.handle(
-    "pipeline:manual-copy-prompt",
-    safeIpcHandler(manualCopyPromptHandler),
-  );
+  registerManualWorkflowIpc({
+    ipcMain,
+    safeIpcHandler,
+    controller: manualWorkflowController,
+    copyText: (text) => manualCopyPromptHandler(null, text),
+    openFolder: (folderPath) => openSceneFolderHandler(null, folderPath),
+    openChrome: () => openManualChromeHandler(),
+  });
   ipcMain.handle(
     "window:toggle-mini-bar",
     safeIpcHandler(toggleMiniBarHandler),
@@ -167,8 +144,11 @@ function initIpcHandlers(runtime) {
     "shell:open-folder",
     safeIpcHandler(openSceneFolderHandler),
   );
-  ipcMain.handle("browser:send-prompt", sendPromptViaWeb);
-  ipcMain.handle("pipeline:run-scene", safeIpcHandler(runScenePipeline));
+  ipcMain.handle("browser:send-prompt", safeIpcHandler((...args) => { assertAutomaticChatGptMutationAllowed("browser-send-prompt-ipc"); return sendPromptViaWeb(...args); }));
+  ipcMain.handle("pipeline:run-scene", safeIpcHandler((event, payload) => {
+    assertAutomaticChatGptMutationAllowed("pipeline-run-scene-ipc");
+    return runScenePipeline(event, payload);
+  }));
   ipcMain.handle('pipeline:stop', safeIpcHandler(stopPipeline));
   ipcMain.handle("output:choose-folder", chooseOutputFolder);
   ipcMain.handle("project:choose-root-folder", chooseProjectRootFolder);
@@ -185,11 +165,17 @@ function initIpcHandlers(runtime) {
   ipcMain.handle("asset:exists", checkAssetExists);
   ipcMain.handle("asset:stat", getAssetStat);
   ipcMain.handle("frame:get-previous", getPreviousFrame);
-  ipcMain.handle("ai:split-prompt", splitPromptWithAI);
-  ipcMain.handle("ai:generate-scene-prompts", generateScenePrompts);
+  ipcMain.handle("ai:split-prompt", (event, payload) => {
+    assertAutomaticChatGptMutationAllowed("ai-split-prompt-ipc");
+    return splitPromptWithAI(event, payload);
+  });
+  ipcMain.handle("ai:generate-scene-prompts", (event, payload) => {
+    assertAutomaticChatGptMutationAllowed("ai-generate-scene-prompts-ipc");
+    return generateScenePrompts(event, payload);
+  });
   ipcMain.handle(
     "chatgpt:rename-current-chat",
-    renameChatGptCurrentConversation,
+    safeIpcHandler((...args) => { assertAutomaticChatGptMutationAllowed("rename-chat-ipc"); return renameChatGptCurrentConversation(...args); }),
   );
   ipcMain.handle("project:export", exportProject);
   ipcMain.handle("project:new-session", newProjectSession);
@@ -203,7 +189,10 @@ function initIpcHandlers(runtime) {
     "project:open-preprompt-folder",
     safeIpcHandler(openProjectPrepromptFolderHandler),
   );
-  ipcMain.handle("veoup:run-automation", safeIpcHandler(runVeoUpAutomation));
+  ipcMain.handle("veoup:run-automation", safeIpcHandler((_event, payload = {}) =>
+    manualWorkflowController.submitVeoUp({
+      projectPath: payload.projectPath || payload.projectDir || payload.outputFolder,
+    })));
 
   app.on("web-contents-created", (event, contents) => {
     appendAppLog(null, {

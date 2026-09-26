@@ -1,0 +1,1 @@
+Runtime works. Duplicate capture engine removed; durable controller hardened for hydration, anchors, bundle hashes, cancellation, redo invalidation and override. Completing production/UI wiring and behavioral integration tests. Final suite not yet run. No commits.

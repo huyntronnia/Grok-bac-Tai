@@ -1,9 +1,10 @@
 const { appendAppLog } = require("../logging");
 const { sleep } = require("../utils");
+const { assertAutomaticChatGptMutationAllowed } = require("../state/workflow_mode");
 const {
   getConversationState,
   waitForCdpLoad,
-  evaluateOnCdpPage,
+  evaluateOnCdpPage: evaluateAutomaticPage,
   getChatGptSendState,
 } = require("./chatgpt_core");
 const {
@@ -101,6 +102,7 @@ async function requestReloadWithReason(
   sceneId = "unknown",
   policy = {},
 ) {
+  assertAutomaticChatGptMutationAllowed("chatgpt-reload-recovery");
   await appendAppLog(sceneId, {
     source: "main",
     kind: "warning",
@@ -118,8 +120,10 @@ async function requestReloadWithReason(
   }
 
   if (page.reload) {
+    assertAutomaticChatGptMutationAllowed("automatic-input-boundary");
     await page.reload().catch(() => null);
   } else if (page.Page?.reload) {
+    assertAutomaticChatGptMutationAllowed("automatic-input-boundary");
     await page.Page.reload({
       ignoreCache: true,
       __vidoraReloadPolicy: policy,
@@ -129,6 +133,7 @@ async function requestReloadWithReason(
 }
 
 async function performDurableRecovery(page, options, sceneDir, snapshot, stage, targetPrompt, targetFiles) {
+  assertAutomaticChatGptMutationAllowed("chatgpt-durable-recovery-resend");
   const runId = options.runId || "";
   const sceneId = options.sceneId || 0;
   
@@ -375,6 +380,7 @@ async function recoverCdpPageIfCrashed(
   provider = "chatgpt",
   reason = "unknown",
 ) {
+  assertAutomaticChatGptMutationAllowed("chatgpt-crash-recovery");
   const state = await evaluateOnCdpPage(
     client,
     `(${detectBrowserCrashPageScript.toString()})()`,
@@ -446,6 +452,7 @@ async function recoverCdpPageIfCrashed(
     details: { provider, reason, state, isOom },
   });
   await client.Page.stopLoading().catch(() => null);
+  assertAutomaticChatGptMutationAllowed("automatic-input-boundary");
   await client.Page.navigate({ url: meta.url }).catch(() => null);
   await waitForCdpLoad(client).catch(() => null);
   await sleep(2200);
@@ -459,6 +466,7 @@ async function recoverCdpPageIfCrashed(
     error: error.message,
   }));
   if (after?.crashed) {
+    assertAutomaticChatGptMutationAllowed("automatic-input-boundary");
     await client.Page.reload({ ignoreCache: true }).catch(() => null);
     await waitForCdpLoad(client).catch(() => null);
     await sleep(2200);
@@ -473,6 +481,7 @@ async function recoverCdpPageIfCrashed(
 }
 
 async function recoverChatGptBlockingUi(client, context = {}) {
+  assertAutomaticChatGptMutationAllowed("chatgpt-blocking-ui-recovery");
   const currentSceneId = context.sceneId || globalThis.__vidoraLastProcessedSceneId || "unknown";
   const sendState = getChatGptSendState(currentSceneId);
   if (sendState === "PREPARING" || sendState === "READY" || sendState === "CLICKING") {
@@ -534,6 +543,7 @@ async function recoverChatGptBlockingUi(client, context = {}) {
     `(${dismissChatGptBlockingUiScript.toString()})(${JSON.stringify(context || {})})`,
   ).catch((error) => ({ ok: false, error: error.message }));
   if (result?.imageViewerDetected) {
+    assertAutomaticChatGptMutationAllowed("automatic-input-boundary");
     await client.Input.dispatchKeyEvent({
       type: "keyDown",
       key: "Escape",
@@ -541,6 +551,7 @@ async function recoverChatGptBlockingUi(client, context = {}) {
       windowsVirtualKeyCode: 27,
       nativeVirtualKeyCode: 27,
     }).catch(() => null);
+    assertAutomaticChatGptMutationAllowed("automatic-input-boundary");
     await client.Input.dispatchKeyEvent({
       type: "keyUp",
       key: "Escape",
@@ -562,6 +573,7 @@ async function recoverChatGptBlockingUi(client, context = {}) {
 }
 
 async function recoverChatGptResponseChoiceChat(client, context = {}) {
+  assertAutomaticChatGptMutationAllowed("chatgpt-response-choice-recovery");
   const state = await evaluateOnCdpPage(
     client,
     `(${detectChatGptResponseChoiceUiScript.toString()})()`,
@@ -633,6 +645,7 @@ async function recoverChatGptResponseChoiceChat(client, context = {}) {
 
 
 async function forceCleanChatGptNewChatRotation() {
+  assertAutomaticChatGptMutationAllowed("chatgpt-new-chat-rotation");
   const currentSceneId = globalThis.__vidoraLastProcessedSceneId || "unknown";
   await appendAppLog(currentSceneId, {
     source: "main",
@@ -829,3 +842,8 @@ module.exports = {
   recoverChatGptBlockingUi,
   recoverChatGptResponseChoiceChat,
 };
+
+function evaluateOnCdpPage(...args) {
+  assertAutomaticChatGptMutationAllowed("automatic-dom-boundary");
+  return evaluateAutomaticPage(...args);
+}

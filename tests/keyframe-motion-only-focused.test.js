@@ -13,9 +13,8 @@ const files = {
 
 console.log('Running focused tests for "Generate Keyframe + Motion Prompt only" pipeline mode...');
 
-// 1. UI Assertion
-assert(files.html.includes('id="keyframe-motion-only-toggle"'), 'UI checkbox keyframe-motion-only-toggle missing in index.html');
-assert(files.html.includes('Generate Keyframe + Motion Prompt only'), 'UI checkbox label text missing in index.html');
+// Manual workflow supersedes the old opt-in checkbox.
+assert.strictEqual(require('../electron/main/state/workflow_mode').normalizeWorkflowMode(), 'manual_keyframe_motion');
 
 // 2. Renderer Settings & Persistence Assertion
 assert(files.renderer.includes('const keyframeMotionOnlyToggle = document.querySelector(\'#keyframe-motion-only-toggle\');'), 'keyframe-motion-only-toggle DOM selector missing in renderer.js');

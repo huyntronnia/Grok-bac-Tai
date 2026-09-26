@@ -28,20 +28,37 @@ contextBridge.exposeInMainWorld('videoPlannerAPI', {
   openWebLogin: (provider) => ipcRenderer.invoke('browser:open-login', provider),
   checkWebLogin: (provider, options) => ipcRenderer.invoke('browser:check-login', provider, options),
   chooseOutputFolder: () => ipcRenderer.invoke('output:choose-folder'),
-  sendPromptViaWeb: (options) => ipcRenderer.invoke('browser:send-prompt', options),
-  runScenePipeline: (options) => ipcRenderer.invoke('pipeline:run-scene', options),
   stopPipeline: (options) => ipcRenderer.invoke('pipeline:stop', options),
   clearChatGptCache: () => ipcRenderer.invoke('chatgpt:clear-cache'),
-  openFreshChatGpt: () => ipcRenderer.invoke('chatgpt:open-fresh-chat'),
-  startManualStage: (payload) => ipcRenderer.invoke('chatgpt:manual-start-stage', payload),
-  captureManualStage: (payload) => ipcRenderer.invoke('chatgpt:manual-capture-stage', payload),
-  forceCaptureManual: (payload) => ipcRenderer.invoke('pipeline:manual-force-capture', payload),
-  copyPromptToClipboard: (text) => ipcRenderer.invoke('pipeline:manual-copy-prompt', text),
-  onManualStepChanged: (callback) => {
+  getWorkflowMode: () => ipcRenderer.invoke('workflow:get-mode'),
+  setWorkflowMode: (mode) => ipcRenderer.invoke('workflow:set-mode', mode),
+  initializeManualWorkflow: (payload) => ipcRenderer.invoke('manual-workflow:initialize', payload),
+  resumeManualWorkflow: (payload) => ipcRenderer.invoke('manual-workflow:resume', payload),
+  prepareManualStage: (payload) => ipcRenderer.invoke('manual-workflow:prepare', payload),
+  armManualStage: (payload) => ipcRenderer.invoke('manual-workflow:arm', payload),
+  captureManualStage: (payload) => ipcRenderer.invoke('manual-workflow:capture', payload),
+  continueManualWorkflow: (payload) => ipcRenderer.invoke('manual-workflow:continue', payload),
+  cancelManualStage: (payload) => ipcRenderer.invoke('manual-workflow:cancel', payload),
+  redoManualStage: (payload) => ipcRenderer.invoke('manual-workflow:redo', payload),
+  previewManualOverride: (payload) => ipcRenderer.invoke('manual-workflow:override-preview', payload),
+  confirmManualOverride: (payload) => ipcRenderer.invoke('manual-workflow:override-confirm', payload),
+  getManualViewModel: (payload) => ipcRenderer.invoke('manual-workflow:get-view-model', payload),
+  getManualObservation: (payload) => ipcRenderer.invoke('manual-workflow:get-observation', payload),
+  selectManualScene: (payload) => ipcRenderer.invoke('manual-workflow:select-scene', payload),
+  onManualWorkflowChanged: (callback) => {
     const listener = (_event, payload) => callback(payload);
-    ipcRenderer.on('pipeline:manual-step-changed', listener);
-    return () => ipcRenderer.removeListener('pipeline:manual-step-changed', listener);
+    ipcRenderer.on('manual-workflow:changed', listener);
+    return () => ipcRenderer.removeListener('manual-workflow:changed', listener);
   },
+  onManualWorkflowObservation: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on('manual-workflow:observation', listener);
+    return () => ipcRenderer.removeListener('manual-workflow:observation', listener);
+  },
+  submitManualVeoUp: (payload) => ipcRenderer.invoke('manual-workflow:submit-veoup', payload),
+  copyManualText: (text) => ipcRenderer.invoke('manual-workflow:copy-text', text),
+  openManualFolder: (folderPath) => ipcRenderer.invoke('manual-workflow:open-folder', folderPath),
+  openManualChrome: () => ipcRenderer.invoke('manual-workflow:open-chrome'),
   toggleMiniBar: () => ipcRenderer.invoke('window:toggle-mini-bar'),
   setAlwaysOnTop: (flag) => ipcRenderer.invoke('window:set-always-on-top', flag),
   onMiniBarStateChanged: (callback) => {
@@ -49,20 +66,14 @@ contextBridge.exposeInMainWorld('videoPlannerAPI', {
     ipcRenderer.on('window:mini-bar-state-changed', listener);
     return () => ipcRenderer.removeListener('window:mini-bar-state-changed', listener);
   },
-  getManualStatus: (payload) => ipcRenderer.invoke('chatgpt:manual-get-status', payload),
-  cancelManualStage: (payload) => ipcRenderer.invoke('chatgpt:manual-cancel-stage', payload),
-  getManualSceneAudit: (payload) => ipcRenderer.invoke('chatgpt:manual-get-scene-audit', payload),
-  detectChatGPTProgress: (payload) => ipcRenderer.invoke('chatgpt:manual-detect-progress', payload),
   openSceneFolder: (folderPath) => ipcRenderer.invoke('shell:open-folder', folderPath),
   openProjectPrepromptFolder: (projectPath) => ipcRenderer.invoke('project:open-preprompt-folder', projectPath),
-  runVeoUpAutomation: (options) => ipcRenderer.invoke('veoup:run-automation', options),
   getVeoUpCoordinateConfig: () => ipcRenderer.invoke('veoup:get-coordinate-config'),
   startVeoUpCoordinateSetup: () => ipcRenderer.invoke('veoup:start-coordinate-setup'),
   captureVeoUpCoordinate: (pointType) => ipcRenderer.invoke('veoup:capture-coordinate', pointType),
   saveVeoUpCoordinateConfig: (config) => ipcRenderer.invoke('veoup:save-coordinate-config', config),
   deleteVeoUpCoordinateConfig: (payload) => ipcRenderer.invoke('veoup:delete-coordinate-config', payload),
   cancelVeoUpCoordinateSetup: () => ipcRenderer.invoke('veoup:cancel-coordinate-setup'),
-  scanProjectAndRunVeoUp: (options) => ipcRenderer.invoke('veoup:scan-project-and-run', options),
   getVeoUpBatchStatus: (options) => ipcRenderer.invoke('veoup:get-batch-status', options),
   cancelVeoUpBatch: (options) => ipcRenderer.invoke('veoup:cancel-batch', options),
   generateScenePrompts: (options) => ipcRenderer.invoke('ai:generate-scene-prompts', options),

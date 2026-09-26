@@ -1349,6 +1349,316 @@ tr:hover td { background: rgba(255, 255, 255, 0.025); }
   align-items: center;
 }
 
+/* Canonical Manual Mode: compact command surface and live observation feed. */
+.manual-chatgpt-card {
+  margin-top: 18px;
+  padding: 26px;
+  border-color: rgba(94, 234, 212, 0.22);
+  background:
+    radial-gradient(circle at 90% -10%, rgba(45, 212, 191, 0.14), transparent 24rem),
+    linear-gradient(150deg, rgba(12, 21, 35, 0.98), rgba(16, 28, 46, 0.94));
+}
+.manual-workflow-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 22px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+}
+.manual-workflow-heading h3 {
+  margin: 5px 0 7px;
+  color: #f8fafc;
+  font-size: clamp(21px, 2vw, 28px);
+  letter-spacing: -0.035em;
+}
+.manual-workflow-heading p,
+.manual-help { max-width: 68ch; color: #aebdd1; line-height: 1.6; }
+.manual-kicker {
+  color: #5eead4;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.manual-progress-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: max-content;
+  color: #e2e8f0;
+  font-variant-numeric: tabular-nums;
+}
+.manual-progress-summary strong,
+.manual-progress-summary span,
+.manual-stage-badge {
+  padding: 7px 10px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 8px;
+  background: rgba(2, 6, 23, 0.46);
+  font-size: 11px;
+  font-weight: 750;
+}
+.manual-progress-summary span { color: #fcd34d; }
+.manual-stage-badge { display: inline-flex; margin: 14px 0 0; color: #cbd5e1; }
+.manual-command-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 18px 0 12px;
+  padding: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 14px;
+  background: rgba(2, 6, 23, 0.28);
+}
+.manual-action {
+  min-height: 36px;
+  padding: 0 12px;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 8px;
+  color: #e5edf8;
+  background: rgba(30, 41, 59, 0.78);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  transition: transform 160ms ease, background 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
+}
+.manual-action:hover:not(:disabled) {
+  transform: translateY(-1px);
+  border-color: rgba(94, 234, 212, 0.52);
+  background: rgba(51, 65, 85, 0.9);
+}
+.manual-action:active:not(:disabled) { transform: translateY(1px); }
+.manual-action:focus-visible { outline: 2px solid #5eead4; outline-offset: 2px; }
+.manual-action-primary {
+  border-color: rgba(45, 212, 191, 0.65);
+  color: #032523;
+  background: #5eead4;
+  box-shadow: 0 8px 20px rgba(20, 184, 166, 0.2);
+}
+.manual-action-primary:hover:not(:disabled) { background: #99f6e4; }
+.manual-action-quiet { color: #b8c5d7; background: transparent; }
+.manual-scene-picker {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  color: #93a4ba;
+  font-size: 11px;
+  font-weight: 700;
+}
+.manual-scene-picker select {
+  min-width: 170px;
+  min-height: 36px;
+  padding: 0 28px 0 10px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 8px;
+  color: #e5edf8;
+  background: #101b2c;
+}
+.manual-observation-panel {
+  margin: 18px 0;
+  overflow: hidden;
+  border: 1px solid rgba(94, 234, 212, 0.18);
+  border-radius: 14px;
+  background: rgba(2, 6, 23, 0.42);
+}
+.manual-observation-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 15px 16px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+}
+.manual-observation-header h4 { margin: 3px 0 0; color: #f1f5f9; font-size: 14px; }
+.manual-observation-actions { display: flex; align-items: center; gap: 9px; }
+.manual-live-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #a7f3d0;
+  font-size: 11px;
+  font-weight: 750;
+}
+.manual-live-indicator::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 0 4px rgba(110, 231, 183, 0.1);
+}
+.manual-live-indicator[data-state="busy"] { color: #fcd34d; }
+.manual-live-indicator[data-state="warning"] { color: #fb923c; }
+.manual-live-indicator[data-state="offline"] { color: #fca5a5; }
+#manual-observation-status {
+  margin: 0;
+  padding: 11px 16px;
+  color: #aebdd1;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.1);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.manual-observation-details {
+  max-height: 360px;
+  margin: 0;
+  padding: 16px;
+  overflow: auto;
+  color: #d5dfec;
+  white-space: pre-wrap;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.55;
+  background: linear-gradient(180deg, rgba(15, 23, 42, 0.36), rgba(2, 6, 23, 0.12));
+}
+.manual-chatgpt-card > .manual-toolbar {
+  justify-content: flex-start;
+  margin-top: 12px;
+  padding: 10px;
+  background: rgba(2, 6, 23, 0.28);
+  border-color: rgba(148, 163, 184, 0.16);
+}
+.manual-chatgpt-card > .manual-toolbar > button {
+  min-height: 36px;
+  padding: 0 12px;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 8px;
+  color: #e5edf8;
+  background: rgba(30, 41, 59, 0.78);
+  font-size: 12px;
+  font-weight: 700;
+  transition: transform 160ms ease, border-color 160ms ease, background 160ms ease;
+}
+.manual-chatgpt-card > .manual-toolbar > button:hover:not(:disabled) {
+  transform: translateY(-1px);
+  border-color: rgba(94, 234, 212, 0.52);
+  background: rgba(51, 65, 85, 0.9);
+}
+.manual-chatgpt-card > .manual-toolbar > #manual-arm-btn,
+.manual-chatgpt-card > .manual-toolbar > #manual-capture-btn {
+  border-color: rgba(45, 212, 191, 0.55);
+  color: #032523;
+  background: #5eead4;
+}
+.manual-chatgpt-card > .manual-toolbar > #manual-cancel-btn { color: #fecaca; }
+.manual-chatgpt-card button:focus-visible {
+  outline: 2px solid rgba(94, 234, 212, 0.9);
+  outline-offset: 3px;
+}
+.manual-chatgpt-card button:active:not(:disabled) {
+  transform: translateY(1px) scale(0.985);
+}
+.manual-chatgpt-card button:disabled {
+  cursor: not-allowed;
+  opacity: 0.38;
+  filter: saturate(0.35);
+}
+.manual-chatgpt-card button.is-busy {
+  cursor: progress;
+  opacity: 0.76;
+}
+.manual-chatgpt-card button.is-busy::after {
+  content: "";
+  display: inline-block;
+  width: 0.72em;
+  height: 0.72em;
+  margin-left: 0.55em;
+  border: 1.5px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  vertical-align: -0.06em;
+  animation: manualActionSpin 700ms linear infinite;
+}
+.manual-action-feedback {
+  margin-top: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.34);
+  overflow: hidden;
+}
+.manual-action-current {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 36px;
+  padding: 8px 12px;
+  color: #cbd5e1;
+  font-size: 12px;
+}
+.manual-action-current p { margin: 0; }
+#manual-action-state {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: #64748b;
+  box-shadow: 0 0 0 3px rgba(100, 116, 139, 0.12);
+}
+#manual-action-state[data-state="working"] { background: #fbbf24; box-shadow: 0 0 0 3px rgba(251, 191, 36, 0.14); animation: manualActionPulse 1s ease-in-out infinite; }
+#manual-action-state[data-state="success"] { background: #5eead4; box-shadow: 0 0 0 3px rgba(94, 234, 212, 0.13); }
+#manual-action-state[data-state="error"] { background: #f87171; box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.14); }
+.manual-action-log {
+  max-height: 128px;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  list-style: none;
+  border-top: 1px solid rgba(148, 163, 184, 0.12);
+  font: 11px/1.45 ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+.manual-action-log li {
+  display: grid;
+  grid-template-columns: 58px 1fr;
+  gap: 8px;
+  padding: 6px 12px;
+  color: #94a3b8;
+}
+.manual-action-log li + li { border-top: 1px solid rgba(148, 163, 184, 0.07); }
+.manual-action-log li.is-success { color: #99f6e4; }
+.manual-action-log li.is-error { color: #fca5a5; }
+.manual-action-log li.is-working { color: #fde68a; }
+.manual-action-log li.is-idle { display: block; color: #64748b; }
+.manual-action-time { color: #64748b; }
+@keyframes manualActionSpin { to { transform: rotate(360deg); } }
+@keyframes manualActionPulse { 50% { transform: scale(1.3); opacity: 0.56; } }
+.manual-recovery-details {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.35);
+}
+.manual-recovery-details[hidden] { display: none; }
+.manual-recovery-details summary { cursor: pointer; color: #cbd5e1; font-size: 12px; font-weight: 700; }
+.manual-recovery-details label { display: inline-flex; align-items: center; gap: 8px; margin: 10px 8px 0 0; }
+.manual-recovery-details #manual-redo-btn {
+  min-height: 36px;
+  margin: 10px 0 0;
+  padding: 0 12px;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 8px;
+  color: #e5edf8;
+  background: rgba(30, 41, 59, 0.78);
+  font-size: 12px;
+  font-weight: 700;
+}
+.manual-recovery-details #manual-redo-btn:hover:not(:disabled) {
+  border-color: rgba(94, 234, 212, 0.52);
+  background: rgba(51, 65, 85, 0.9);
+}
+@media (max-width: 760px) {
+  .manual-chatgpt-card { padding: 18px; }
+  .manual-workflow-heading, .manual-observation-header { align-items: stretch; flex-direction: column; }
+  .manual-progress-summary { justify-content: flex-start; }
+  .manual-scene-picker { width: 100%; margin-left: 0; justify-content: space-between; }
+  .manual-scene-picker select { width: min(64vw, 260px); }
+}
+
 /* ==========================================================================
    Phase UX-1 & UX-4: Visual Stepper 4 Nấc & Micro-interactions
    ========================================================================== */

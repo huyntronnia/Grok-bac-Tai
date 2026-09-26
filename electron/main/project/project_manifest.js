@@ -1,8 +1,10 @@
 const path = require("path");
+const { migrateProjectWorkflowMode } = require("../state/workflow_mode");
 
 const PROJECT_ASSET_STORAGE_MODE = "external-relative-v1";
 
 const SCENE_PATH_KEYS = [
+  "keyframePath",
   "imagePath",
   "videoPath",
   "lastFramePath",
@@ -188,6 +190,7 @@ function removeEmbeddedAssets(payload = {}) {
 
 function prepareProjectPayloadForSave(payload = {}, projectRoot = "") {
   const cloned = cloneProjectPayloadForSave(payload);
+  migrateProjectWorkflowMode(cloned);
   removeEmbeddedAssets(cloned);
   if (!cloned.assets || typeof cloned.assets !== "object" || Array.isArray(cloned.assets)) {
     cloned.assets = {};
@@ -200,6 +203,7 @@ function prepareProjectPayloadForSave(payload = {}, projectRoot = "") {
 }
 
 function hydrateProjectPayloadPaths(payload = {}, projectRoot = "") {
+  migrateProjectWorkflowMode(payload);
   return transformProjectPaths(payload, projectRoot, "load");
 }
 

@@ -17,6 +17,12 @@ const {
   createComposerPayload,
 } = require("../pipeline/scene_request_files");
 const {
+  CHATGPT_HYDRATION_KEYFRAME_LIMIT,
+  REQUEST_1_PROMPT,
+  REQUEST_2_PROMPT,
+  validateReadyResponse,
+} = require("./manual_stage_bundle");
+const {
   validateKeyframeFile,
   validateMotionPromptTextContent,
 } = require("../pipeline/asset_validation");
@@ -81,8 +87,6 @@ const {
   normalizeChatGptRetryText,
 } = require("../recovery");
 
-const CHATGPT_HYDRATION_KEYFRAME_LIMIT = 10;
-
 // --- Injected dependencies (set via initChatGptPipeline) ---
 let getCdpPage;
 let tryAutoLoginWithStoredAccount;
@@ -146,13 +150,6 @@ async function setChatGptTaskState(sceneDir, task, state, details = {}) {
     },
   };
   await writeSceneSnapshot(sceneDir, snapshot).catch(() => null);
-}
-
-function validateReadyResponse(text = "") {
-  const normalized = String(text || "").trim().toLowerCase();
-  if (!normalized) return false;
-  if (isChatGptPolicyRefusalText(normalized) || isChatGptLimitText(normalized)) return false;
-  return /\b(ready|done|ok|okay|acknowledged|remembered|loaded|understood)\b|sẵn sàng|san sang|đã nhớ|da nho|xong/.test(normalized);
 }
 
 function conversationIdFromLocation(location = {}) {
@@ -5560,10 +5557,8 @@ async function hydrateFreshChatGptContextAfterRotation(
   );
 
   let snapshot = await readSceneSnapshot(sceneDir);
-  const request1Prompt =
-    "Request 1: read and remember all attached preprompt files. Reply only when ready.";
-  const request2Prompt =
-    `Request 2: read and remember the attached keyframes from up to ${CHATGPT_HYDRATION_KEYFRAME_LIMIT} previous project scenes. Use them as visual continuity context for upcoming requests. Reply only when ready.`;
+  const request1Prompt = REQUEST_1_PROMPT;
+  const request2Prompt = REQUEST_2_PROMPT;
   const request1PromptHash = hashChatGptSnapshotText(request1Prompt);
   const request2PromptHash = hashChatGptSnapshotText(request2Prompt);
 
@@ -6216,135 +6211,7 @@ function clearAllChatGptPipelineLocks() {
   motionPromptSendLocks.clear();
 }
 
-async function captureManualSceneAssets({
-  sceneDir,
-  sceneId,
-  page,
-  requestArtifact = {},
-  nv2RequestArtifact = {},
-  options = {},
-} = {}) {
-  const sceneToken = `scene_${String(sceneId).padStart(3, "0")}`;
-  const keyframePath = path.join(sceneDir, `${sceneToken}_keyframe.png`);
-  const motionPromptPath = path.join(sceneDir, "motion_prompt.txt");
-
-  const {
-    extractAndSaveManualKeyframe,
-    extractAndSaveManualMotionPrompt,
-  } = require("./chatgpt_manual_detector");
-
-  // NV1 check/capture
-  let keyframeValid = false;
-  const existingKeyframe = await validateSavedImageFile(keyframePath).catch(() => ({ ok: false }));
-  if (existingKeyframe?.ok) {
-    keyframeValid = true;
-  }
-
-  if (!keyframeValid) {
-    if (typeof notifyRenderer === "function") {
-      notifyRenderer("pipeline:manual-step-changed", {
-        sceneId: sceneToken,
-        stage: "NV1",
-        step: "WAITING_FOR_NV1_IMAGE",
-        prompt: requestArtifact?.controlPrompt || "",
-      });
-    }
-
-    const startWait = Date.now();
-    const timeoutMs = Number(options.manualTimeoutMs || 300000);
-    while (Date.now() - startWait < timeoutMs) {
-      assertPipelineRunActive(options.runId);
-
-      const checkFile = await validateSavedImageFile(keyframePath).catch(() => ({ ok: false }));
-      if (checkFile?.ok) {
-        keyframeValid = true;
-        break;
-      }
-
-      if (page) {
-        try {
-          const res = await extractAndSaveManualKeyframe(page, keyframePath, {
-            sceneId: sceneToken,
-            baseline: options.baseline,
-          });
-          if (res?.ok) {
-            keyframeValid = true;
-            break;
-          }
-        } catch (_) {}
-      }
-
-      await sleep(1500);
-    }
-
-    if (!keyframeValid) {
-      throw new Error(`Scene ${sceneToken}: Timeout waiting for manual NV1 keyframe.`);
-    }
-  }
-
-  // NV2 check/capture
-  let motionPrompt = "";
-  try {
-    const raw = await fs.readFile(motionPromptPath, "utf8");
-    const val = validateMotionPromptTextContent(raw);
-    if (val.ok) motionPrompt = val.text;
-  } catch (_) {}
-
-  if (!motionPrompt) {
-    if (typeof notifyRenderer === "function") {
-      notifyRenderer("pipeline:manual-step-changed", {
-        sceneId: sceneToken,
-        stage: "NV2",
-        step: "WAITING_FOR_NV2_PROMPT",
-        keyframePath,
-        prompt: nv2RequestArtifact?.controlPrompt || "",
-      });
-    }
-
-    const startWait = Date.now();
-    const timeoutMs = Number(options.manualTimeoutMs || 300000);
-    while (Date.now() - startWait < timeoutMs) {
-      assertPipelineRunActive(options.runId);
-
-      try {
-        const raw = await fs.readFile(motionPromptPath, "utf8");
-        const val = validateMotionPromptTextContent(raw);
-        if (val.ok) {
-          motionPrompt = val.text;
-          break;
-        }
-      } catch (_) {}
-
-      if (page) {
-        try {
-          const res = await extractAndSaveManualMotionPrompt(page, motionPromptPath, {
-            baseline: options.baseline,
-          });
-          if (res?.ok && res.text) {
-            motionPrompt = res.text;
-            break;
-          }
-        } catch (_) {}
-      }
-
-      await sleep(1500);
-    }
-
-    if (!motionPrompt) {
-      throw new Error(`Scene ${sceneToken}: Timeout waiting for manual NV2 motion prompt.`);
-    }
-  }
-
-  return {
-    ok: true,
-    imagePath: keyframePath,
-    motionPrompt,
-    sceneId: sceneToken,
-  };
-}
-
 module.exports = {
-  captureManualSceneAssets,
   clearAllChatGptPipelineLocks,
   initChatGptPipeline,
   generateImageAndMotionWithChatGPT,
