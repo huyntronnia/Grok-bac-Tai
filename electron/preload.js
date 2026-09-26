@@ -56,6 +56,7 @@ contextBridge.exposeInMainWorld('videoPlannerAPI', {
     return () => ipcRenderer.removeListener('manual-workflow:observation', listener);
   },
   submitManualVeoUp: (payload) => ipcRenderer.invoke('manual-workflow:submit-veoup', payload),
+  cancelManualVeoUp: (payload) => ipcRenderer.invoke('manual-workflow:cancel-veoup', payload),
   copyManualText: (text) => ipcRenderer.invoke('manual-workflow:copy-text', text),
   openManualFolder: (folderPath) => ipcRenderer.invoke('manual-workflow:open-folder', folderPath),
   openManualChrome: () => ipcRenderer.invoke('manual-workflow:open-chrome'),

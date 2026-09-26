@@ -35,7 +35,7 @@ assert(
   "Manual NV1 extraction must prefer the large generated image over thumbnail variants.",
 );
 assert(
-  controllerSource.includes("extractOwnedImage({ assistantTurnId: assistant.id, attempt })"),
+  controllerSource.includes("extractOwnedImage({ assistantTurnId: assistant.id, attempt, signal })"),
   "The manual controller must persist the detected image through the owner-scoped extractor.",
 );
 assert(

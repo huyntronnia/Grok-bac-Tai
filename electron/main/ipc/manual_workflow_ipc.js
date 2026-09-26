@@ -19,6 +19,7 @@ const MANUAL_WORKFLOW_CHANNELS = Object.freeze({
   getObservation: "manual-workflow:get-observation",
   selectScene: "manual-workflow:select-scene",
   submitVeoUp: "manual-workflow:submit-veoup",
+  cancelVeoUp: "manual-workflow:cancel-veoup",
   copyText: "manual-workflow:copy-text",
   openFolder: "manual-workflow:open-folder",
   openChrome: "manual-workflow:open-chrome",
@@ -59,6 +60,7 @@ function registerManualWorkflowIpc({
     ["getObservation", "getObservation"],
     ["selectScene", "selectScene"],
     ["submitVeoUp", "submitVeoUp"],
+    ["cancelVeoUp", "cancelVeoUp"],
   ]) {
     register(MANUAL_WORKFLOW_CHANNELS[name], (_event, payload = {}) => {
       if (name === "capture" && (payload.force || payload.skipBaselineCheck || payload.options?.force || payload.options?.skipBaselineCheck)) {

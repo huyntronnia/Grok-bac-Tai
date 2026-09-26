@@ -73,10 +73,8 @@ assert(
 );
 assert(rowProbe.includes("veoup-row-count-unverifiable"), "Unverifiable UIA counts must fail closed");
 assert(rowProbe.includes("veoup-batch-row-count-mismatch"), "Missing rows must return a distinct mismatch error");
-assert(
-  rowProbe.includes("dialog-selection-plus-surface-ready"),
-  "Virtualized VeoUp rows must have a strong selection-plus-surface verification path",
-);
+assert(rowProbe.includes("$imageRows -eq 0 -and $promptRows -eq 0"), "Partial visible imports must fail closed");
+assert(rowProbe.includes("verified = $false; method = 'virtualized-rows-exact-batch-fallback'"), "Virtualized fallback must report its limited verification");
 assert(
   veoup.includes("function Confirm-OpenFileDialogSelection") &&
     veoup.includes("function Wait-ForOpenFileDialogClosed"),

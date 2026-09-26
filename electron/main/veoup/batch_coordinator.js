@@ -177,6 +177,11 @@ function createVeoUpBatchCoordinator({
       const externalCancelled = typeof payload.isCancelled === "function"
         ? payload.isCancelled
         : () => false;
+      if (job.cancelled || externalCancelled()) {
+        const error = new Error("veoup-batch-cancelled-before-automation");
+        error.code = "PIPELINE_CANCELLED";
+        throw error;
+      }
       if (typeof payload.preSubmitAudit === "function") {
         const gate = await payload.preSubmitAudit();
         if (!gate?.ok) {
@@ -184,6 +189,11 @@ function createVeoUpBatchCoordinator({
           error.result = gate;
           throw error;
         }
+      }
+      if (job.cancelled || externalCancelled()) {
+        const error = new Error("veoup-batch-cancelled-before-automation");
+        error.code = "PIPELINE_CANCELLED";
+        throw error;
       }
       const result = await executeAutomation({
         ...payload,

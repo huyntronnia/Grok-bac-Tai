@@ -16,6 +16,7 @@
       "manual-cancel-btn": "Hủy lượt đang chờ",
       "manual-continue-btn": "Tiếp tục workflow",
       "manual-retry-veoup-btn": "Chạy lại VeoUp",
+      "manual-cancel-veoup-btn": "Hủy gửi batch VeoUp",
       "manual-open-scene-folder-btn": "Mở thư mục scene",
       "manual-redo-btn": "Làm lại stage",
       "copy-path": "Copy đường dẫn file",
@@ -80,6 +81,7 @@
       if (action === "manual-redo-btn") return "Đã chuẩn bị lại stage. Bấm Theo dõi rồi gửi prompt mới trên ChatGPT.";
       if (action === "manual-refresh-observation-btn") return "Đã cập nhật dữ liệu Vidora đọc được từ ChatGPT.";
       if (action === "manual-cancel-btn") return "Đã hủy lượt theo dõi. Bấm Kết nối workflow khi muốn chuẩn bị lượt mới.";
+      if (action === "manual-cancel-veoup-btn") return "Đã yêu cầu dừng thao tác gửi batch VeoUp.";
       if (action === "manual-continue-btn") return "Đã tiếp tục workflow.";
       if (action === "manual-open-scene-folder-btn") return "Đã mở thư mục của scene.";
       if (action === "copy-path") return "Đã copy đường dẫn file.";
@@ -222,7 +224,9 @@
       text("manual-error", view.lastError);
       text("manual-stage-badge", `${view.state} · conversation: ${view.conversationId || "chat mới"}${view.activeAttempt ? ` · attempt ${view.activeAttempt.attemptId}` : ""}`);
       text("manual-project-progress", `${view.audit.readyCount} / ${view.audit.expectedCount} scenes hoàn tất`);
-      text("manual-veoup-gate-status", view.audit.complete ? "READY" : "LOCKED");
+      text("manual-veoup-gate-status", view.state === "VEOUP_RUNNING"
+        ? view.veoUpCancelling ? "ĐANG HỦY BATCH" : "ĐANG GỬI BATCH"
+        : view.state === "VEOUP_COMPLETE" ? "ĐÃ GỬI BATCH" : view.audit.complete ? "READY" : "LOCKED");
       const select = node("manual-scene-select");
       if (select) {
         select.replaceChildren();
@@ -242,7 +246,13 @@
       if (node("manual-prompt-preview")) node("manual-prompt-preview").value = promptText;
       text(
         "manual-instructions",
-        bundleReady
+        view.state === "VEOUP_RUNNING"
+          ? view.veoUpCancelling
+            ? "Vidora đang dừng thao tác gửi batch VeoUp. Nếu đã bấm Generate, lệnh hủy không thu hồi lượt đã gửi."
+            : `Vidora đang kiểm tra và gửi batch ${view.audit.expectedCount} scene sang VeoUp. Bạn có thể hủy thao tác gửi nếu cần.`
+          : view.state === "VEOUP_COMPLETE"
+            ? `Đã gửi batch ${view.audit.expectedCount} scene sang VeoUp.`
+            : bundleReady
           ? view.rearmRequired
             ? `${bundle.instructions}\nLượt trước đã hủy. Chờ GPT hoàn tất lượt cũ, bấm Theo dõi rồi gửi một prompt mới.`
             : bundle.instructions
@@ -295,6 +305,11 @@
       if (retryVeoUp) {
         retryVeoUp.hidden = !view.canRetryVeoUp;
         retryVeoUp.disabled = !view.canRetryVeoUp || Boolean(view.activeAttempt || view.overrideHold);
+      }
+      const cancelVeoUp = node("manual-cancel-veoup-btn");
+      if (cancelVeoUp) {
+        cancelVeoUp.hidden = !view.canCancelVeoUp;
+        cancelVeoUp.disabled = !view.canCancelVeoUp || view.veoUpCancelling;
       }
       if (observation) renderObservation(observation);
     }
@@ -381,6 +396,7 @@
     bind("manual-cancel-btn", () => command("cancelManualStage"));
     bind("manual-continue-btn", () => command("continueManualWorkflow"));
     bind("manual-retry-veoup-btn", () => command("submitManualVeoUp"));
+    bind("manual-cancel-veoup-btn", () => command("cancelManualVeoUp"));
     bind("manual-open-scene-folder-btn", () => {
       const scene = view?.audit.scenes.find((item) => item.sceneId === Number(node("manual-scene-select")?.value));
       if (scene) return api.openManualFolder(scene.sceneDir);

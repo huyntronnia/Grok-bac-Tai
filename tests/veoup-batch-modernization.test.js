@@ -24,7 +24,8 @@ assert(!/\bfileSelectionText\s*:/.test(veoup), "batch adapter must not rebuild a
 assert(veoup.includes("SendWait('+{TAB}')") && veoup.includes("SendWait('^a')"), "native dialog must select all files from its file list");
 assert(veoup.includes("Confirm-OpenFileDialogSelection"), "native dialog selection must be confirmed through the Open button helper");
 assert(!veoup.includes("Get-OpenFileDialogSelectionProof ([int]$payload.imageCount)"), "virtualized selection count must not abort before Open");
-assert(veoup.includes("dialog-selection-plus-surface-ready"), "virtualized VeoUp UI must have a non-row-count verification path");
+assert(veoup.includes("virtualized-rows-exact-batch-fallback"), "virtualized VeoUp rows must retain the exact-folder batch path");
+assert(veoup.includes("$imageRows -eq 0 -and $promptRows -eq 0"), "fallback must apply only when both grids are invisible to UIA");
 assert(!veoup.includes("async function scanProjectAndRunVeoUp(payload = {})"), "dead legacy scan implementation must be removed");
 assert(!veoup.includes("buildVeoUpPromptsReadyFile"), "dead prompt aggregation implementation must be removed");
 assert(!main.includes("persistImageMotionOnlySharedOutputs"), "dead non-atomic shared-output implementation must be removed");

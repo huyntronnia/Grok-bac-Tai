@@ -1471,7 +1471,8 @@ function Wait-For-ExpectedBatchRows($Payload, $SelectionProof) {
   $lastImageRows = -1
   $lastPromptRows = -1
   $probeSucceeded = $false
-  $strongProofStableCount = 0
+  $virtualizedStableCount = 0
+  $virtualizedFallbackAfter = (Get-Date).AddSeconds(10)
   do {
     $targetWin = Find-RealVeoUpWindow
     if ($null -eq $targetWin) {
@@ -1481,10 +1482,6 @@ function Wait-For-ExpectedBatchRows($Payload, $SelectionProof) {
     $window = [System.Windows.Automation.AutomationElement]::FromHandle($targetWin.Handle)
     $promptRows = Count-LeftPromptRows $window
     $imageRows = Count-LeftImageRows $window
-    $submissionState = Get-VeoUpSubmissionState $window
-    $activeWindow = Get-ActiveWindowInfo
-    $veoUpSurfaceReady = ($submissionState.generateVisible -and $submissionState.generateEnabled) -or
-      ($activeWindow.Hwnd -eq $targetWin.Handle -and $activeWindow.Title -match '^VeoUp')
     if ($promptRows -ge 0 -and $imageRows -ge 0 -and ($promptRows -gt 0 -or $imageRows -gt 0)) { $probeSucceeded = $true }
     $detectedRows = [Math]::Max(0, [Math]::Min([int]$promptRows, [int]$imageRows))
     Write-Host "[VeoUp Batch] Row validation: images $imageRows/$expectedRows; prompts $promptRows/$expectedRows."
@@ -1496,17 +1493,24 @@ function Wait-For-ExpectedBatchRows($Payload, $SelectionProof) {
     } else {
       $stableCount = 0
     }
-    $strongProofReady = [bool]$SelectionProof.verified -and
-      [int]$Payload.batchFolderFileCount -eq $expectedRows -and
-      [int]$Payload.promptLineCount -eq $expectedRows -and
-      $veoUpSurfaceReady
-    if ($strongProofReady) {
-      $strongProofStableCount += 1
-      if ($strongProofStableCount -ge 2) {
-        return [pscustomobject]@{ ok = $true; expectedRows = $expectedRows; detectedRows = [Math]::Max(0, $detectedRows); imageRows = [Math]::Max(0, $imageRows); promptRows = [Math]::Max(0, $promptRows); verified = $true; method = 'dialog-selection-plus-surface-ready'; timeoutMs = $timeoutMs; selectionCount = [int]$SelectionProof.selectedCount; selectionVerified = $true; selectionMethod = [string]$SelectionProof.method }
+    # VeoUp can virtualize both grids. Preserve the exact-folder batch path only
+    # when neither grid exposes any row; a measured partial import must fail.
+    if ($imageRows -eq 0 -and $promptRows -eq 0 -and
+        [bool]$SelectionProof.verified -and
+        [int]$Payload.batchFolderFileCount -eq $expectedRows -and
+        [int]$Payload.promptLineCount -eq $expectedRows -and
+        (Get-Date) -ge $virtualizedFallbackAfter) {
+      $submissionState = Get-VeoUpSubmissionState $window
+      $activeWindow = Get-ActiveWindowInfo
+      $veoUpSurfaceReady = ($submissionState.generateVisible -and $submissionState.generateEnabled) -or
+        ($activeWindow.Hwnd -eq $targetWin.Handle -and $activeWindow.Title -match '^VeoUp')
+      if ($veoUpSurfaceReady) { $virtualizedStableCount += 1 } else { $virtualizedStableCount = 0 }
+      if ($virtualizedStableCount -ge 3) {
+        Write-Host '[VeoUp Batch] Both grids are invisible to UIA; using exact-folder, prompt-count, and stable-surface fallback.'
+        return [pscustomobject]@{ ok = $true; expectedRows = $expectedRows; detectedRows = 0; imageRows = 0; promptRows = 0; verified = $false; method = 'virtualized-rows-exact-batch-fallback'; timeoutMs = $timeoutMs; selectionCount = [int]$SelectionProof.selectedCount; selectionVerified = [bool]$SelectionProof.verified; selectionMethod = [string]$SelectionProof.method }
       }
     } else {
-      $strongProofStableCount = 0
+      $virtualizedStableCount = 0
     }
     $lastDetected = $detectedRows
     $lastImageRows = $imageRows

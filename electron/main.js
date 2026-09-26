@@ -5430,6 +5430,7 @@ function rememberManualProject(projectFolder, payload) {
 const { buildManualStageBundle, ensureManualProjectRequestFiles } = require("./main/chatgpt/manual_stage_bundle");
 const { createManualPageObserver } = require("./main/chatgpt/manual_page_observer");
 const manualPageObserver = createManualPageObserver({ endpoint: MANUAL_CHROME_CDP_HOST });
+const { withManualDeadline } = require("./main/chatgpt/manual_operation_deadline");
 function notifyManualWorkflow(type, payload) {
   const safePayload = sanitizeIpcValue(payload);
   BrowserWindow.getAllWindows().forEach((win) => {
@@ -5459,14 +5460,17 @@ const canonicalManualWorkflowController = manualChatGptController.createManualCh
       collectRecentKeyframes: (projectPath, sceneId, limit) => collectRecentProjectKeyframes(projectPath, limit, sceneId),
     });
   },
-  readConversationSnapshot: async () => readManualConversationSnapshot(await manualPageObserver.getPage()),
-  extractOwnedImage: async ({ assistantTurnId, attempt }) => {
-    const page = await manualPageObserver.getPage();
-    const snapshot = await readManualConversationSnapshot(page);
+  readConversationSnapshot: async ({ signal } = {}) => withManualDeadline(async () =>
+    readManualConversationSnapshot(await manualPageObserver.getPage(), { signal }),
+    { timeoutMs: 35000, signal, label: "manual-page-observation" }),
+  extractOwnedImage: async ({ assistantTurnId, attempt, signal }) => {
+    const page = await withManualDeadline(() => manualPageObserver.getPage(), { timeoutMs: 12000, signal, label: "manual-page-selection" });
+    const snapshot = await readManualConversationSnapshot(page, { signal });
     if (attempt.conversationId !== snapshot.conversationId) throw new Error("manual-conversation-changed-during-extraction");
-    return extractOwnedAssistantImage(page, assistantTurnId);
+    return extractOwnedAssistantImage(page, assistantTurnId, { signal });
   },
   submitVeoUp: (payload) => getVeoUpBatchCoordinator().requestBatch(payload),
+  cancelVeoUpBatch: (projectPath) => getVeoUpBatchCoordinator().cancelBatch({ projectDir: projectPath }),
   getVeoUpBatchStatus: (projectPath) => getVeoUpBatchCoordinator().getBatchStatus(projectPath),
 });
 

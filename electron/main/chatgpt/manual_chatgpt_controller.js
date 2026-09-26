@@ -6,8 +6,9 @@ const fs = require("fs/promises");
 const path = require("path");
 const { enqueueProjectWrite, writeJsonFileAtomic, writeTextFileAtomic } = require("../project");
 const { validateKeyframeFile, validateMotionPromptTextContent } = require("../pipeline/asset_validation");
-const { auditManualProject, normalizeExpectedSceneIds } = require("./manual_project_audit");
+const { createManualProjectAuditor, normalizeExpectedSceneIds } = require("./manual_project_audit");
 const { buildManualStageBundle, validateReadyResponse, verifyBundleFiles } = require("./manual_stage_bundle");
+const { withManualDeadline } = require("./manual_operation_deadline");
 const VALID_MANUAL_STAGES = ["NV1", "NV2"];
 function normalizeSceneToken(id) {
   const value = Number(String(id).replace(/^scene_/, ""));
@@ -303,13 +304,30 @@ async function writeBufferAtomic(targetPath, buffer) {
 }
 
 function createManualChatGptController(runtime = {}) {
-  const readConversationSnapshot = runtime.readConversationSnapshot || (async () => ({
+  const rawReadConversationSnapshot = runtime.readConversationSnapshot || (async () => ({
     conversationId: "",
     messages: [],
     generating: false,
   }));
+  let snapshotRetryAfter = 0;
+  const readConversationSnapshot = async (options = {}) => {
+    if (Date.now() < snapshotRetryAfter) {
+      const error = new Error("manual-conversation-temporarily-unavailable-after-timeout");
+      error.code = "MANUAL_OPERATION_TIMEOUT";
+      throw error;
+    }
+    try {
+      return await withManualDeadline(
+        () => rawReadConversationSnapshot(options),
+        { timeoutMs: 35000, signal: options.signal, label: "manual-conversation-snapshot" },
+      );
+    } catch (error) {
+      if (error?.code === "MANUAL_OPERATION_TIMEOUT") snapshotRetryAfter = Date.now() + 30000;
+      throw error;
+    }
+  };
   const buildStageBundle = runtime.buildStageBundle || buildManualStageBundle;
-  const auditProject = runtime.auditProject || auditManualProject;
+  const auditProject = runtime.auditProject || createManualProjectAuditor();
   const submitBatch = runtime.submitVeoUp || (async () => ({ ok: false, error: "veoup-coordinator-unavailable" }));
   let watchedProject = "";
   let watcher = null;
@@ -318,6 +336,13 @@ function createManualChatGptController(runtime = {}) {
   const overrideCandidates = new Map();
   const stableCandidates = new Map();
   const attachmentWarnings = new Set();
+  const activeVeoUpJobs = new Map();
+  const activeCaptureAborters = new Map();
+
+  function emitChanged(payload) {
+    try { runtime.onChanged?.(payload); }
+    catch (error) { try { runtime.onObservationError?.(error); } catch (_) {} }
+  }
 
   function observeAutoCandidate(attempt, assistant) {
     const now = typeof runtime.now === "function" ? Number(runtime.now()) : Date.now();
@@ -340,6 +365,7 @@ function createManualChatGptController(runtime = {}) {
 
   function invalidate(projectPath) {
     const key = path.resolve(projectPath);
+    for (const aborter of activeCaptureAborters.get(key) || []) aborter.abort();
     epochs.set(key, (epochs.get(key) || 0) + 1);
     stableCandidates.clear();
     attachmentWarnings.clear();
@@ -469,9 +495,10 @@ function createManualChatGptController(runtime = {}) {
     return checkpoint;
   }
 
-  async function currentAudit(projectPath, checkpoint) {
+  async function currentAudit(projectPath, checkpoint, options = {}) {
     return auditProject(projectPath, checkpoint.expectedSceneIds, {
       sourceMap: checkpoint.sourceMap || {},
+      forceFull: options.forceFull === true,
     });
   }
 
@@ -501,6 +528,8 @@ function createManualChatGptController(runtime = {}) {
         !activeAttempt &&
         !checkpoint.overrideHold,
       ),
+      canCancelVeoUp: checkpoint.state === "VEOUP_RUNNING",
+      veoUpCancelling: Boolean(activeVeoUpJobs.get(path.resolve(projectPath))?.cancelled),
       allowedCommands: activeAttempt
         ? ["capture", "cancel", "override-preview"]
         : checkpoint.overrideHold
@@ -510,10 +539,16 @@ function createManualChatGptController(runtime = {}) {
     };
   }
 
-  async function autoStartVeoUpWhenReady(projectPath, result, trigger) {
+  async function autoStartVeoUpWhenReady(projectPath, result, trigger, { detached = false } = {}) {
     const viewModel = result?.viewModel || result;
     if (!result?.ok || viewModel?.state !== "VEOUP_READY" || !viewModel.audit?.complete) {
       return result;
+    }
+    if (detached) {
+      void submitVeoUp({ projectPath, trigger }).catch((error) => {
+        try { runtime.onObservationError?.(error); } catch (_) {}
+      });
+      return { ...result, autoVeoUp: { ok: true, status: "starting" } };
     }
     const autoVeoUp = await submitVeoUp({ projectPath, trigger });
     return {
@@ -648,7 +683,7 @@ function createManualChatGptController(runtime = {}) {
       const audit = await currentAudit(projectPath, checkpoint);
       if (checkpoint.state === "VEOUP_RUNNING") {
         const batchStatus = await runtime.getVeoUpBatchStatus?.(projectPath);
-        if (!batchStatus?.active) {
+        if (!batchStatus?.active && !activeVeoUpJobs.has(path.resolve(projectPath))) {
           checkpoint.state = "BLOCKED";
           checkpoint.lastError = "manual-veoup-interrupted-check-batch-before-retry";
           checkpoint.revision += 1;
@@ -851,7 +886,7 @@ function createManualChatGptController(runtime = {}) {
     });
   }
 
-  async function persistOwnedArtifact(projectPath, attempt, assistant, stillCurrent = () => true, beforeWrite = async () => {}) {
+  async function persistOwnedArtifact(projectPath, attempt, assistant, stillCurrent = () => true, beforeWrite = async () => {}, signal = null) {
     const token = normalizeSceneToken(attempt.sceneId);
     const sceneDir = resolveSceneDir(projectPath, token);
     await fs.mkdir(sceneDir, { recursive: true });
@@ -863,7 +898,10 @@ function createManualChatGptController(runtime = {}) {
         else if (candidate?.base64) buffer = Buffer.from(candidate.base64, "base64");
       }
       if (!buffer && typeof runtime.extractOwnedImage === "function") {
-        const extracted = await runtime.extractOwnedImage({ assistantTurnId: assistant.id, attempt });
+        const extracted = await withManualDeadline(
+          () => runtime.extractOwnedImage({ assistantTurnId: assistant.id, attempt, signal }),
+          { timeoutMs: 75000, signal, label: "manual-owned-image" },
+        );
         if (Buffer.isBuffer(extracted)) buffer = extracted;
         else if (extracted?.base64) buffer = Buffer.from(extracted.base64, "base64");
       }
@@ -881,6 +919,10 @@ function createManualChatGptController(runtime = {}) {
         return { ok: false, code: "ATTEMPT_CANCELLED" };
       }
       await beforeWrite(artifactPath, buffer);
+      if (!stillCurrent() || signal?.aborted) {
+        await fs.rm(tempPath, { force: true });
+        return { ok: false, code: "ATTEMPT_CANCELLED" };
+      }
       await fs.rename(tempPath, artifactPath);
       return {
         ok: true,
@@ -897,6 +939,7 @@ function createManualChatGptController(runtime = {}) {
     const artifactPath = path.join(sceneDir, "motion_prompt.txt");
     if (!stillCurrent()) return { ok: false, code: "ATTEMPT_CANCELLED" };
     await beforeWrite(artifactPath, Buffer.from(validation.text));
+    if (!stillCurrent() || signal?.aborted) return { ok: false, code: "ATTEMPT_CANCELLED" };
     await writeTextFileAtomic(artifactPath, validation.text);
     const savedText = await fs.readFile(artifactPath, "utf8");
     if (savedText !== validation.text || !validateMotionPromptTextContent(savedText).ok) {
@@ -906,8 +949,12 @@ function createManualChatGptController(runtime = {}) {
   }
 
   async function capture({ projectPath, attemptId, sceneId, stage, adoptPrepared = false, autoCapture = false } = {}) {
-    const epoch = epochs.get(path.resolve(projectPath)) || 0;
-    const stillCurrent = () => epoch === (epochs.get(path.resolve(projectPath)) || 0);
+    const resolvedProject = path.resolve(projectPath);
+    const epoch = epochs.get(resolvedProject) || 0;
+    const stillCurrent = () => epoch === (epochs.get(resolvedProject) || 0);
+    const captureAbort = new AbortController();
+    if (!activeCaptureAborters.has(resolvedProject)) activeCaptureAborters.set(resolvedProject, new Set());
+    activeCaptureAborters.get(resolvedProject).add(captureAbort);
     const result = await withManualWorkflowLock(projectPath, async () => {
       const checkpoint = await loadRequired(projectPath);
       let attempt = checkpoint.attempts.find((item) => item.attemptId === checkpoint.activeAttemptId);
@@ -921,7 +968,7 @@ function createManualChatGptController(runtime = {}) {
         if (checkpoint.rearmRequired) {
           return { ok: false, code: "REARM_REQUIRED", error: "manual-new-turn-required-after-cancel" };
         }
-        browser = await readConversationSnapshot();
+        browser = await readConversationSnapshot({ signal: captureAbort.signal });
         if (browser?.generating) {
           return { ok: false, code: "STILL_GENERATING", error: "manual-assistant-still-generating" };
         }
@@ -969,7 +1016,7 @@ function createManualChatGptController(runtime = {}) {
       if (!adoptedPreparedResponse && (attempt.attemptId !== attemptId || attempt.sceneId !== Number(sceneId) || attempt.stage !== String(stage || "").toUpperCase())) {
         return { ok: false, code: "ATTEMPT_MISMATCH", error: "manual-attempt-scene-stage-mismatch" };
       }
-      browser ||= await readConversationSnapshot();
+      browser ||= await readConversationSnapshot({ signal: captureAbort.signal });
       if (browser?.generating) {
         stableCandidates.delete(attempt.attemptId);
         return { ok: false, code: "STILL_GENERATING", error: "manual-assistant-still-generating" };
@@ -1098,12 +1145,16 @@ function createManualChatGptController(runtime = {}) {
         persisted = await persistOwnedArtifact(projectPath, attempt, assistant, stillCurrent, async (artifactPath, bytes) => {
           attempt.pendingArtifact = { path: artifactPath, hash: crypto.createHash("sha256").update(bytes).digest("hex"), assistantId: assistant.id };
           await writeManualWorkflowCheckpoint(projectPath, checkpoint);
-        });
+        }, captureAbort.signal);
       } catch (error) {
-        return { ok: false, code: "ARTIFACT_SAVE_FAILED", error: error?.message || String(error) };
+        const code = error?.code === "MANUAL_OPERATION_CANCELLED" ? "ATTEMPT_CANCELLED"
+          : error?.code === "MANUAL_OPERATION_TIMEOUT" || /image-fetch-timeout/.test(String(error?.message || "")) ? "IMAGE_FETCH_TIMEOUT"
+            : error?.code === "UNPROVEN" ? "UNPROVEN" : "ARTIFACT_SAVE_FAILED";
+        return { ok: false, code, error: error?.message || String(error) };
       }
       if (!persisted.ok) return persisted;
       if (!stillCurrent()) return reject(projectPath, "ATTEMPT_CANCELLED");
+      auditProject.invalidate?.(persisted.artifactPath);
       attempt.status = "CAPTURED";
       stableCandidates.delete(attempt.attemptId);
       attachmentWarnings.delete(attempt.attemptId);
@@ -1162,10 +1213,21 @@ function createManualChatGptController(runtime = {}) {
         observation: summarizeManualObservation(browser, checkpoint),
         viewModel: await makeViewModel(projectPath, checkpoint),
       };
+    }).catch((error) => {
+      if (error?.code === "MANUAL_OPERATION_CANCELLED") return { ok: false, code: "ATTEMPT_CANCELLED", error: "manual-attempt-cancelled" };
+      if (error?.code === "MANUAL_OPERATION_TIMEOUT") return { ok: false, code: "OBSERVATION_TIMEOUT", error: error.message };
+      throw error;
+    }).finally(() => {
+      const aborters = activeCaptureAborters.get(resolvedProject);
+      aborters?.delete(captureAbort);
+      if (aborters && !aborters.size) activeCaptureAborters.delete(resolvedProject);
     });
+    if (result?.ok && result.attempt?.artifactPath) {
+      emitChanged({ projectPath: path.resolve(projectPath), viewModel: result.viewModel, capture: { attempt: result.attempt } });
+    }
     return autoPrepareReadyStage(
       projectPath,
-      await autoStartVeoUpWhenReady(projectPath, result, "manual-auto-complete"),
+      await autoStartVeoUpWhenReady(projectPath, result, "manual-auto-complete", { detached: autoCapture }),
     );
   }
 
@@ -1329,11 +1391,12 @@ function createManualChatGptController(runtime = {}) {
   }
 
   async function submitVeoUp({ projectPath, trigger = "manual-retry" } = {}) {
-    return withManualWorkflowLock(projectPath, async () => {
+    const resolved = path.resolve(projectPath);
+    const started = await withManualWorkflowLock(projectPath, async () => {
       const checkpoint = await loadRequired(projectPath);
       if (checkpoint.state === "VEOUP_RUNNING") return reject(projectPath, "VEOUP_RUNNING");
       if (checkpoint.activeAttemptId || checkpoint.overrideHold) return reject(projectPath, "WORKFLOW_HELD");
-      const audit = await currentAudit(projectPath, checkpoint);
+      const audit = await currentAudit(projectPath, checkpoint, { forceFull: true });
       if (!audit.complete) {
         checkpoint.state = "BLOCKED";
         checkpoint.lastError = "manual-project-audit-incomplete";
@@ -1345,11 +1408,20 @@ function createManualChatGptController(runtime = {}) {
         });
         return { ok: false, code: "PROJECT_INCOMPLETE", error: checkpoint.lastError, audit };
       }
+      const job = { operationId: crypto.randomUUID(), cancelled: false };
       checkpoint.state = "VEOUP_RUNNING";
+      checkpoint.veoUpOperationId = job.operationId;
       checkpoint.revision += 1;
       await writeManualWorkflowCheckpoint(projectPath, checkpoint);
-      let result;
-      try {
+      const viewModel = await makeViewModel(projectPath, checkpoint);
+      activeVeoUpJobs.set(resolved, job);
+      return { ok: true, checkpoint, audit, job, viewModel };
+    });
+    if (!started.ok) return started;
+    const { checkpoint, audit, job } = started;
+    emitChanged({ projectPath: resolved, viewModel: started.viewModel });
+    let result;
+    try {
         const submissionScenes = [];
         for (const scene of audit.scenes) {
           const inside = (filePath) => {
@@ -1376,6 +1448,7 @@ function createManualChatGptController(runtime = {}) {
           allowPartial: false,
           scenes: submissionScenes,
           trigger,
+          isCancelled: () => job.cancelled,
           auditedSources: audit.scenes.map((scene) => ({
             sceneId: scene.sceneId,
             keyframePath: scene.keyframe.path,
@@ -1384,14 +1457,20 @@ function createManualChatGptController(runtime = {}) {
             motionPromptHash: scene.motionPrompt.hash,
           })),
           preSubmitAudit: async () => {
-            const fresh = await currentAudit(projectPath, checkpoint);
+            if (job.cancelled) return { ok: false, error: "manual-veoup-cancelled" };
+            const fresh = await currentAudit(projectPath, checkpoint, { forceFull: true });
             const unchanged = fresh.complete && fresh.scenes.every((scene, index) => scene.keyframe.hash === audit.scenes[index].keyframe.hash && scene.motionPrompt.hash === audit.scenes[index].motionPrompt.hash);
             return unchanged ? { ok: true, audit: fresh } : { ok: false, error: "manual-pre-submit-audit-failed", audit: fresh };
           },
         });
-      } catch (error) {
+    } catch (error) {
         result = { ok: false, status: "failed", error: error?.message || String(error) };
-      }
+    }
+    let completed;
+    try {
+      completed = await withManualWorkflowLock(projectPath, async () => {
+      const checkpoint = await loadRequired(projectPath);
+      if (checkpoint.veoUpOperationId !== job.operationId) return { ...result, stale: true, viewModel: await makeViewModel(projectPath, checkpoint) };
       checkpoint.state = result?.ok ? "VEOUP_COMPLETE" : "BLOCKED";
       checkpoint.lastError = result?.ok ? "" : result?.error || "veoup-submission-failed";
       checkpoint.veoUpBatchId = result?.batchId || checkpoint.veoUpBatchId || null;
@@ -1403,7 +1482,28 @@ function createManualChatGptController(runtime = {}) {
         error: result?.error || "",
       });
       return { ...result, audit, viewModel: await makeViewModel(projectPath, checkpoint) };
-    });
+      });
+    } finally {
+      if (activeVeoUpJobs.get(resolved) === job) activeVeoUpJobs.delete(resolved);
+    }
+    emitChanged({ projectPath: resolved, viewModel: completed.viewModel });
+    return completed;
+  }
+
+  async function cancelVeoUp({ projectPath } = {}) {
+    const resolved = path.resolve(projectPath);
+    const job = activeVeoUpJobs.get(resolved);
+    if (job) job.cancelled = true;
+    const current = await getViewModel({ projectPath });
+    if (current.state !== "VEOUP_RUNNING") return { ok: false, code: "VEOUP_NOT_RUNNING", viewModel: current };
+    let batch;
+    try { batch = await runtime.cancelVeoUpBatch?.(resolved); }
+    catch (error) { batch = { ok: false, error: error?.message || String(error) }; }
+    const viewModel = await getViewModel({ projectPath });
+    if (viewModel.state !== "VEOUP_RUNNING") return { ok: true, status: viewModel.state, batch, viewModel };
+    const cancellingView = { ...viewModel, veoUpCancelling: true };
+    emitChanged({ projectPath: resolved, viewModel: cancellingView });
+    return { ok: true, status: "cancelling", batch, viewModel: cancellingView };
   }
 
   async function getViewModel({ projectPath } = {}) {
@@ -1411,32 +1511,34 @@ function createManualChatGptController(runtime = {}) {
   }
 
   async function getObservation({ projectPath } = {}) {
+    let browser;
+    let observationError;
+    try { browser = await readConversationSnapshot(); }
+    catch (error) { observationError = error; }
     return withManualWorkflowLock(projectPath, async () => {
       const checkpoint = await loadRequired(projectPath);
-      try {
-        const browser = await readConversationSnapshot();
+      if (!observationError) {
         return {
           ok: true,
           observation: summarizeManualObservation(browser, checkpoint),
           viewModel: await makeViewModel(projectPath, checkpoint),
         };
-      } catch (error) {
-        return {
-          ok: true,
-          observation: {
-            available: false,
-            checkedAt: new Date().toISOString(),
-            error: error?.message || String(error),
-            messageCount: 0,
-            userMessageCount: 0,
-            assistantMessageCount: 0,
-            turns: [],
-            observedOutputs: [],
-            savedOutputs: [],
-          },
-          viewModel: await makeViewModel(projectPath, checkpoint),
-        };
       }
+      return {
+        ok: true,
+        observation: {
+          available: false,
+          checkedAt: new Date().toISOString(),
+          error: observationError?.message || String(observationError),
+          messageCount: 0,
+          userMessageCount: 0,
+          assistantMessageCount: 0,
+          turns: [],
+          observedOutputs: [],
+          savedOutputs: [],
+        },
+        viewModel: await makeViewModel(projectPath, checkpoint),
+      };
     });
   }
 
@@ -1462,6 +1564,7 @@ function createManualChatGptController(runtime = {}) {
     previewOverride,
     confirmOverride,
     submitVeoUp,
+    cancelVeoUp,
     getViewModel,
     getObservation,
     selectScene,

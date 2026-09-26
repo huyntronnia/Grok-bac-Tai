@@ -69,6 +69,20 @@ async function inspectKeyframe(filePath) {
   };
 }
 
+async function inspectCached(filePath, kind, inspect, cache, forceFull) {
+  if (!cache) return inspect(filePath);
+  const key = `${kind}:${path.resolve(filePath)}`;
+  const stat = await fs.stat(filePath).catch(() => null);
+  const fingerprint = stat?.isFile?.()
+    ? `${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`
+    : "missing";
+  const previous = cache.get(key);
+  if (!forceFull && previous?.fingerprint === fingerprint) return { ...previous.result };
+  const result = await inspect(filePath);
+  cache.set(key, { fingerprint, result });
+  return { ...result };
+}
+
 async function auditManualProject(projectPath, expectedSceneIds, options = {}) {
   const projectDir = path.resolve(String(projectPath || ""));
   if (!String(projectPath || "").trim()) throw new Error("manual-audit-project-path-required");
@@ -76,6 +90,8 @@ async function auditManualProject(projectPath, expectedSceneIds, options = {}) {
   const sourceMap = options.sourceMap && typeof options.sourceMap === "object"
     ? options.sourceMap
     : {};
+  const cache = options.cache instanceof Map ? options.cache : null;
+  const forceFull = options.forceFull === true;
   const scenes = [];
 
   for (const sceneId of ids) {
@@ -89,8 +105,8 @@ async function auditManualProject(projectPath, expectedSceneIds, options = {}) {
       mapped.motionPromptPath || path.join(sceneDir, "motion_prompt.txt"),
     ));
     const [keyframe, motionPrompt] = await Promise.all([
-      inspectKeyframe(keyframePath),
-      inspectMotionPrompt(motionPromptPath),
+      inspectCached(keyframePath, "keyframe", inspectKeyframe, cache, forceFull),
+      inspectCached(motionPromptPath, "motion", inspectMotionPrompt, cache, forceFull),
     ]);
     if (mapped.invalidatedKeyframe) {
       keyframe.valid = false;
@@ -130,7 +146,20 @@ async function auditManualProject(projectPath, expectedSceneIds, options = {}) {
   };
 }
 
+function createManualProjectAuditor() {
+  const cache = new Map();
+  const audit = (projectPath, expectedSceneIds, options = {}) =>
+    auditManualProject(projectPath, expectedSceneIds, { ...options, cache });
+  audit.invalidate = (filePath) => {
+    const target = path.resolve(filePath);
+    cache.delete(`keyframe:${target}`);
+    cache.delete(`motion:${target}`);
+  };
+  return audit;
+}
+
 module.exports = {
   normalizeExpectedSceneIds,
   auditManualProject,
+  createManualProjectAuditor,
 };

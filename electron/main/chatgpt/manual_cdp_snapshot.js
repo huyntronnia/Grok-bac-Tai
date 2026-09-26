@@ -1,10 +1,11 @@
 "use strict";
 
 const { evaluateOnCdpPage } = require("./chatgpt_core");
+const { withManualDeadline } = require("./manual_operation_deadline");
 
-async function readManualConversationSnapshot(page) {
+async function readManualConversationSnapshot(page, { signal, timeoutMs = 30000 } = {}) {
   if (!page) throw new Error("manual-observation-page-unavailable");
-  const snapshot = await evaluateOnCdpPage(page, `(async () => {
+  const snapshot = await withManualDeadline(() => evaluateOnCdpPage(page, `(async () => {
     const pathname = String(location.pathname || '');
     const conversationId = pathname.match(/\\/c\\/([^/?#]+)/)?.[1] || '';
     const pageTitle = String(document.title || '');
@@ -77,15 +78,15 @@ async function readManualConversationSnapshot(page) {
     }
     const streaming = Boolean(document.querySelector('[data-is-streaming="true"], .result-streaming, [aria-busy="true"]'));
     return { conversationId, pathname, pageTitle, loggedOut, generating: stopVisible || streaming, messages };
-  })()`);
+  })()`), { timeoutMs, signal, label: "manual-snapshot" });
   return { ...snapshot, pageId: page.pageId || "" };
 }
 
-async function extractOwnedAssistantImage(page, assistantTurnId) {
+async function extractOwnedAssistantImage(page, assistantTurnId, { signal, timeoutMs = 70000 } = {}) {
   if (!page || !String(assistantTurnId || "").trim()) {
     throw new Error("manual-owned-assistant-id-required");
   }
-  const result = await evaluateOnCdpPage(page, `(async () => {
+  const result = await withManualDeadline(() => evaluateOnCdpPage(page, `(async () => {
     const wantedId = ${JSON.stringify(String(assistantTurnId))};
     let root = null;
     if (wantedId.startsWith('manual-imagegen:')) {
@@ -119,15 +120,24 @@ async function extractOwnedAssistantImage(page, assistantTurnId) {
     if (src.startsWith('data:image/')) {
       return { ok: true, base64: src.replace(/^data:image\\/[^;]+;base64,/, '') };
     }
-    const response = await fetch(src, { credentials: 'include', cache: 'no-store' });
-    if (!response.ok) return { ok: false, error: 'owned-assistant-image-fetch-' + response.status };
-    const bytes = new Uint8Array(await response.arrayBuffer());
+    const fetchController = new AbortController();
+    const fetchTimer = setTimeout(() => fetchController.abort(), 60000);
+    let bytes;
+    try {
+      const response = await fetch(src, { credentials: 'include', cache: 'no-store', signal: fetchController.signal });
+      if (!response.ok) return { ok: false, error: 'owned-assistant-image-fetch-' + response.status };
+      bytes = new Uint8Array(await response.arrayBuffer());
+    } catch (error) {
+      return { ok: false, error: error?.name === 'AbortError' ? 'owned-assistant-image-fetch-timeout' : 'owned-assistant-image-fetch-failed' };
+    } finally {
+      clearTimeout(fetchTimer);
+    }
     let binary = '';
     for (let offset = 0; offset < bytes.length; offset += 0x8000) {
       binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
     }
     return { ok: true, base64: btoa(binary) };
-  })()`);
+  })()`), { timeoutMs, signal, label: "manual-image-extraction" });
   if (!result?.ok || !result.base64) {
     const error = new Error(result?.error || "manual-owned-assistant-image-unavailable");
     error.code = "UNPROVEN";
