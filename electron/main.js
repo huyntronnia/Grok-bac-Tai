@@ -1,6 +1,10 @@
 const {
   execFileSync,
   spawn } = require("child_process");
+const {
+  findChromeExecutable: findInstalledChromeExecutable,
+  readProfileDebugEndpoint,
+} = require("./main/chatgpt/manual_chrome_connection");
 
 const {
   __vidoraCompactConsoleArg,
@@ -361,8 +365,7 @@ const CHROME_USER_DATA_DIR = path.join(
 );
 // Manual Workflow observes only this isolated Chrome instance. It never shares
 // the automatic-pipeline browser or attaches to a user-supplied debug port.
-const MANUAL_CHROME_DEBUG_PORT = 9224;
-const MANUAL_CHROME_CDP_HOST = `http://127.0.0.1:${MANUAL_CHROME_DEBUG_PORT}`;
+let manualChromeDebugEndpoint = "";
 const MANUAL_CHROME_USER_DATA_DIR = path.join(
   app.getPath("userData"),
   "manual-chrome-cdp-profile",
@@ -2425,22 +2428,16 @@ async function isChromeDebugReady() {
   }
 }
 
-async function isManualChromeDebugReady() {
-  try {
-    const response = await fetch(`${MANUAL_CHROME_CDP_HOST}/json/version`);
-    return response.ok;
-  } catch (_error) {
-    return false;
-  }
-}
-
 async function ensureManualChromeDebug() {
-  if (await isManualChromeDebugReady()) return true;
-
   await fs.mkdir(MANUAL_CHROME_USER_DATA_DIR, { recursive: true });
+  const existing = await readProfileDebugEndpoint(MANUAL_CHROME_USER_DATA_DIR);
+  if (existing) {
+    manualChromeDebugEndpoint = existing.endpoint;
+    return existing;
+  }
   const chromePath = findChromeExecutable();
   const args = [
-    `--remote-debugging-port=${MANUAL_CHROME_DEBUG_PORT}`,
+    "--remote-debugging-port=0",
     `--user-data-dir=${MANUAL_CHROME_USER_DATA_DIR}`,
     "--no-first-run",
     "--no-default-browser-check",
@@ -2452,23 +2449,30 @@ async function ensureManualChromeDebug() {
     stdio: "ignore",
     windowsHide: false,
   });
+  let launchError = null;
+  manualChromeProcess.on("error", (error) => { launchError = error; });
   manualChromeProcess.unref();
 
   const startedAt = Date.now();
-  while (Date.now() - startedAt < 15000) {
-    if (await isManualChromeDebugReady()) return true;
+  while (Date.now() - startedAt < 30000) {
+    if (launchError) throw launchError;
+    const session = await readProfileDebugEndpoint(MANUAL_CHROME_USER_DATA_DIR);
+    if (session) {
+      manualChromeDebugEndpoint = session.endpoint;
+      return session;
+    }
     await sleep(500);
   }
   throw new Error(
-    `Không mở được Chrome Manual ở port ${MANUAL_CHROME_DEBUG_PORT}. Hãy đóng Chrome Manual cũ rồi thử lại.`,
+    "Không kết nối được Chrome Manual. Hãy đóng các cửa sổ Chrome Manual cũ rồi bấm Mở Chrome Manual lại.",
   );
 }
 
 async function openManualChromeHandler() {
-  await ensureManualChromeDebug();
+  const session = await ensureManualChromeDebug();
   return {
     ok: true,
-    port: MANUAL_CHROME_DEBUG_PORT,
+    port: session.port,
     profilePath: MANUAL_CHROME_USER_DATA_DIR,
     message: "Chrome Manual đã mở. Hãy tự truy cập ChatGPT và chọn conversation trong cửa sổ này.",
   };
@@ -2486,36 +2490,7 @@ async function openCdpTab(url) {
 }
 
 function findChromeExecutable() {
-  const candidates = [
-    process.env.CHROME_PATH,
-    "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
-    "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
-    path.join(
-      process.env.LOCALAPPDATA || "",
-      "Google\\Chrome\\Application\\chrome.exe",
-    ),
-    "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
-    "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
-  ].filter(Boolean);
-
-  for (const candidate of candidates) {
-    try {
-      require("fs").accessSync(candidate);
-      return candidate;
-    } catch (_error) {
-      // try next candidate
-    }
-  }
-
-  try {
-    return execFileSync("where", ["chrome"], { encoding: "utf8" })
-      .split(/\r?\n/)
-      .find(Boolean);
-  } catch (_error) {
-    throw new Error(
-      "Không tìm thấy Chrome/Edge. Hãy cài Chrome hoặc set biến môi trường CHROME_PATH.",
-    );
-  }
+  return findInstalledChromeExecutable();
 }
 async function chooseFolder() {
   const result = await dialog.showOpenDialog({
@@ -5429,7 +5404,7 @@ function rememberManualProject(projectFolder, payload) {
 
 const { buildManualStageBundle, ensureManualProjectRequestFiles } = require("./main/chatgpt/manual_stage_bundle");
 const { createManualPageObserver } = require("./main/chatgpt/manual_page_observer");
-const manualPageObserver = createManualPageObserver({ endpoint: MANUAL_CHROME_CDP_HOST });
+const manualPageObserver = createManualPageObserver({ endpoint: () => manualChromeDebugEndpoint });
 const { withManualDeadline } = require("./main/chatgpt/manual_operation_deadline");
 function notifyManualWorkflow(type, payload) {
   const safePayload = sanitizeIpcValue(payload);

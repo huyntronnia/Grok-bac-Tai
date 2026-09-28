@@ -19,7 +19,7 @@ const uiSource = fs.readFileSync(
 );
 
 assert(
-  snapshotSource.includes(".agent-turn") && snapshotSource.includes("getElementsByClassName('group/imagegen-image')"),
+  snapshotSource.includes(".agent-turn") && snapshotSource.includes("getElementsByClassName?.('group/imagegen-image')"),
   "Manual NV1 detection must scan ChatGPT's generated-image agent turn.",
 );
 assert(

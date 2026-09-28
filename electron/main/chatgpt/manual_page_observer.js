@@ -6,12 +6,16 @@ const crypto = require("crypto");
 // input, login, recovery, upload, or new-tab methods.
 function createManualPageObserver({ endpoint, connect } = {}) {
   let browser = null;
+  let connectedEndpoint = "";
   const pageIds = new WeakMap();
   return {
     async getPage() {
-      if (!browser?.isConnected()) {
+      const currentEndpoint = typeof endpoint === "function" ? endpoint() : endpoint;
+      if (!currentEndpoint) throw new Error("Bấm Mở Chrome Manual trước khi theo dõi ChatGPT.");
+      if (!browser?.isConnected() || connectedEndpoint !== currentEndpoint) {
         const connectBrowser = connect || ((url) => require("playwright").chromium.connectOverCDP(url));
-        browser = await connectBrowser(endpoint);
+        browser = await connectBrowser(currentEndpoint);
+        connectedEndpoint = currentEndpoint;
       }
       const pages = browser.contexts().flatMap((context) => context.pages()).filter((page) => {
         try { return !page.isClosed() && ["chatgpt.com", "chat.openai.com"].includes(new URL(page.url()).hostname); }

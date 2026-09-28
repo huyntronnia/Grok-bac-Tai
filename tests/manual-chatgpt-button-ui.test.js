@@ -39,8 +39,9 @@ async function runTests() {
 
   const mainPath = path.resolve(__dirname, "../electron/main.js");
   const mainContent = fs.readFileSync(mainPath, "utf8");
-  assert(mainContent.includes("MANUAL_CHROME_DEBUG_PORT = 9224"), "Manual Workflow must use an isolated Chrome debug port");
-  assert(mainContent.includes("endpoint: MANUAL_CHROME_CDP_HOST"), "Manual observer must only attach to the dedicated Chrome instance");
+  assert(mainContent.includes('"--remote-debugging-port=0"'), "Manual Workflow must use a free Chrome debug port");
+  assert(mainContent.includes("readProfileDebugEndpoint(MANUAL_CHROME_USER_DATA_DIR)"), "Manual Workflow must verify its Chrome profile");
+  assert(mainContent.includes("endpoint: () => manualChromeDebugEndpoint"), "Manual observer must attach to the verified Chrome instance");
 
   console.log("Manual ChatGPT Button UI Tests passed!");
 }
