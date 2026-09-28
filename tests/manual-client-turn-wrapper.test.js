@@ -64,12 +64,12 @@ function createPage({ withAssistant = false, generating = false } = {}) {
   assert.equal(waiting.messages.length, 1);
   assert.equal(waiting.messages[0].role, "user");
   assert.equal(waiting.messages[0].text, "Tạo ảnh theo file sau: scene_001_nv1_request.txt");
-  assert.equal(waiting.messages[0].id, "manual-dom:user:conversation-turn-0");
+  assert.equal(waiting.messages[0].id, "manual-dom:customer-conversation:user:conversation-turn-0");
 
   const finishedPage = createPage({ withAssistant: true });
   const finished = await readManualConversationSnapshot(finishedPage);
   assert.deepEqual(Array.from(finished.messages, ({ role }) => role), ["user", "assistant"]);
-  assert.equal(finished.messages[1].id, "manual-dom:assistant:conversation-turn-1");
+  assert.equal(finished.messages[1].id, "manual-dom:customer-conversation:assistant:conversation-turn-1");
   assert.equal((await extractOwnedAssistantImage(finishedPage, finished.messages[1].id)).toString("hex"), "000102");
   console.log("Manual observation recognizes customer turn wrappers without author-role attributes");
 })().catch((error) => { console.error(error); process.exitCode = 1; });

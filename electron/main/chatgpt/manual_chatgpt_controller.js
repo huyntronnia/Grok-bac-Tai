@@ -112,6 +112,22 @@ function normalizedPromptIdentity(value = "") {
     .toLowerCase();
 }
 
+function attachmentNameMatches(expectedName, observedLabel) {
+  const expected = path.basename(String(expectedName || "")).toLowerCase();
+  const observed = path.basename(String(observedLabel || "")).toLowerCase();
+  if (!expected || !observed) return false;
+  if (expected === observed) return true;
+  const dot = expected.lastIndexOf(".");
+  if (dot < 1) return false;
+  const escape = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const stem = escape(expected.slice(0, dot));
+  const extension = escape(expected.slice(dot));
+  // ChatGPT/Chrome may display duplicate uploads with a numeric or timestamp
+  // suffix, e.g. scene_001_nv1_request(20260928-2010).txt.
+  return new RegExp(`(?:^|[^a-z0-9_])${stem}(?:\\([0-9 _.-]{1,64}\\))?${extension}(?:$|[^a-z0-9])`, "i")
+    .test(observed);
+}
+
 function matchOwnedUserTurn(message, bundle = {}) {
   const expectedText = normalizedPromptIdentity(bundle.clipboardText);
   const actualText = normalizedPromptIdentity(message.text);
@@ -131,13 +147,14 @@ function matchOwnedUserTurn(message, bundle = {}) {
     matches: textMatch,
     expectedAttachments,
     observedAttachments,
-    missingAttachments: expectedAttachments.filter((name) => !observedAttachments.includes(name)),
+    missingAttachments: expectedAttachments.filter((name) =>
+      !observedAttachments.some((observed) => attachmentNameMatches(name, observed))),
   };
 }
 
 function hasAllRequiredAttachments(ownership = {}) {
   return ownership.expectedAttachments?.length > 0 &&
-    ownership.expectedAttachments.every((name) => ownership.observedAttachments?.includes(name));
+    ownership.missingAttachments?.length === 0;
 }
 
 function assistantFingerprint(message = {}) {
@@ -1037,12 +1054,22 @@ function createManualChatGptController(runtime = {}) {
         const baselineIds = new Set(attempt.baselineTurnIds || []);
         const sameConversationEvidence = messages.some((message) => baselineIds.has(message.id));
         const samePage = Boolean(attempt.pageId && attempt.pageId === browser.pageId);
-        if (!samePage || !ownership?.matches ||
-          !(sameConversationEvidence || hasAllRequiredAttachments(ownership))) {
+        const latestUserIndex = messages.map((message) => message.role).lastIndexOf("user");
+        const hasStageOutputAfterUser = latestUserIndex >= 0 && messages.slice(latestUserIndex + 1)
+          .some((message) => isStageAssistant(message, attempt.stage));
+        const strongAttachmentProof = hasAllRequiredAttachments(ownership);
+        if (attempt.stage !== "NV1" || !ownership?.matches || !hasStageOutputAfterUser ||
+          !(strongAttachmentProof || (samePage && sameConversationEvidence))) {
           return { ok: false, code: "CONVERSATION_MISMATCH", error: "manual-return-to-armed-conversation" };
         }
         const previousConversationId = attempt.conversationId;
         attempt.conversationId = liveConversationId;
+        attempt.pageId = String(browser.pageId || "");
+        const newBaseline = messages.slice(0, latestUserIndex);
+        attempt.baselineTurnIds = newBaseline.map((message) => message.id).filter(Boolean);
+        attempt.baselineAssistantFingerprints = Object.fromEntries(newBaseline
+          .filter((message) => message.role === "assistant")
+          .map((message) => [message.id, assistantFingerprint(message)]));
         checkpoint.conversationId = liveConversationId;
         checkpoint.revision += 1;
         await writeManualWorkflowCheckpoint(projectPath, checkpoint);

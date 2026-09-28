@@ -11,6 +11,7 @@ const { validPng } = require("./helpers/manual-workflow-fixture");
 (async () => {
   const projectPath = await fs.mkdtemp(path.join(os.tmpdir(), "vidora-manual-conversation-transition-"));
   const scene = { id: 1, original: "Scene 1: a cat sits beside a window" };
+  const motion = "Scene 1 Camera panning slowly across wide cinematic horizon with golden hour sunlight shining through thick forest trees and soft dust particles floating in quiet warm air.";
   let browser = {
     conversationId: "old-conversation", pageId: "same-tab", generating: false,
     messages: [{ id: "prior-user", role: "user", text: "Earlier prompt" },
@@ -45,7 +46,24 @@ const { validPng } = require("./helpers/manual-workflow-fixture");
     assert.equal((await controller.getViewModel({ projectPath })).activeAttempt?.attemptId, armed.attempt.attemptId,
       "a transient root URL must not erase the prepared bundle or active attempt");
 
-    browser = { ...browser, conversationId: "new-conversation", pathname: "/c/new-conversation" };
+    browser = {
+      ...browser, conversationId: "new-conversation", pathname: "/c/new-conversation", pageId: "new-tab",
+      messages: [
+        { id: "new-user", role: "user", text: request.clipboardText,
+          attachmentNames: request.attachmentNames.map((name) => `Document ${name.replace(".txt", "(20260928-2010).txt")}`) },
+        { id: "new-image", role: "assistant", imageBuffer: validPng(), settled: true },
+      ],
+    };
+    const correctNv1Messages = browser.messages;
+    browser = { ...browser, messages: [
+      { ...correctNv1Messages[0], attachmentNames: ["Document scene_002_nv1_request(20260928-2010).txt"] },
+      correctNv1Messages[1],
+    ] };
+    const wrongSceneFile = await controller.capture({
+      projectPath, attemptId: armed.attempt.attemptId, sceneId: 1, stage: "NV1",
+    });
+    assert.equal(wrongSceneFile.code, "CONVERSATION_MISMATCH", "another scene's file must not authorize migration");
+    browser = { ...browser, messages: correctNv1Messages };
     const captured = await controller.capture({
       projectPath, attemptId: armed.attempt.attemptId, sceneId: 1, stage: "NV1",
     });
@@ -65,6 +83,27 @@ const { validPng } = require("./helpers/manual-workflow-fixture");
     const recovered = await controller.resume({ projectPath });
     assert.equal(recovered.viewModel.preparedBundle?.stage, "NV2",
       "a project blocked by the old mismatch logic should recover on reconnect");
+    const nv2Armed = await controller.arm({ projectPath });
+    assert.equal(nv2Armed.ok, true, JSON.stringify(nv2Armed));
+    const nv2Request = nv2Armed.attempt.bundle;
+    const nv2Messages = [
+      ...browser.messages,
+      { id: "nv2-user", role: "user", text: nv2Request.clipboardText,
+        attachmentNames: nv2Request.attachmentNames.map((name) =>
+          name.endsWith(".txt") ? `Document ${name.replace(".txt", "(2).txt")}` : name) },
+      { id: "nv2-assistant", role: "assistant", text: motion, settled: true },
+    ];
+    browser = { ...browser, conversationId: "wrong-conversation", messages: nv2Messages };
+    const wrongConversation = await controller.capture({
+      projectPath, attemptId: nv2Armed.attempt.attemptId, sceneId: 1, stage: "NV2",
+    });
+    assert.equal(wrongConversation.code, "CONVERSATION_MISMATCH", "NV2 must remain in its armed conversation");
+    browser = { ...browser, conversationId: "new-conversation", messages: nv2Messages };
+    const nv2Captured = await controller.capture({
+      projectPath, attemptId: nv2Armed.attempt.attemptId, sceneId: 1, stage: "NV2",
+    });
+    assert.equal(nv2Captured.ok, true, JSON.stringify(nv2Captured));
+    assert.equal(await fs.readFile(path.join(projectPath, "scene_001", "motion_prompt.txt"), "utf8"), motion);
     console.log("Manual conversation transition preserves auto-save and stage recovery");
   } finally {
     controller.dispose();

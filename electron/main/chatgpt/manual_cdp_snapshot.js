@@ -6,12 +6,15 @@ const { withManualDeadline } = require("./manual_operation_deadline");
 // Runs inside ChatGPT's page. The site uses different turn wrappers across
 // accounts, so message-author attributes cannot be the only source of turns.
 function findManualConversationTurns() {
+  const conversationKey = String(location.pathname || '').match(/\/c\/([^/?#]+)/)?.[1] || 'new';
   const roleOf = (node) => {
     const explicit = String(node.getAttribute?.('data-message-author-role') || node.getAttribute?.('data-role') || '').toLowerCase();
     if (explicit === 'user' || explicit === 'assistant') return explicit;
     const testId = String(node.getAttribute?.('data-testid') || '').toLowerCase();
     if (/user-message|conversation-turn-user/.test(testId)) return 'user';
     if (/assistant-message|conversation-turn-assistant/.test(testId)) return 'assistant';
+    if (node.matches?.('.whitespace-pre-wrap, [class*="whitespace-pre-wrap"]')) return 'user';
+    if (node.matches?.('.markdown, [class*="markdown"]')) return 'assistant';
     if (node.querySelector?.('[data-testid="user-message"], [data-message-author-role="user"]')) return 'user';
     if (node.querySelector?.('[data-testid="assistant-message"], [data-message-author-role="assistant"]')) return 'assistant';
     const userBody = node.querySelector?.('.whitespace-pre-wrap');
@@ -44,8 +47,8 @@ function findManualConversationTurns() {
       const media = [...(node.querySelectorAll?.('img, canvas') || [])]
         .find((image) => Number(image.naturalWidth || image.width || 0) >= 256);
       const signature = text || String(media?.currentSrc || media?.src || '');
-      if (turnKey.startsWith('conversation-turn-')) id = 'manual-dom:' + role + ':' + turnKey;
-      else if (signature) id = 'manual-dom:' + role + ':' + turnKey + ':' + hash(signature);
+      if (turnKey.startsWith('conversation-turn-')) id = 'manual-dom:' + conversationKey + ':' + role + ':' + turnKey;
+      else if (signature) id = 'manual-dom:' + conversationKey + ':' + role + ':' + turnKey + ':' + hash(signature);
     }
     return { node, role, id, text };
   };
@@ -54,7 +57,8 @@ function findManualConversationTurns() {
     .filter((node) => !node.parentElement?.closest?.('[data-testid^="conversation-turn-"]'));
   const turns = [];
   for (const node of [...wrappers, ...direct,
-    ...document.querySelectorAll('[data-testid="user-message"], [data-testid="assistant-message"]')]) {
+    ...document.querySelectorAll('[data-testid="user-message"], [data-testid="assistant-message"]'),
+    ...document.querySelectorAll('main .whitespace-pre-wrap, main [class*="whitespace-pre-wrap"], main .markdown, main [class*="markdown"]')]) {
     if (turns.some((turn) => turn.node === node || turn.node.contains?.(node))) continue;
     const turn = describe(node);
     if (turn) turns.push(turn);
@@ -84,7 +88,16 @@ async function readManualConversationSnapshot(page, { signal, timeoutMs = 30000 
     const messages = turns.map(({ node, role, id, text }) => {
       // ChatGPT may split a long user prompt into several rendered blocks.
       // Reading only the first .whitespace-pre-wrap loses the ownership text.
-      const attachmentNames = [...node.querySelectorAll('[data-testid*="attachment"], [aria-label], [title]')]
+      let attachmentRoot = node;
+      if (role === 'user' && node.matches?.('.whitespace-pre-wrap, [class*="whitespace-pre-wrap"]')) {
+        for (let parent = node.parentElement, depth = 0; parent && depth < 5; parent = parent.parentElement, depth += 1) {
+          if (parent.matches?.('main, [role="main"]') ||
+            parent.querySelector?.('[data-message-author-role="assistant"], [data-testid="assistant-message"], .markdown')) break;
+          attachmentRoot = parent;
+          if (parent.querySelector?.('[data-testid*="attachment"]')) break;
+        }
+      }
+      const attachmentNames = [...attachmentRoot.querySelectorAll('[data-testid*="attachment"], [aria-label], [title], [role="button"]')]
         .map((item) => String(item.getAttribute('aria-label') || item.getAttribute('title') || item.textContent || '').trim())
         .flatMap((label) => label.match(/[\\w(). -]+\\.(?:txt|png|jpe?g|webp|pdf|docx?)/ig) || [])
         .map((name) => name.trim());
@@ -129,7 +142,7 @@ async function readManualConversationSnapshot(page, { signal, timeoutMs = 30000 
       messages.push({
         // Keep the agent-turn index explicit: this is not a normal assistant
         // message id, and extraction must go back to the imagegen card.
-        id: 'manual-imagegen:' + index,
+        id: 'manual-imagegen:' + (conversationId || 'new') + ':' + index,
         role: 'assistant',
         text: '[ChatGPT generated keyframe image]',
         attachmentNames: [],
@@ -162,7 +175,11 @@ async function extractOwnedAssistantImage(page, assistantTurnId, { signal, timeo
     const wantedId = ${JSON.stringify(String(assistantTurnId))};
     let root = null;
     if (wantedId.startsWith('manual-imagegen:')) {
-      const index = Number(wantedId.slice('manual-imagegen:'.length));
+      const parts = wantedId.slice('manual-imagegen:'.length).split(':');
+      const index = Number(parts.at(-1));
+      const wantedConversation = parts.length > 1 ? parts.slice(0, -1).join(':') : '';
+      const currentConversation = String(location.pathname || '').match(/\\/c\\/([^/?#]+)/)?.[1] || 'new';
+      if (wantedConversation && wantedConversation !== currentConversation) return { ok: false, error: 'owned-assistant-conversation-changed' };
       const imageCardOf = (turn) => turn.getElementsByClassName?.('group/imagegen-image')[0] ||
         turn.querySelector?.('[class*="imagegen-image"], [data-testid*="imagegen"], [data-testid*="generated-image"]') ||
         (turn.matches?.('.agent-turn') && [...turn.querySelectorAll('img, canvas')].some((image) =>
