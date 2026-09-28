@@ -3,6 +3,68 @@
 const { evaluateOnCdpPage } = require("./chatgpt_core");
 const { withManualDeadline } = require("./manual_operation_deadline");
 
+// Runs inside ChatGPT's page. The site uses different turn wrappers across
+// accounts, so message-author attributes cannot be the only source of turns.
+function findManualConversationTurns() {
+  const roleOf = (node) => {
+    const explicit = String(node.getAttribute?.('data-message-author-role') || node.getAttribute?.('data-role') || '').toLowerCase();
+    if (explicit === 'user' || explicit === 'assistant') return explicit;
+    const testId = String(node.getAttribute?.('data-testid') || '').toLowerCase();
+    if (/user-message|conversation-turn-user/.test(testId)) return 'user';
+    if (/assistant-message|conversation-turn-assistant/.test(testId)) return 'assistant';
+    if (node.querySelector?.('[data-testid="user-message"], [data-message-author-role="user"]')) return 'user';
+    if (node.querySelector?.('[data-testid="assistant-message"], [data-message-author-role="assistant"]')) return 'assistant';
+    const userBody = node.querySelector?.('.whitespace-pre-wrap');
+    const assistantBody = node.querySelector?.('.markdown, [class*="markdown"]');
+    if (userBody && !assistantBody) return 'user';
+    if (assistantBody && !userBody) return 'assistant';
+    return '';
+  };
+  const hash = (value) => {
+    let number = 2166136261;
+    for (const character of String(value || '')) {
+      number ^= character.charCodeAt(0);
+      number = Math.imul(number, 16777619);
+    }
+    return (number >>> 0).toString(16);
+  };
+  const describe = (node) => {
+    const role = roleOf(node);
+    if (!role) return null;
+    const content = node.querySelector?.(role === 'user' ? '[data-testid="user-message"]' : '[data-testid="assistant-message"]') || node;
+    const explicitRole = node.getAttribute?.('data-message-author-role');
+    const textRoot = explicitRole ? node : content;
+    const text = String(textRoot.textContent || textRoot.innerText || '').trim();
+    const idNode = node.closest?.('[data-message-id], [data-turn-id]') ||
+      node.querySelector?.('[data-message-id], [data-turn-id]') || node;
+    let id = String(idNode.getAttribute?.('data-message-id') || idNode.getAttribute?.('data-turn-id') ||
+      node.getAttribute?.('data-message-id') || node.getAttribute?.('data-turn-id') || '').trim();
+    if (!id) {
+      const turnKey = String(node.getAttribute?.('data-testid') || node.closest?.('[data-testid^="conversation-turn-"]')?.getAttribute?.('data-testid') || '');
+      const media = [...(node.querySelectorAll?.('img, canvas') || [])]
+        .find((image) => Number(image.naturalWidth || image.width || 0) >= 256);
+      const signature = text || String(media?.currentSrc || media?.src || '');
+      if (turnKey.startsWith('conversation-turn-')) id = 'manual-dom:' + role + ':' + turnKey;
+      else if (signature) id = 'manual-dom:' + role + ':' + turnKey + ':' + hash(signature);
+    }
+    return { node, role, id, text };
+  };
+  const direct = [...document.querySelectorAll('[data-message-author-role="user"], [data-message-author-role="assistant"]')];
+  const wrappers = [...document.querySelectorAll('[data-testid^="conversation-turn-"], main article')]
+    .filter((node) => !node.parentElement?.closest?.('[data-testid^="conversation-turn-"]'));
+  const turns = [];
+  for (const node of [...wrappers, ...direct,
+    ...document.querySelectorAll('[data-testid="user-message"], [data-testid="assistant-message"]')]) {
+    if (turns.some((turn) => turn.node === node || turn.node.contains?.(node))) continue;
+    const turn = describe(node);
+    if (turn) turns.push(turn);
+  }
+  return turns.sort((left, right) => {
+    const position = left.node.compareDocumentPosition?.(right.node) || 0;
+    return position & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : position & Node.DOCUMENT_POSITION_PRECEDING ? 1 : 0;
+  });
+}
+
 async function readManualConversationSnapshot(page, { signal, timeoutMs = 30000 } = {}) {
   if (!page) throw new Error("manual-observation-page-unavailable");
   const snapshot = await withManualDeadline(() => evaluateOnCdpPage(page, `(async () => {
@@ -18,16 +80,10 @@ async function readManualConversationSnapshot(page, { signal, timeoutMs = 30000 
       return /stop|dừng|cancel generation/.test(value) &&
         (button.offsetParent !== null || (box?.width > 0 && box?.height > 0));
     });
-    const roots = [...document.querySelectorAll('[data-message-author-role="user"], [data-message-author-role="assistant"]')];
-    const messages = roots.map((node) => {
-      const container = node.closest('[data-message-id], [data-turn-id]') ||
-        node.querySelector('[data-message-id], [data-turn-id]') || node;
-      const id = String(container.getAttribute('data-message-id') || container.getAttribute('data-turn-id') ||
-        node.getAttribute('data-message-id') || node.getAttribute('data-turn-id') || '').trim();
-      const role = String(node.getAttribute('data-message-author-role') || '').trim();
+    const turns = (${findManualConversationTurns.toString()})();
+    const messages = turns.map(({ node, role, id, text }) => {
       // ChatGPT may split a long user prompt into several rendered blocks.
       // Reading only the first .whitespace-pre-wrap loses the ownership text.
-      const text = String(node.textContent || node.innerText || '').trim();
       const attachmentNames = [...node.querySelectorAll('[data-testid*="attachment"], [aria-label], [title]')]
         .map((item) => String(item.getAttribute('aria-label') || item.getAttribute('title') || item.textContent || '').trim())
         .flatMap((label) => label.match(/[\\w(). -]+\\.(?:txt|png|jpe?g|webp|pdf|docx?)/ig) || [])
@@ -48,7 +104,7 @@ async function readManualConversationSnapshot(page, { signal, timeoutMs = 30000 
       turn.querySelector?.('[class*="imagegen-image"], [data-testid*="imagegen"], [data-testid*="generated-image"]') ||
       (turn.matches?.('.agent-turn') && [...turn.querySelectorAll('img, canvas')].some((image) =>
         Number(image.naturalWidth || image.width || 0) >= 512 && Number(image.naturalHeight || image.height || 0) >= 512) ? turn : null);
-    const latestUserRoot = roots.filter((node) => node.getAttribute('data-message-author-role') === 'user').at(-1);
+    const latestUserRoot = turns.filter((turn) => turn.role === 'user').at(-1)?.node;
     const imageCards = [...new Set([...document.querySelectorAll('.agent-turn, [data-testid*="imagegen"], [data-testid*="generated-image"]')]
       .map(imageCardOf).filter(Boolean))];
     for (let index = 0; index < imageCards.length; index += 1) {
@@ -84,9 +140,16 @@ async function readManualConversationSnapshot(page, { signal, timeoutMs = 30000 
         settled: !stopVisible,
       });
     }
-    const latestAssistantRoot = roots.filter((node) => node.getAttribute('data-message-author-role') === 'assistant').at(-1);
+    const latestAssistantRoot = turns.filter((turn) => turn.role === 'assistant').at(-1)?.node;
     const streaming = Boolean(latestAssistantRoot?.querySelector?.('[data-is-streaming="true"], .result-streaming, [aria-busy="true"]'));
-    return { conversationId, pathname, pageTitle, loggedOut, generating: stopVisible || streaming, messages };
+    const domProbe = {
+      authorRoleNodes: document.querySelectorAll('[data-message-author-role]').length,
+      conversationTurnNodes: document.querySelectorAll('[data-testid^="conversation-turn-"]').length,
+      articleNodes: document.querySelectorAll('main article').length,
+      userMessageNodes: document.querySelectorAll('[data-testid="user-message"]').length,
+      assistantMessageNodes: document.querySelectorAll('[data-testid="assistant-message"]').length,
+    };
+    return { conversationId, pathname, pageTitle, loggedOut, generating: stopVisible || streaming, messages, domProbe };
   })()`), { timeoutMs, signal, label: "manual-snapshot" });
   return { ...snapshot, pageId: page.pageId || "" };
 }
@@ -107,13 +170,8 @@ async function extractOwnedAssistantImage(page, assistantTurnId, { signal, timeo
       root = [...new Set([...document.querySelectorAll('.agent-turn, [data-testid*="imagegen"], [data-testid*="generated-image"]')]
         .map(imageCardOf).filter(Boolean))][index] || null;
     } else {
-      const roots = [...document.querySelectorAll('[data-message-author-role="assistant"]')];
-      root = roots.find((node) => {
-        const container = node.closest('[data-message-id], [data-turn-id]') ||
-          node.querySelector('[data-message-id], [data-turn-id]') || node;
-        return String(container.getAttribute('data-message-id') || container.getAttribute('data-turn-id') ||
-          node.getAttribute('data-message-id') || node.getAttribute('data-turn-id') || '') === wantedId;
-      });
+      root = (${findManualConversationTurns.toString()})()
+        .find((turn) => turn.role === 'assistant' && turn.id === wantedId)?.node || null;
     }
     if (!root) return { ok: false, error: 'owned-assistant-turn-not-rendered' };
     const candidates = [...root.querySelectorAll('img, canvas')].map((image) => {

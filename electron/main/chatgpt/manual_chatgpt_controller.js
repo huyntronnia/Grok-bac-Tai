@@ -256,6 +256,7 @@ function summarizeManualObservation(snapshot = {}, checkpoint = null) {
     loggedOut: Boolean(snapshot.loggedOut),
     pageId: String(snapshot.pageId || ""),
     generating: Boolean(snapshot.generating),
+    domProbe: snapshot.domProbe && typeof snapshot.domProbe === "object" ? snapshot.domProbe : null,
     messageCount: messages.length,
     userMessageCount: countRoles(messages, "user"),
     assistantMessageCount: countRoles(messages, "assistant"),

@@ -204,7 +204,11 @@
         turn.attachmentNames?.length ? `File hiển thị: ${turn.attachmentNames.join(", ")}` : "",
         turn.text || "(không đọc được nội dung chữ)",
       ].filter(Boolean).join("\n")).join("\n\n");
-      text("manual-observation-details", `${attempt}${captureStatus}\n\nKết quả Vidora đã quét từ GPT:\n${observedOutputs || "(chưa thấy output assistant nào)"}\n\nFile Vidora đã lưu:\n${savedOutputs || "(chưa có output nào được lưu)"}\n\nCác lượt gần nhất Vidora đọc được:\n${turns || "(chưa thấy lượt chat nào)"}`);
+      const probe = observation.domProbe || {};
+      const recognitionHint = !observation.messageCount && observation.conversationId
+        ? `\nVidora chưa đọc được lượt chat trong conversation này. Dấu hiệu giao diện: ${probe.authorRoleNodes || 0} role, ${probe.conversationTurnNodes || 0} turn, ${probe.articleNodes || 0} article, ${probe.userMessageNodes || 0} user-message, ${probe.assistantMessageNodes || 0} assistant-message.`
+        : "";
+      text("manual-observation-details", `${attempt}${captureStatus}${recognitionHint}\n\nKết quả Vidora đã quét từ GPT:\n${observedOutputs || "(chưa thấy output assistant nào)"}\n\nFile Vidora đã lưu:\n${savedOutputs || "(chưa có output nào được lưu)"}\n\nCác lượt gần nhất Vidora đọc được:\n${turns || "(chưa thấy lượt chat nào)"}`);
       updateCaptureButton();
     }
     function updateCaptureButton() {
