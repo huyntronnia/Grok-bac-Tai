@@ -402,6 +402,7 @@ function createManualChatGptController(runtime = {}) {
             observation: {
               available: false,
               checkedAt: new Date().toISOString(),
+              code: error?.code || "",
               error: error?.message || String(error),
               messageCount: 0,
               userMessageCount: 0,
@@ -1530,6 +1531,7 @@ function createManualChatGptController(runtime = {}) {
         observation: {
           available: false,
           checkedAt: new Date().toISOString(),
+          code: observationError?.code || "",
           error: observationError?.message || String(observationError),
           messageCount: 0,
           userMessageCount: 0,

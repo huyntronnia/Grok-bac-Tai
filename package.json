@@ -1,6 +1,6 @@
 {
   "name": "vidora",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Vidora desktop workflow app for AI video scene batching, prompt review, ChatGPT keyframe generation, and VeoUp video automation.",
   "main": "electron/main.js",
   "scripts": {

@@ -153,9 +153,14 @@
       observation = next || null;
       if (!observation) return;
       if (observation.available === false) {
-        live("offline", "Không kết nối");
-        text("manual-observation-status", "Chrome Manual chưa kết nối · Vidora sẽ tự thử lại mỗi giây");
-        text("manual-observation-details", `Không thể đọc ChatGPT lúc này.\n${observation.error || "Mở đúng một tab ChatGPT trong Chrome Manual."}`);
+        const verifying = observation.code === "CHATGPT_VERIFICATION_REQUIRED";
+        live(verifying ? "warning" : "offline", verifying ? "Cần xác minh" : "Không kết nối");
+        text("manual-observation-status", verifying
+          ? "ChatGPT đang xác minh trong Chrome Manual · Vidora sẽ tự nối lại sau khi trang tải xong"
+          : "Chrome Manual chưa kết nối · Vidora sẽ tự thử lại mỗi giây");
+        text("manual-observation-details", verifying
+          ? observation.error
+          : `Không thể đọc ChatGPT lúc này.\n${observation.error || "Mở đúng một tab ChatGPT trong Chrome Manual."}`);
         updateCaptureButton();
         return;
       }
@@ -218,7 +223,7 @@
       const bundle = !view.activeAttempt ? readyBundle(view) : null;
       const canAdopt = Boolean(candidate && bundle &&
         candidate.stage === bundle.stage && Number(candidate.sceneId) === Number(bundle.sceneId));
-      button.disabled = !view.activeAttempt && !canAdopt;
+      button.disabled = observation?.code === "CHATGPT_VERIFICATION_REQUIRED" || (!view.activeAttempt && !canAdopt);
       button.textContent = canAdopt ? "Lưu phản hồi GPT đang thấy" : "Kiểm tra / Lưu phản hồi";
     }
     function render(next) {

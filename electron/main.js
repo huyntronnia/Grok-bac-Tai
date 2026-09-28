@@ -4,7 +4,6 @@ const {
 const {
   findChromeExecutable: findInstalledChromeExecutable,
   readProfileDebugEndpoint,
-  createManualChromeEndpointResolver,
 } = require("./main/chatgpt/manual_chrome_connection");
 
 const {
@@ -366,6 +365,8 @@ const CHROME_USER_DATA_DIR = path.join(
 );
 // Manual Workflow observes only this isolated Chrome instance. It never shares
 // the automatic-pipeline browser or attaches to a user-supplied debug port.
+const MANUAL_CHROME_DEBUG_PORT = 9224;
+const MANUAL_CHROME_CDP_HOST = `http://127.0.0.1:${MANUAL_CHROME_DEBUG_PORT}`;
 const MANUAL_CHROME_USER_DATA_DIR = path.join(
   app.getPath("userData"),
   "manual-chrome-cdp-profile",
@@ -2428,15 +2429,28 @@ async function isChromeDebugReady() {
   }
 }
 
+async function isManualChromeDebugReady() {
+  try {
+    const response = await fetch(`${MANUAL_CHROME_CDP_HOST}/json/version`, { signal: AbortSignal.timeout(2500) });
+    if (!response.ok) return false;
+    const version = await response.json();
+    const socket = new URL(String(version.webSocketDebuggerUrl || ""));
+    return Number(socket.port) === MANUAL_CHROME_DEBUG_PORT &&
+      /^\/devtools\/browser\/[^\s]+$/.test(socket.pathname);
+  } catch (_) { return false; }
+}
+
 async function ensureManualChromeDebug() {
+  if (await isManualChromeDebugReady()) {
+    return { endpoint: MANUAL_CHROME_CDP_HOST, port: MANUAL_CHROME_DEBUG_PORT };
+  }
   await fs.mkdir(MANUAL_CHROME_USER_DATA_DIR, { recursive: true });
-  const existing = await readProfileDebugEndpoint(MANUAL_CHROME_USER_DATA_DIR);
-  if (existing) {
-    return existing;
+  if (await readProfileDebugEndpoint(MANUAL_CHROME_USER_DATA_DIR)) {
+    throw new Error("Chrome Manual cũ vẫn đang mở. Hãy đóng cửa sổ Chrome Manual cũ rồi bấm Mở Chrome Manual lại để dùng cấu hình mới.");
   }
   const chromePath = findChromeExecutable();
   const args = [
-    "--remote-debugging-port=0",
+    `--remote-debugging-port=${MANUAL_CHROME_DEBUG_PORT}`,
     `--user-data-dir=${MANUAL_CHROME_USER_DATA_DIR}`,
     "--no-first-run",
     "--no-default-browser-check",
@@ -2453,16 +2467,14 @@ async function ensureManualChromeDebug() {
   manualChromeProcess.unref();
 
   const startedAt = Date.now();
-  while (Date.now() - startedAt < 30000) {
+  while (Date.now() - startedAt < 15000) {
     if (launchError) throw launchError;
-    const session = await readProfileDebugEndpoint(MANUAL_CHROME_USER_DATA_DIR);
-    if (session) {
-      return session;
-    }
+    if (await isManualChromeDebugReady())
+      return { endpoint: MANUAL_CHROME_CDP_HOST, port: MANUAL_CHROME_DEBUG_PORT };
     await sleep(500);
   }
   throw new Error(
-    "Không kết nối được Chrome Manual. Hãy đóng các cửa sổ Chrome Manual cũ rồi bấm Mở Chrome Manual lại.",
+    `Không mở được Chrome Manual ở port ${MANUAL_CHROME_DEBUG_PORT}. Hãy đóng Chrome Manual cũ rồi thử lại.`,
   );
 }
 
@@ -5403,9 +5415,7 @@ function rememberManualProject(projectFolder, payload) {
 const { buildManualStageBundle, ensureManualProjectRequestFiles } = require("./main/chatgpt/manual_stage_bundle");
 const { createManualPageObserver } = require("./main/chatgpt/manual_page_observer");
 const manualPageObserver = createManualPageObserver({
-  // The browser can outlive Vidora during an update or restart. Recover its
-  // current debug port from Vidora's isolated Chrome profile on every poll.
-  endpoint: createManualChromeEndpointResolver(MANUAL_CHROME_USER_DATA_DIR),
+  endpoint: MANUAL_CHROME_CDP_HOST,
 });
 const { withManualDeadline } = require("./main/chatgpt/manual_operation_deadline");
 function notifyManualWorkflow(type, payload) {
