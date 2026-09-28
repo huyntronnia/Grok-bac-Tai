@@ -3,7 +3,7 @@
 const assert = require("assert");
 const fs = require("fs");
 const path = require("path");
-const { findChromeExecutable, readProfileDebugEndpoint } = require("../electron/main/chatgpt/manual_chrome_connection");
+const { findChromeExecutable, readProfileDebugEndpoint, createManualChromeEndpointResolver } = require("../electron/main/chatgpt/manual_chrome_connection");
 const { createManualPageObserver } = require("../electron/main/chatgpt/manual_page_observer");
 
 (async () => {
@@ -30,6 +30,21 @@ const { createManualPageObserver } = require("../electron/main/chatgpt/manual_pa
     request: async () => ({ ok: true, json: async () => ({ webSocketDebuggerUrl: "ws://127.0.0.1:49173/devtools/browser/other-process" }) }),
   }), null, "an unrelated process on the same port must not be accepted");
 
+  let existingSession = good;
+  const resolveExistingChrome = createManualChromeEndpointResolver("customer-manual-profile", {
+    readProfile: async (profileDir) => {
+      assert.equal(profileDir, "customer-manual-profile");
+      return existingSession;
+    },
+  });
+  assert.equal(await resolveExistingChrome(), good.endpoint,
+    "a restarted Vidora must reconnect to the browser already using its Manual profile");
+  existingSession = { endpoint: "http://127.0.0.1:49174" };
+  assert.equal(await resolveExistingChrome(), existingSession.endpoint,
+    "a replaced Chrome process must be discovered on its new port");
+  existingSession = null;
+  assert.equal(await resolveExistingChrome(), "", "closed Chrome must be shown as disconnected");
+
   let endpoint = "";
   const connections = [];
   const page = {
@@ -39,7 +54,7 @@ const { createManualPageObserver } = require("../electron/main/chatgpt/manual_pa
     context: () => ({ newCDPSession: async () => ({ send: async () => ({ targetInfo: { targetId: "tab-1" } }), detach: async () => {} }) }),
   };
   const observer = createManualPageObserver({
-    endpoint: () => endpoint,
+    endpoint: async () => endpoint,
     connect: async (value) => {
       connections.push(value);
       return { isConnected: () => true, contexts: () => [{ pages: () => [page] }] };
@@ -54,5 +69,7 @@ const { createManualPageObserver } = require("../electron/main/chatgpt/manual_pa
 
   const main = fs.readFileSync(path.join(__dirname, "../electron/main.js"), "utf8");
   assert(main.includes('"--remote-debugging-port=0"'), "Chrome Manual must request a free local debug port");
+  assert(main.includes("endpoint: createManualChromeEndpointResolver(MANUAL_CHROME_USER_DATA_DIR)"),
+    "the observer must rediscover the existing Manual Chrome session after Vidora restarts");
   console.log("Manual Chrome discovery and profile-bound dynamic CDP connection passed");
 })().catch((error) => { console.error(error); process.exitCode = 1; });

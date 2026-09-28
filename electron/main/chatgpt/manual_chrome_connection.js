@@ -64,4 +64,8 @@ async function readProfileDebugEndpoint(profileDir, { readFile = fsp.readFile, r
   } catch (_) { return null; }
 }
 
-module.exports = { findChromeExecutable, readProfileDebugEndpoint };
+function createManualChromeEndpointResolver(profileDir, { readProfile = readProfileDebugEndpoint } = {}) {
+  return async () => (await readProfile(profileDir))?.endpoint || "";
+}
+
+module.exports = { findChromeExecutable, readProfileDebugEndpoint, createManualChromeEndpointResolver };

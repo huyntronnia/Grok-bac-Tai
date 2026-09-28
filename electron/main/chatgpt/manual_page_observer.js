@@ -10,7 +10,7 @@ function createManualPageObserver({ endpoint, connect } = {}) {
   const pageIds = new WeakMap();
   return {
     async getPage() {
-      const currentEndpoint = typeof endpoint === "function" ? endpoint() : endpoint;
+      const currentEndpoint = typeof endpoint === "function" ? await endpoint() : endpoint;
       if (!currentEndpoint) throw new Error("Bấm Mở Chrome Manual trước khi theo dõi ChatGPT.");
       if (!browser?.isConnected() || connectedEndpoint !== currentEndpoint) {
         const connectBrowser = connect || ((url) => require("playwright").chromium.connectOverCDP(url));
